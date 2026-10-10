@@ -35,6 +35,26 @@ class LocationSource(private val context: Context) {
     private val _text = MutableStateFlow("未获取定位")
     val text: StateFlow<String> = _text.asStateFlow()
 
+    // 地址缓存：定位回调很频繁（1-2 秒一次），每次都先显示坐标再等联网反查，
+    // 会让中文地址"一下消失一下恢复"。缓存 60 秒或位移超 50 米才刷新文本。
+    private var cachedLat = 0.0
+    private var cachedLon = 0.0
+    private var cachedAtMs = 0L
+    private var hasAddress = false
+
+    private companion object {
+        const val CACHE_TTL_MS = 60_000L
+        const val CACHE_MOVE_METERS = 50f
+    }
+
+    private fun cacheValid(location: Location): Boolean {
+        if (cachedAtMs == 0L) return false
+        if (System.currentTimeMillis() - cachedAtMs > CACHE_TTL_MS) return false
+        val dist = FloatArray(1)
+        Location.distanceBetween(cachedLat, cachedLon, location.latitude, location.longitude, dist)
+        return dist[0] <= CACHE_MOVE_METERS
+    }
+
     private var fusedCallback: LocationCallback? = null
     private var lmListener: LocationListener? = null
 
@@ -102,6 +122,7 @@ class LocationSource(private val context: Context) {
     /** 手动刷新：立即请求一次当前位置（编辑器"刷新定位"按钮用），结果通过 text 流通知 */
     fun refreshNow() {
         if (!hasLocationPermission()) return
+        cachedAtMs = 0L // 强制绕过缓存
         _text.value = "定位中…"
         var delivered = false
         try {
@@ -143,12 +164,20 @@ class LocationSource(private val context: Context) {
     }
 
     private fun onLocation(location: Location) {
+        if (cacheValid(location)) return // 缓存有效：文本保持稳定不闪动
+        cachedLat = location.latitude
+        cachedLon = location.longitude
+        cachedAtMs = System.currentTimeMillis()
         val coords = String.format(Locale.US, "%.6f, %.6f", location.latitude, location.longitude)
-        _text.value = coords
+        // 已有中文地址时不要先退回纯坐标（反查失败则保留旧地址），只有从未拿到过地址才先显示坐标
+        if (!hasAddress) _text.value = coords
         scope.launch {
             val address = reverseGeocode(location)
             if (!address.isNullOrBlank()) {
+                hasAddress = true
                 _text.value = "$address ($coords)"
+            } else if (!hasAddress) {
+                _text.value = coords
             }
         }
     }

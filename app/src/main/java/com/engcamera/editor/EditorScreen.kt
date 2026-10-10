@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -130,6 +131,10 @@ fun EditorScreen(onBack: () -> Unit) {
             ) {
                 itemsIndexed(state.fields, key = { _, f -> f.id }) { _, field ->
                     val isDragging = draggingId == field.id
+                    // pointerInput 的 key 稳定（不随重组重启），闭包里直接捕获的状态会停留在
+                    // 首次组合的旧值——必须经 rememberUpdatedState 取最新；也不能把 fields
+                    // 放进 key（拖动排序中 move 会改列表，重启手势会断拖）
+                    val fieldsNow by rememberUpdatedState(state.fields)
                     FieldRow(
                         field = field,
                         offsetY = if (isDragging) dragOffset else 0f,
@@ -151,12 +156,12 @@ fun EditorScreen(onBack: () -> Unit) {
                                         change.consume()
                                         if (draggingId != field.id) return@detectDragGesturesAfterLongPress
                                         dragOffset += amount.y
-                                        val from = state.fields.indexOfFirst { it.id == field.id }
+                                        val from = fieldsNow.indexOfFirst { it.id == field.id }
                                         if (from < 0) return@detectDragGesturesAfterLongPress
                                         val rowH = size.height.toFloat()
                                         if (rowH <= 0) return@detectDragGesturesAfterLongPress
                                         // 拖过半行高度即与相邻行交换，offset 补偿保持视觉跟手
-                                        if (dragOffset >= rowH / 2 && from < state.fields.size - 1) {
+                                        if (dragOffset >= rowH / 2 && from < fieldsNow.size - 1) {
                                             vm.move(from, from + 1)
                                             dragOffset -= rowH
                                         } else if (dragOffset <= -rowH / 2 && from > 0) {
@@ -269,6 +274,9 @@ private fun FieldRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 手势块以 field.id 为 key、不随重组重启，直接捕获 onEdit 会拿到旧闭包
+    // （旧 field 快照）——编辑保存后重点行打开的是修改前的值。经 rememberUpdatedState 取最新。
+    val currentOnEdit by rememberUpdatedState(onEdit)
     Surface(
         color = if (elevated) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
         shadowElevation = if (elevated) 8.dp else 0.dp,
@@ -287,7 +295,7 @@ private fun FieldRow(
                 Modifier
                     .weight(1f)
                     .padding(vertical = 8.dp)
-                    .pointerInput(field.id) { detectTapGestures { onEdit() } },
+                    .pointerInput(field.id) { detectTapGestures { currentOnEdit() } },
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(field.label, fontWeight = FontWeight.Medium)

@@ -6,13 +6,17 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.util.Log
+import android.util.Rational
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
+import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -33,11 +37,9 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 
 /**
- * 相机引擎，按模式绑定用例以最大化设备兼容性：
- * - 拍照模式：预览 + 拍照 + 扫码分析
- * - 录像模式：预览 + 录像（不叠其他用例）
- * 拍照水印走 Bitmap 烧录；录像水印因 camera-effects OverlayEffect 在真机/模拟器
- * 均内部崩溃（"Frame is already empty"）暂不烧录，见计划书待确认 8。
+ * 相机引擎：预览/拍照/录像/扫码常绑 + ViewPort 统一比例，
+ * 录像与预览比例一致；全量绑定失败时逐级回退。
+ * 拍照水印走 Bitmap 烧录；录像水印由 VideoWatermarker 录后转码烧录。
  */
 class CameraEngine(
     private val context: Context,
@@ -53,6 +55,9 @@ class CameraEngine(
     private var analysisExecutor: ExecutorService? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var lastBindKey: String? = null
+
+    /** 点击对焦测光用：绑定时的 PreviewView 坐标换算工厂（屏幕点→传感器测光区域） */
+    private var meteringFactory: MeteringPointFactory? = null
 
     /** 成片目标旋转（跟随持机方向；倒置时 180，照片/视频按听筒朝下生成） */
     @Volatile
@@ -178,67 +183,113 @@ class CameraEngine(
             .build()
 
     /**
-     * 绑定用例。videoMode=true 只绑 预览+录像（兼容性最好，扫码气泡仅拍照模式需要）；
-     * videoMode=false 绑 预览+拍照+扫码分析。
-     * 绑定参数未变化时跳过（防止启动/回调多次快速重绑导致预览白屏）。
+     * 绑定用例：预览+拍照+录像+扫码常绑，切换模式不重绑。
+     * 挂 ViewPort（预览控件实际宽高 + FILL_CENTER）统一裁剪所有流的比例，
+     * 保证录像/拍照与预览所见比例一致。
+     * 绑定参数（前后摄/焦段/画质/预览尺寸）未变时跳过（防止快速重绑导致预览白屏）。
+     * 全量绑失败逐级回退：去扫码 → 去录像 → 去 ViewPort，保证相机始终可用。
      */
     @SuppressLint("RestrictedApi")
-    fun bind(previewView: PreviewView, analyzer: ImageAnalysis.Analyzer?, videoMode: Boolean) {
+    fun bind(previewView: PreviewView, analyzer: ImageAnalysis.Analyzer?) {
         val p = provider ?: return
-        val bindKey = "$frontCamera|${selectedLensId}|$videoMode"
+        val vw = previewView.width
+        val vh = previewView.height
+        val bindKey = "$frontCamera|$selectedLensId|${videoQuality.label}|$vw|$vh"
         if (bindKey == lastBindKey && camera != null) return
         lastBindKey = bindKey
-        p.unbindAll()
+        meteringFactory = previewView.meteringPointFactory
 
         val preview = Preview.Builder().setResolutionSelector(resolution4x3()).build()
         preview.setSurfaceProvider(previewView.surfaceProvider)
 
-        val group = androidx.camera.core.UseCaseGroup.Builder().addUseCase(preview)
+        val capture = ImageCapture.Builder()
+            .setResolutionSelector(resolution4x3())
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build()
+        capture.targetRotation = targetRotation
 
-        try {
-            if (videoMode) {
-                val recorder = Recorder.Builder()
-                    .setQualitySelector(
-                        QualitySelector.from(
-                            qualityConst(videoQuality),
-                            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
-                        ),
-                    )
-                    .build()
-                val video = VideoCapture.withOutput(recorder)
-                video.targetRotation = targetRotation
-                videoCapture = video
-                imageCapture = null
-                group.addUseCase(video)
-            } else {
-                val capture = ImageCapture.Builder()
-                    .setResolutionSelector(resolution4x3())
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .build()
-                capture.targetRotation = targetRotation
-                imageCapture = capture
-                videoCapture = null
-                group.addUseCase(capture)
-                if (analyzer != null) {
-                    val exec = analysisExecutor
-                        ?: Executors.newSingleThreadExecutor().also { analysisExecutor = it }
-                    val analysis = ImageAnalysis.Builder()
-                        .setResolutionSelector(resolution4x3())
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                    analysis.setAnalyzer(exec, analyzer)
-                    group.addUseCase(analysis)
-                }
-            }
-            camera = p.bindToLifecycle(lifecycleOwner, selector(), group.build())
-        } catch (t: Throwable) {
-            Log.w(TAG, "bind failed", t)
+        val recorder = Recorder.Builder()
+            .setQualitySelector(
+                QualitySelector.from(
+                    qualityConst(videoQuality),
+                    FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
+                ),
+            )
+            .build()
+        val video = VideoCapture.withOutput(recorder)
+        video.targetRotation = targetRotation
+
+        val analysis = analyzer?.let { a ->
+            val exec = analysisExecutor
+                ?: Executors.newSingleThreadExecutor().also { analysisExecutor = it }
+            ImageAnalysis.Builder()
+                .setResolutionSelector(resolution4x3())
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { it.setAnalyzer(exec, a) }
         }
+
+        fun attempt(withVideo: Boolean, withAnalysis: Boolean, withViewport: Boolean): Camera? =
+            try {
+                p.unbindAll()
+                val group = androidx.camera.core.UseCaseGroup.Builder()
+                    .addUseCase(preview)
+                    .addUseCase(capture)
+                if (withVideo) group.addUseCase(video)
+                if (withAnalysis) analysis?.let(group::addUseCase)
+                if (withViewport && vw > 0 && vh > 0) {
+                    group.setViewPort(
+                        ViewPort.Builder(Rational(vw, vh), targetRotation)
+                            .setScaleType(ViewPort.FILL_CENTER)
+                            .build(),
+                    )
+                }
+                p.bindToLifecycle(lifecycleOwner, selector(), group.build())
+            } catch (t: Throwable) {
+                Log.w(TAG, "bind failed (video=$withVideo, analysis=$withAnalysis, viewport=$withViewport)", t)
+                null
+            }
+
+        imageCapture = capture
+        videoCapture = video
+        camera = attempt(withVideo = true, withAnalysis = true, withViewport = true)
+            ?: attempt(withVideo = true, withAnalysis = false, withViewport = true)
+            ?: attempt(withVideo = false, withAnalysis = true, withViewport = true)
+            ?: attempt(withVideo = false, withAnalysis = true, withViewport = false)
+                .also { if (it != null) videoCapture = null }
+        if (camera == null) videoCapture = null
     }
 
     fun setFlashMode(mode: Int) {
         imageCapture?.flashMode = mode
         camera?.cameraControl?.enableTorch(mode == ImageCapture.FLASH_MODE_ON)
+    }
+
+    /**
+     * 点击对焦测光：x/y 为预览控件内像素坐标，经 meteringPointFactory 换算成
+     * 传感器测光区域，同时下发 AF/AE/AWB，4 秒后自动取消回连续模式。
+     * 返回是否已下发（相机未就绪或设备不支持该组合时 false）。
+     */
+    fun focusMeter(x: Float, y: Float): Boolean {
+        val cam = camera ?: return false
+        val factory = meteringFactory ?: return false
+        return try {
+            val action = FocusMeteringAction.Builder(
+                factory.createPoint(x, y),
+                FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB,
+            )
+                .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            if (cam.cameraInfo.isFocusMeteringSupported(action)) {
+                cam.cameraControl.startFocusAndMetering(action)
+                true
+            } else {
+                false
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "focusMeter failed", t)
+            false
+        }
     }
 
     fun takePhoto(file: File, onResult: (Boolean) -> Unit) {

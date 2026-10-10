@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -33,6 +34,8 @@ import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
@@ -46,13 +49,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -61,9 +68,13 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -119,6 +130,13 @@ fun CameraScreen(
         pendingQuickRecord = false
     }
 
+    // 添加水印模式的图片选择器（系统照片选择器，支持多选）
+    val annotatePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(30),
+    ) { uris ->
+        vm.onAnnotatePicked(uris)
+    }
+
     fun startRecordingWithPermission(quick: Boolean = false) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
@@ -165,9 +183,18 @@ fun CameraScreen(
                 val engine = CameraEngine(context, navLifecycle)
                 vm.attachEngine(engine)
                 vm.rebind = {
-                    engine.bind(previewView, vm.barcodeAnalyzer(), vm.ui.value.videoMode)
+                    engine.bind(previewView, vm.barcodeAnalyzer())
                     vm.onEngineBound()
                 }
+                // 预览控件完成测量后重绑一次，让 ViewPort 拿到真实宽高（录像比例与预览一致的关键）
+                val layoutListener = android.view.View.OnLayoutChangeListener { v, _, _, _, _, oldL, oldT, oldR, oldB ->
+                    if (v.width > 0 && v.height > 0 &&
+                        (oldR - oldL != v.width || oldB - oldT != v.height)
+                    ) {
+                        vm.rebind?.invoke()
+                    }
+                }
+                previewView.addOnLayoutChangeListener(layoutListener)
                 engine.init(
                     onReady = { vm.rebind?.invoke() },
                     onError = { t ->
@@ -194,6 +221,7 @@ fun CameraScreen(
                 navLifecycle.lifecycle.addObserver(observer)
                 onDispose {
                     navLifecycle.lifecycle.removeObserver(observer)
+                    previewView.removeOnLayoutChangeListener(layoutListener)
                     vm.stopEverything()
                     vm.rebind = null
                     vm.detachEngine()
@@ -234,17 +262,35 @@ fun CameraScreen(
                     }
                 }
 
-                // 预览区：3:4 填满宽度，不居中（紧贴顶部控制条），消除上方黑边
-                PreviewArea(
-                    modifier = Modifier.fillMaxWidth(),
-                    previewView = previewView,
-                    vm = vm,
-                    effective = effective,
-                    dynamic = dynamic,
-                    ui = ui,
-                    rot = rot,
-                    onOpenEditor = onOpenEditor,
-                )
+                // 预览区：3:4 填满宽度；添加水印模式下换成黑屏选图/图片预览
+                if (ui.annotating) {
+                    AnnotateArea(
+                        modifier = Modifier.fillMaxWidth(),
+                        vm = vm,
+                        effective = effective,
+                        dynamic = dynamic,
+                        ui = ui,
+                        onOpenEditor = onOpenEditor,
+                        onPick = {
+                            annotatePicker.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                    )
+                } else {
+                    PreviewArea(
+                        modifier = Modifier.fillMaxWidth(),
+                        previewView = previewView,
+                        vm = vm,
+                        effective = effective,
+                        dynamic = dynamic,
+                        ui = ui,
+                        rot = rot,
+                        onOpenEditor = onOpenEditor,
+                    )
+                }
 
                 // 底部控制条紧贴预览下方，不推到屏幕底部
                 BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery)
@@ -265,7 +311,17 @@ private fun PreviewArea(
     rot: Int,
     onOpenEditor: () -> Unit,
 ) {
-    Box(modifier.aspectRatio(3f / 4f)) {
+    var focusPoint by remember { mutableStateOf<Offset?>(null) }
+    Box(
+        modifier
+            .aspectRatio(3f / 4f)
+            // 空白预览区点击对焦测光；水印块自身的点击（进编辑器）在其手势层被消费，不会到这里
+            .pointerInput(Unit) {
+                detectTapGestures { pos ->
+                    if (vm.focusAt(pos.x, pos.y)) focusPoint = pos
+                }
+            },
+    ) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
         WatermarkOverlay(
             state = effective,
@@ -275,6 +331,7 @@ private fun PreviewArea(
             onDrag = { dx, dy -> vm.onDragWatermark(dx, dy) },
             modifier = Modifier.fillMaxSize(),
         )
+        focusPoint?.let { pos -> FocusIndicator(pos) }
         // 后置焦段选择（右上角，位置固定）
         if (!ui.frontCamera && ui.lensLabels.size > 1) {
             Row(
@@ -324,6 +381,117 @@ private fun PreviewArea(
     }
 }
 
+/** 点击对焦指示圈：在点击位置短暂显示后淡出 */
+@Composable
+private fun FocusIndicator(center: Offset) {
+    var alphaTarget by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(center) {
+        alphaTarget = 1f
+        delay(700)
+        alphaTarget = 0f
+    }
+    val alpha by animateFloatAsState(alphaTarget, label = "focusAlpha")
+    if (alpha > 0.01f) {
+        Box(
+            Modifier
+                .offset {
+                    IntOffset(
+                        (center.x - 27.dp.toPx()).roundToInt(),
+                        (center.y - 27.dp.toPx()).roundToInt(),
+                    )
+                }
+                .size(54.dp)
+                .alpha(alpha)
+                .border(2.dp, Color.White, CircleShape),
+        )
+    }
+}
+
+/**
+ * 添加水印模式预览区（与相机预览同为 3:4 外框）：
+ * 未选图 = 黑屏 + 大圆圈"+"（点击选图）；已选图 = 图片按原比例居中显示，
+ * 水印浮层与相机一致（可拖动/点击进编辑器），顶部显示进度 x/y。
+ */
+@Composable
+private fun AnnotateArea(
+    modifier: Modifier,
+    vm: CameraViewModel,
+    effective: com.engcamera.data.WatermarkState,
+    dynamic: com.engcamera.data.DynamicValues,
+    ui: CameraUiState,
+    onOpenEditor: () -> Unit,
+    onPick: () -> Unit,
+) {
+    Box(modifier.aspectRatio(3f / 4f).background(Color.Black)) {
+        val item = ui.annotateQueue.getOrNull(ui.annotateIndex)
+        if (item == null) {
+            // 空状态：黑屏 + 大圆圈 +，点击打开图片选择器
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { onPick() } },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Box(
+                    Modifier
+                        .size(96.dp)
+                        .clip(CircleShape)
+                        .border(3.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("+", color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(14.dp))
+                Text("点击选择要加水印的图片", color = Color(0xFF999999), fontSize = 13.sp)
+            }
+        } else {
+            // 图片按原比例居中（等比缩放），水印浮层铺在图片实际显示区上（所见即所得）
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .fillMaxSize()
+                    .padding(vertical = 40.dp),
+            ) {
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(item.aspect),
+                ) {
+                    coil.compose.AsyncImage(
+                        model = item.uri,
+                        contentDescription = "待加水印图片",
+                        contentScale = ContentScale.FillBounds,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    WatermarkOverlay(
+                        state = effective,
+                        dynamic = dynamic,
+                        rotationDeg = effective.rotationDeg,
+                        onTap = onOpenEditor,
+                        onDrag = { dx, dy -> vm.onDragWatermark(dx, dy) },
+                        modifier = Modifier.fillMaxSize(),
+                        scaleByShortSide = true, // 烧录按图片短边缩放，横图预览须一致
+                    )
+                }
+            }
+            // 顶部进度 x/y
+            Text(
+                "${ui.annotateIndex + 1}/${ui.annotateQueue.size}",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 10.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x66000000))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+        // 退出添加水印模式：点底部的笔或拍照/录像按钮
+    }
+}
+
 /** 竖屏底部控制条：上行 = 模式切换+画质选择；下行 = 缩略图+快门+前后摄 */
 @Composable
 private fun BottomBar(
@@ -359,17 +527,28 @@ private fun BottomBar(
             Spacer(Modifier.height(8.dp))
         }
 
-        // ===== 上行：模式切换 + 画质选择（同一水平线） =====
+        // ===== 上行：编辑（笔）+ 模式切换 + 画质选择（同一水平线） =====
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 录像/拍照模式切换
+            // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活灰、激活白
             Row(
                 Modifier
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color(0x33000000)),
             ) {
+                IconButton(
+                    onClick = { vm.toggleAnnotate() },
+                    enabled = !ui.recording,
+                ) {
+                    Icon(
+                        Icons.Default.Draw,
+                        contentDescription = "给图片添加水印",
+                        tint = if (ui.annotating) Color.White else Color(0xFF888888),
+                        modifier = Modifier.rotate(rot.toFloat()),
+                    )
+                }
                 IconButton(
                     onClick = { vm.setVideoMode(false) },
                     enabled = !ui.recording,
@@ -377,7 +556,7 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.PhotoCamera,
                         contentDescription = "拍照模式",
-                        tint = if (ui.videoMode) Color(0xFF888888) else Color.White,
+                        tint = if (!ui.annotating && !ui.videoMode) Color.White else Color(0xFF888888),
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -388,13 +567,13 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.Videocam,
                         contentDescription = "录像模式",
-                        tint = if (ui.videoMode) Color.White else Color(0xFF888888),
+                        tint = if (!ui.annotating && ui.videoMode) Color.White else Color(0xFF888888),
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
             }
             // 画质选择（仅录像模式显示）
-            if (ui.videoMode && ui.videoQualities.isNotEmpty()) {
+            if (!ui.annotating && ui.videoMode && ui.videoQualities.isNotEmpty()) {
                 Box {
                     Text(
                         text = ui.videoQualities.getOrNull(ui.videoQualityIndex)?.label ?: "画质",
@@ -510,21 +689,23 @@ private fun Shutter(
                 color = if (ui.recording) Color(0xFFFF5252) else Color.White,
                 shape = CircleShape,
             )
-            .pointerInput(ui.videoMode, ui.recording) {
+            .pointerInput(ui.videoMode, ui.recording, ui.annotating) {
                 detectTapGestures(
                     onTap = {
-                        if (ui.videoMode) {
-                            if (ui.recording) {
-                                vm.stopRecording()
-                            } else {
-                                startRecordingWithPermission(false)
+                        when {
+                            ui.annotating -> vm.confirmAnnotate()
+                            ui.videoMode -> {
+                                if (ui.recording) {
+                                    vm.stopRecording()
+                                } else {
+                                    startRecordingWithPermission(false)
+                                }
                             }
-                        } else if (!ui.recording) {
-                            vm.takePhoto()
+                            !ui.recording -> vm.takePhoto()
                         }
                     },
                     onLongPress = {
-                        if (!ui.videoMode && !ui.recording) {
+                        if (!ui.videoMode && !ui.recording && !ui.annotating) {
                             quickRecording.value = true
                             startRecordingWithPermission(true)
                         }
@@ -540,7 +721,10 @@ private fun Shutter(
             },
         contentAlignment = Alignment.Center,
     ) {
-        if (!ui.recording) {
+        if (ui.annotating) {
+            // 添加水印模式：快门变成"确认"
+            Text("确认", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        } else if (!ui.recording) {
             Box(
                 Modifier
                     .size(58.dp)

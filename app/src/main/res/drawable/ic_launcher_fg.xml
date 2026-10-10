@@ -4,20 +4,21 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 相机机身 -->
+    <!-- 相机机身（含取景凸台，整体在 108 画布垂直居中：复合体 y[34,74] 中心 54） -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M34,42 L44,42 L47,36 L61,36 L64,42 L74,42 A4,4 0 0 1 78,46 L78,72 A4,4 0 0 1 74,76 L34,76 A4,4 0 0 1 30,72 L30,46 A4,4 0 0 1 34,42 Z" />
-    <!-- 镜头外圈 -->
+        android:pathData="M34,40 L44,40 L47,34 L61,34 L64,40 L74,40 A4,4 0 0 1 78,44 L78,70 A4,4 0 0 1 74,74 L34,74 A4,4 0 0 1 30,70 L30,44 A4,4 0 0 1 34,40 Z" />
+    <!-- 镜头外圈（圆心与机身中心 (54,57) 同心，r12 完全在机身 y[40,74] 内，
+         不再伸出机身上沿与同色背景融为一体） -->
     <path
         android:fillColor="#FF1D4E89"
-        android:pathData="M54,48 m-12,0 a12,12 0 1 1 24,0 a12,12 0 1 1 -24,0" />
+        android:pathData="M54,57 m-12,0 a12,12 0 1 1 24,0 a12,12 0 1 1 -24,0" />
     <!-- 镜头内圈 -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M54,48 m-7,0 a7,7 0 1 1 14,0 a7,7 0 1 1 -14,0" />
-    <!-- 闪光点 -->
+        android:pathData="M54,57 m-7,0 a7,7 0 1 1 14,0 a7,7 0 1 1 -14,0" />
+    <!-- 闪光点（机身右上角） -->
     <path
         android:fillColor="#FFFFD54F"
-        android:pathData="M70,48 m-2.5,0 a2.5,2.5 0 1 1 5,0 a2.5,2.5 0 1 1 -5,0" />
+        android:pathData="M71,47 m-2.5,0 a2.5,2.5 0 1 1 5,0 a2.5,2.5 0 1 1 -5,0" />
 </vector>

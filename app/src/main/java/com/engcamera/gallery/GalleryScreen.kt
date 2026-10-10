@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.runtime.DisposableEffect
 import coil.compose.AsyncImage
 import com.engcamera.util.MediaSaver
 import java.util.Locale
@@ -121,6 +122,19 @@ fun GalleryScreen(
 
     LaunchedEffect(Unit) {
         if (readGranted) vm.refresh()
+    }
+
+    // 从系统相册/查看器返回时重拉文件列表（在那里可能删除过照片），
+    // 页面未重建 LaunchedEffect(Unit) 不会再触发
+    val galleryLifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(galleryLifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && readGranted) {
+                vm.refresh()
+            }
+        }
+        galleryLifecycle.lifecycle.addObserver(observer)
+        onDispose { galleryLifecycle.lifecycle.removeObserver(observer) }
     }
 
     // Toast 提示

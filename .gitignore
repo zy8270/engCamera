@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+.kotlin/
+engcamera.keystore
+app/keystore.properties
+.idea/

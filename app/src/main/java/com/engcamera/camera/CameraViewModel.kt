@@ -8,6 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import android.os.SystemClock
 import android.util.Log
 import androidx.camera.video.Recording
@@ -35,6 +37,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -60,7 +63,16 @@ data class CameraUiState(
     val videoQualityIndex: Int = 0,
     /** 画质选择菜单展开 */
     val showQualityMenu: Boolean = false,
-)
+    /** 添加水印模式（给相册已有图片加水印）：待处理队列（uri + 宽高比）与当前索引 */
+    val annotating: Boolean = false,
+    val annotateQueue: List<AnnotateItem> = emptyList(),
+    val annotateIndex: Int = 0,
+    /** 正在烧录保存当前图片（防重复点击快门） */
+    val annotateWorking: Boolean = false,
+) {
+    /** 添加水印模式的一个待处理图片 */
+    data class AnnotateItem(val uri: android.net.Uri, val aspect: Float)
+}
 
 class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -193,6 +205,115 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(showQualityMenu = !it.showQualityMenu) }
     }
 
+    /** 点击对焦测光（预览区像素坐标），返回是否已下发 */
+    fun focusAt(x: Float, y: Float): Boolean = engine?.focusMeter(x, y) ?: false
+
+    // ---------- 添加水印模式（给相册已有图片加水印） ----------
+
+    /** 进入/退出添加水印模式；录像或拍照处理中不允许进入 */
+    fun toggleAnnotate() {
+        val st = _ui.value
+        if (st.annotating) {
+            _ui.update { it.copy(annotating = false, annotateQueue = emptyList(), annotateIndex = 0) }
+            return
+        }
+        if (st.recording || st.capturing) return
+        _ui.update { it.copy(annotating = true, annotateQueue = emptyList(), annotateIndex = 0) }
+    }
+
+    /** 图片选择完成：读宽高比（含 EXIF 旋转换算）入队 */
+    fun onAnnotatePicked(uris: List<Uri>) {
+        if (!_ui.value.annotating || uris.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val items = uris.mapNotNull { u ->
+                annotateAspect(u)?.let { CameraUiState.AnnotateItem(u, it) }
+            }
+            if (items.isEmpty()) {
+                _ui.update { it.copy(toast = "图片读取失败") }
+                return@launch
+            }
+            _ui.update { it.copy(annotateQueue = items, annotateIndex = 0) }
+        }
+    }
+
+    /** 确认当前图片：烧录水印保存到相册，多张时切下一张，全部完成后回到空选择状态 */
+    fun confirmAnnotate() {
+        val st = _ui.value
+        if (!st.annotating || st.annotateWorking) return
+        val item = st.annotateQueue.getOrNull(st.annotateIndex) ?: return
+        _ui.update { it.copy(annotateWorking = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                burnAnnotateAndSave(item.uri)
+                val nextIdx = st.annotateIndex + 1
+                _ui.update { s ->
+                    if (nextIdx >= s.annotateQueue.size) {
+                        s.copy(
+                            annotateQueue = emptyList(),
+                            annotateIndex = 0,
+                            annotateWorking = false,
+                            toast = "已保存 ${nextIdx} 张",
+                        )
+                    } else {
+                        s.copy(annotateIndex = nextIdx, annotateWorking = false)
+                    }
+                }
+                _mediaVersion.value += 1
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                _ui.update { it.copy(annotateWorking = false, toast = "保存失败：${t.message ?: "未知错误"}") }
+            }
+        }
+    }
+
+    /** 读取图片转正后的宽高比（宽/高） */
+    private fun annotateAspect(uri: Uri): Float? = runCatching {
+        val deg = context.contentResolver.openInputStream(uri)?.use {
+            ExifInterface(it).rotationDegrees
+        } ?: 0
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        if (opts.outWidth <= 0 || opts.outHeight <= 0) return@runCatching null
+        if (deg == 90 || deg == 270) opts.outHeight.toFloat() / opts.outWidth
+        else opts.outWidth.toFloat() / opts.outHeight
+    }.getOrNull()
+
+    /** 给相册图片烧录水印：解码（按上限采样）→ EXIF 转正 → 烧录 → 存 DCIM/Camera */
+    private suspend fun burnAnnotateAndSave(uri: Uri) = withContext(Dispatchers.IO) {
+        val deg = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees } ?: 0
+        }.getOrDefault(0)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= MAX_SIDE || bounds.outHeight / (sample * 2) >= MAX_SIDE) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val src = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        } ?: error("图片解码失败")
+        val upright = if (deg != 0) {
+            val m = Matrix().apply { postRotate(deg.toFloat()) }
+            Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).also {
+                if (it != src) src.recycle()
+            }
+        } else {
+            src
+        }
+        val out = Bitmap.createBitmap(upright.width, upright.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawBitmap(upright, 0f, 0f, null)
+        val effective = effectiveWatermark.value
+        WatermarkRenderer.drawOnCanvas(
+            canvas, upright.width, upright.height,
+            effective, dynamic.value, effective.rotationDeg, 0,
+        )
+        upright.recycle()
+        MediaSaver.saveBitmap(context, out)
+        out.recycle()
+    }
+
     fun refreshLatest() {
         viewModelScope.launch(Dispatchers.IO) {
             val latest = MediaSaver.queryOwnMedia(context).firstOrNull()
@@ -260,8 +381,18 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 模式（切换会重绑用例） ----------
     fun setVideoMode(video: Boolean) {
-        if (_ui.value.recording || _ui.value.videoMode == video) return
-        _ui.update { it.copy(videoMode = video) }
+        val st = _ui.value
+        if (st.recording) return
+        // 点拍照/录像按钮同时退出添加水印模式（用户用它们切回相机）
+        if (st.videoMode == video && !st.annotating) return
+        _ui.update {
+            it.copy(
+                videoMode = video,
+                annotating = false,
+                annotateQueue = emptyList(),
+                annotateIndex = 0,
+            )
+        }
         rebind?.invoke()
     }
 

@@ -55,7 +55,7 @@ object WatermarkRenderer {
 
         val enabled = state.fields.filter { it.enabled }
         val titleLayout = enabled.firstOrNull { it.isTitle }
-            ?.let { newLayout(displayText(it, dynamic), titlePaint, textWidth) }
+            ?.let { newLayout(displayText(it, dynamic), titlePaint, textWidth, Layout.Alignment.ALIGN_CENTER) }
         val bodyLayouts = enabled.filter { !it.isTitle }.map { f ->
             val text = if (f.label.isBlank()) displayText(f, dynamic) else "${f.label}：${displayText(f, dynamic)}"
             newLayout(text, bodyPaint, textWidth)
@@ -98,7 +98,8 @@ object WatermarkRenderer {
         var y = pad
         titleLayout?.let {
             canvas.save()
-            canvas.translate(pad, y)
+            // 标题在蓝条内水平居中（ALIGN_CENTER）+ 垂直居中（上下各留一半内边距）
+            canvas.translate(pad, (titleHeight + pad - it.height) / 2f)
             it.draw(canvas)
             canvas.restore()
             y += it.height + pad
@@ -166,7 +167,9 @@ object WatermarkRenderer {
         val ax = 0.5f + (vx * cos - vy * sin)
         val ay = 0.5f + (vx * sin + vy * cos)
         val rot = rotationDeg + e
-        val block = render(state, canvasW, dynamic)
+        // 缩放基准取短边：预览恒为竖向 3:4（宽=短边），横拍成片显示为横向（宽=长边）。
+        // 若按长边缩放，横屏水印会比预览大 4/3 倍；短边在两种方向下都对应预览宽度维度。
+        val block = render(state, minOf(canvasW, canvasH), dynamic)
         val (left, top) = positionBlock(canvasW, canvasH, block.width, block.height, ax, ay, rot)
         canvas.save()
         canvas.rotate(rot, left + block.width / 2f, top + block.height / 2f)
@@ -183,9 +186,14 @@ object WatermarkRenderer {
         else -> f.value
     }
 
-    private fun newLayout(text: String, paint: TextPaint, width: Int): StaticLayout =
+    private fun newLayout(
+        text: String,
+        paint: TextPaint,
+        width: Int,
+        alignment: Layout.Alignment = Layout.Alignment.ALIGN_NORMAL,
+    ): StaticLayout =
         StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setAlignment(alignment)
             .setIncludePad(false)
             .build()
 }
