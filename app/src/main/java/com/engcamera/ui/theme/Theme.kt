@@ -1,6 +1,5 @@
 package com.engcamera.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -12,7 +11,11 @@ private val DarkColorScheme = darkColorScheme(
     secondary = EngBlueLight,
     background = Color.Black,
     surface = Color(0xFF121212),
+    surfaceVariant = Color(0xFF1E1E22),
     onPrimary = Color.White,
+    onSurface = Color(0xFFE6E1E5),
+    onBackground = Color(0xFFE6E1E5),
+    onSurfaceVariant = Color(0xFFCAC4D0),
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -25,11 +28,11 @@ private val LightColorScheme = lightColorScheme(
  */
 @Composable
 fun EngCameraTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
+    // 相机类应用恒定暗色主题（用户确认 2026-10-11）：不随系统深浅色切换
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+        colorScheme = DarkColorScheme,
         content = content,
     )
 }

@@ -346,10 +346,10 @@ private fun SettingsDrawer(
             visible = visible,
             enter = slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { it },
             exit = slideOutHorizontally(tween(200, easing = FastOutSlowInEasing)) { it },
+            modifier = Modifier.align(Alignment.CenterEnd),
         ) {
             Column(
                 Modifier
-                    .align(Alignment.CenterEnd)
                     .fillMaxHeight()
                     .fillMaxWidth(0.8f)
                     .background(MaterialTheme.colorScheme.surface)
