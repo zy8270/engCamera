@@ -197,6 +197,26 @@ fun EditorScreen(onBack: () -> Unit) {
 
                 item {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        // 保存原图原视频（设置项）
+                        val saveOriginal by vm.saveOriginal.collectAsState()
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("保存原图原视频", fontWeight = FontWeight.Medium)
+                                Text(
+                                    "开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = saveOriginal,
+                                onCheckedChange = { vm.setSaveOriginal(it) },
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
                         Row(
                             Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,

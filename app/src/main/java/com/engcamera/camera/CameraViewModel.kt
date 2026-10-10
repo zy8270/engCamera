@@ -485,6 +485,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             src
         }
+        // 保存原图（设置开启时）：无水印的转正原图
+        if (container.repository.saveOriginal.value) {
+            runCatching { MediaSaver.saveBitmap(context, upright) }
+        }
         val out = Bitmap.createBitmap(upright.width, upright.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawBitmap(upright, 0f, 0f, null)
@@ -606,6 +610,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             saved = runCatching { MediaSaver.saveVideoFile(context, source) }.getOrNull()
         }
 
+        if (watermarked && container.repository.saveOriginal.value) {
+            runCatching { MediaSaver.saveVideoFile(context, source) }.onSuccess {
+                _mediaVersion.value += 1
+            }
+        }
         if (saved != null) {
             _mediaVersion.value += 1
             if (watermarked) {
