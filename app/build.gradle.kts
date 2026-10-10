@@ -29,6 +29,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // alpha 阶段用 debug keystore 签名，保证 APK 可直接安装
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
