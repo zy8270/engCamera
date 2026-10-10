@@ -88,7 +88,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     val locationSource = container.locationSource
 
     private val quantizedRoll = MutableStateFlow(0)
-    private var lastRoll: Int? = null
+    /** 上次量化方向；初始按正立 0 算——启动后第一次转向也要触发锚点重置（曾因 null 跳过） */
+    private var lastRoll: Int = 0
 
     /**
      * 实际生效的水印状态（预览与成片共用）：
@@ -147,7 +148,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             )
             // 方向切换时锚点重置（屏幕系，成片恒为视觉左下角）：
             // 正立→左下；倒置(180)→屏幕右上；逆时针(+90)→屏幕左上；顺时针(-90)→屏幕右下
-            if (prev != null && prev != deg) {
+            if (prev != deg) {
                 val (ax, ay) = when (deg) {
                     90 -> 0f to 0f
                     -90 -> 1f to 1f
