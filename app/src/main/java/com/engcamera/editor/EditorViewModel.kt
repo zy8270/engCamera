@@ -1,0 +1,157 @@
+package com.engcamera.editor
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.engcamera.EngCameraApp
+import com.engcamera.data.DynamicValues
+import com.engcamera.data.FieldType
+import com.engcamera.data.WatermarkField
+import com.engcamera.data.WatermarkState
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class EditorViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val container = (app as EngCameraApp).container
+    private val repo = container.repository
+
+    val state: StateFlow<WatermarkState> = repo.state
+
+    /** 自动定位文本（相机页共享同一个 LocationSource） */
+    val locationText: StateFlow<String> = container.locationSource.text
+
+    private val _dynamic = MutableStateFlow(DynamicValues())
+    val dynamic: StateFlow<DynamicValues> = _dynamic.asStateFlow()
+
+    /** 编辑器里的旋转角：预览固定角（重力跟随在编辑器中按 0 展示） */
+    val rotationDeg: StateFlow<Float> = combine(state) { s ->
+        if (s.first().followGravity) 0f else s.first().rotationDeg
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0f)
+
+    /** 刷新定位后等待同步标记 */
+    private var pendingLocationSync = false
+
+    init {
+        viewModelScope.launch {
+            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+            while (isActive) {
+                // 时间每秒刷新，位置跟随 locationText 实时值（与相机页同一数据源）
+                _dynamic.value = _dynamic.value.copy(
+                    time = fmt.format(Date()),
+                    location = locationText.value,
+                )
+                delay(1000)
+            }
+        }
+        viewModelScope.launch {
+            locationText.collect { text ->
+                // 定位文字变化时立即更新 dynamic（不等下一秒 tick），预览实时同步
+                _dynamic.value = _dynamic.value.copy(location = text)
+                if (pendingLocationSync && text.isNotBlank() &&
+                    text != "定位中…" && !text.startsWith("未获取")
+                ) {
+                    pendingLocationSync = false
+                    syncToLocationField(text)
+                }
+            }
+        }
+    }
+
+    /**
+     * 刷新定位：立即请求当前位置；拿到结果后自动同步到【位置】标签
+     * （有则更新其值，无则创建该标签）。
+     */
+    fun refreshLocation() {
+        pendingLocationSync = true
+        container.locationSource.refreshNow()
+    }
+
+    private fun syncToLocationField(text: String) {
+        repo.update { s ->
+            val existing = s.fields.firstOrNull { it.type == FieldType.LOCATION }
+            if (existing != null) {
+                s.copy(
+                    fields = s.fields.map {
+                        if (it.type == FieldType.LOCATION) it.copy(value = text) else it
+                    },
+                )
+            } else {
+                s.copy(
+                    fields = s.fields + WatermarkField(
+                        id = "f_loc_${System.currentTimeMillis()}",
+                        type = FieldType.LOCATION,
+                        label = "位置",
+                        value = text,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun setEnabled(id: String, enabled: Boolean) = repo.update { s ->
+        s.copy(fields = s.fields.map { if (it.id == id) it.copy(enabled = enabled) else it })
+    }
+
+    fun remove(id: String) = repo.update { s ->
+        s.copy(fields = s.fields.filterNot { it.id == id })
+    }
+
+    fun addField(type: FieldType, label: String, value: String) {
+        val finalLabel = label.ifBlank { if (type == FieldType.NOTE) "备注" else "自定义" }
+        repo.update { s ->
+            s.copy(
+                fields = s.fields + WatermarkField(
+                    id = "c_${System.currentTimeMillis()}",
+                    type = type,
+                    label = finalLabel,
+                    value = value,
+                ),
+            )
+        }
+        repo.rememberFieldValue(finalLabel, value)
+    }
+
+    fun updateField(id: String, label: String, value: String, isTitle: Boolean) {
+        repo.update { s ->
+            s.copy(
+                fields = s.fields.map {
+                    if (it.id == id) {
+                        it.copy(label = label, value = value, isTitle = isTitle)
+                    } else {
+                        it
+                    }
+                },
+            )
+        }
+        repo.rememberFieldValue(label, value)
+    }
+
+    /** 字段填写历史（按标签，新在后，最多 5 条），编辑对话框快速填充用 */
+    val fieldHistory: StateFlow<Map<String, List<String>>> = repo.fieldHistory
+
+    fun move(from: Int, to: Int) = repo.update { s ->
+        if (from !in s.fields.indices || to !in s.fields.indices || from == to) {
+            s
+        } else {
+            val list = s.fields.toMutableList()
+            val item = list.removeAt(from)
+            list.add(to, item)
+            s.copy(fields = list)
+        }
+    }
+
+    fun setFollowGravity(enabled: Boolean) = repo.update { it.copy(followGravity = enabled) }
+
+    fun setRotationDeg(deg: Float) = repo.update { it.copy(rotationDeg = deg) }
+}
