@@ -21,24 +21,48 @@ object Routes {
 
 class MainActivity : ComponentActivity() {
 
-    /** 首次组合完成标记（Compose 内容真正上屏）；熄屏/后台冷启动时组合可能被挂起 */
-    private var firstCompositionRan = false
+    /**
+     * 组合心跳：组合活着时每秒自增。组合被永久挂起（熄屏冷启动竞态、
+     * 快速导航导致的组合搁置等）会停跳，由 heartbeatWatchdog 检测并重建自愈。
+     */
+    private val heartbeat = java.util.concurrent.atomic.AtomicInteger(0)
+    private var lastHeartbeat = 0
+    private var stalledChecks = 0
 
-    /** 自愈重建次数上限（防重建循环） */
+    /** 自愈重建次数上限（防重建循环；组合恢复后清零） */
     private var recreateAttempts = 0
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    /** 组合看门狗：屏幕亮着且窗口可见但 Compose 还没上屏（黑屏竞态）→ 重建 Activity 自愈 */
-    private val compositionWatchdog = object : Runnable {
+    /** 最近一次窗口绘制时间；窗口停止绘制（整屏黑/冻结）时不再更新 */
+    private var lastDrawUptime = android.os.SystemClock.uptimeMillis()
+
+    /** 综合看门狗：前台且亮屏时，组合心跳停跳 或 窗口长时间无绘制 → 重建 Activity 自愈 */
+    private val heartbeatWatchdog = object : Runnable {
         override fun run() {
-            if (firstCompositionRan) return
             val pm = getSystemService(android.os.PowerManager::class.java)
-            if (pm?.isInteractive == true && recreateAttempts < 3) {
-                recreateAttempts++
-                recreate()
+            val resumed = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+            val interactive = pm?.isInteractive == true
+            val current = heartbeat.get()
+            val now = android.os.SystemClock.uptimeMillis()
+            val noDrawMs = now - lastDrawUptime
+            // 窗口还活着就持续请求重绘，保持 lastDrawUptime 更新
+            window.decorView.invalidate()
+            val compDead = current == lastHeartbeat
+            val drawDead = noDrawMs > 8000
+            if (resumed && interactive && (compDead || drawDead)) {
+                stalledChecks++
+                if (stalledChecks >= 2 && recreateAttempts < 3) {
+                    recreateAttempts++
+                    stalledChecks = 0
+                    android.util.Log.w("Heartbeat", "self-healing recreate (compDead=$compDead drawDead=$drawDead)")
+                    recreate()
+                    return
+                }
             } else {
-                uiHandler.postDelayed(this, 1500)
+                stalledChecks = 0
             }
+            lastHeartbeat = current
+            uiHandler.postDelayed(this, 3000)
         }
     }
 
@@ -56,14 +80,31 @@ class MainActivity : ComponentActivity() {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
+        window.decorView.viewTreeObserver.addOnDrawListener {
+            lastDrawUptime = android.os.SystemClock.uptimeMillis()
+        }
         val container = (application as EngCameraApp).container
         setContent {
             EngCameraTheme {
+                // 组合心跳：组合存活期间每秒跳一次（delay 挂在组合作用域，组合冻结/销毁即停）
                 androidx.compose.runtime.LaunchedEffect(Unit) {
-                    firstCompositionRan = true
                     recreateAttempts = 0
+                    while (true) {
+                        heartbeat.incrementAndGet()
+                        kotlinx.coroutines.delay(1000)
+                    }
                 }
                 val navController = rememberNavController()
+                // 连点返回会把根目的地也弹掉导致 Activity finish（真机复现：编辑器双击保存=整屏黑）。
+                // 400ms 防抖，期间重复的 pop 一律忽略。
+                var lastPopAt = 0L
+                fun debouncedPop() {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastPopAt > 400) {
+                        lastPopAt = now
+                        navController.popBackStack()
+                    }
+                }
                 NavHost(navController = navController, startDestination = Routes.CAMERA) {
                     composable(Routes.CAMERA) {
                         CameraScreen(
@@ -73,12 +114,12 @@ class MainActivity : ComponentActivity() {
                     }
                     composable(Routes.GALLERY) {
                         GalleryScreen(
-                            onBack = { navController.popBackStack() },
-                            onGoShoot = { navController.popBackStack() },
+                            onBack = { debouncedPop() },
+                            onGoShoot = { debouncedPop() },
                         )
                     }
                     composable(Routes.EDITOR) {
-                        EditorScreen(onBack = { navController.popBackStack() })
+                        EditorScreen(onBack = { debouncedPop() })
                     }
                 }
             }
@@ -87,11 +128,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        uiHandler.postDelayed(compositionWatchdog, 1500)
+        lastHeartbeat = heartbeat.get()
+        lastDrawUptime = android.os.SystemClock.uptimeMillis()
+        stalledChecks = 0
+        uiHandler.postDelayed(heartbeatWatchdog, 3000)
     }
 
     override fun onPause() {
-        uiHandler.removeCallbacks(compositionWatchdog)
+        uiHandler.removeCallbacks(heartbeatWatchdog)
         super.onPause()
     }
 }
