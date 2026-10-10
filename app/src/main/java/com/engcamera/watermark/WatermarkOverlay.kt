@@ -23,6 +23,8 @@ import kotlin.math.sin
 /**
  * 预览上的水印悬浮层：与成片使用同一渲染引擎，所见即所得。
  * 点击进入水印编辑器，拖动改变位置（Compose 触摸 slop 天然区分点击与拖动）。
+ * scaleByShortSide：烧录缩放基准是画面短边（WatermarkRenderer.drawOnCanvas），
+ * 横向图片（宽=长边）的预览也须按短边缩放，否则预览比成片大。
  */
 @Composable
 fun WatermarkOverlay(
@@ -32,6 +34,7 @@ fun WatermarkOverlay(
     onTap: () -> Unit,
     onDrag: (dxNorm: Float, dyNorm: Float) -> Unit,
     modifier: Modifier = Modifier,
+    scaleByShortSide: Boolean = false,
 ) {
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
@@ -39,8 +42,13 @@ fun WatermarkOverlay(
         val heightPx = with(density) { maxHeight.toPx() }.roundToInt()
 
         // 状态、动态文本或宽度变化时重新渲染（时间每秒变化一次）
-        val block = remember(state, dynamic, widthPx) {
-            if (widthPx > 0) WatermarkRenderer.render(state, widthPx, dynamic) else null
+        val block = remember(state, dynamic, widthPx, heightPx, scaleByShortSide) {
+            if (widthPx > 0) {
+                val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
+                WatermarkRenderer.render(state, scaleBasis, dynamic)
+            } else {
+                null
+            }
         }
 
         if (block != null && widthPx > 0 && heightPx > 0) {

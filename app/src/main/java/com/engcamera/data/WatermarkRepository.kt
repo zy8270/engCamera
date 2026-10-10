@@ -47,7 +47,7 @@ class WatermarkRepository(private val context: Context) {
             val stored = context.dataStore.data.first()[stateKey]
             if (stored != null) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
-                    .onSuccess { _state.value = ensureCountField(it) }
+                    .onSuccess { _state.value = ensureCountField(migrateWidth(it)) }
             }
             context.dataStore.data.first()[historyKey]?.let { raw ->
                 runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }
@@ -62,6 +62,14 @@ class WatermarkRepository(private val context: Context) {
     private fun ensureCountField(s: WatermarkState): WatermarkState =
         if (s.fields.none { it.type == FieldType.COUNT }) {
             s.copy(fields = s.fields + WatermarkField("f_count", FieldType.COUNT, "计数", "1"))
+        } else {
+            s
+        }
+
+    /** 存量数据迁移：水印块宽度统一到 0.576（v0.2.7：0.72→0.48 收窄过窄，按用户反馈 ×1.2 加宽） */
+    private fun migrateWidth(s: WatermarkState): WatermarkState =
+        if (s.style.maxWidthRatio == 0.72f || s.style.maxWidthRatio == 0.48f) {
+            s.copy(style = s.style.copy(maxWidthRatio = 0.576f))
         } else {
             s
         }

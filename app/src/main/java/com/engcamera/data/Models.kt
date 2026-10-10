@@ -28,7 +28,7 @@ data class WatermarkStyle(
     val bodyTextColor: Long = 0xFFFFFFFF,     // 白色
     val titleFontSizeRatio: Float = 0.038f,   // 相对画面宽度
     val bodyFontSizeRatio: Float = 0.030f,    // 相对画面宽度
-    val maxWidthRatio: Float = 0.72f,         // 水印块最大宽度比例
+    val maxWidthRatio: Float = 0.576f,        // 水印块最大宽度比例（v0.2.7 收窄 2/3 后按用户反馈 ×1.2 加宽）
     val paddingRatio: Float = 0.014f,         // 内边距比例
     val lineSpacingRatio: Float = 0.006f,     // 行距比例
     val cornerRatio: Float = 0.006f,          // 圆角比例
