@@ -59,7 +59,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -317,7 +319,7 @@ fun CameraScreen(
     }
 }
 
-/** 设置抽屉：从右侧滑出，收纳与拍摄行为相关的设置项 */
+/** 设置抽屉：从右侧滑出（约 4/5 屏宽），收纳与拍摄行为相关的设置项 */
 @Composable
 private fun SettingsDrawer(
     visible: Boolean,
@@ -326,31 +328,42 @@ private fun SettingsDrawer(
 ) {
     val saveOriginal by vm.saveOriginal.collectAsState()
     val watermark by vm.watermark.collectAsState()
-    AnimatedVisibility(
-        visible = visible,
-        enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-        exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            // 半透明遮罩，点击关闭
+    Box(Modifier.fillMaxSize()) {
+        // 遮罩独立渐变（不随抽屉位移），由明到暗淡入
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(tween(240)),
+            exit = fadeOut(tween(200)),
+        ) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0x88000000))
-                    .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+                    .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+                    .background(Color(0x88000000)),
             )
+        }
+        AnimatedVisibility(
+            visible = visible,
+            enter = slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { it },
+            exit = slideOutHorizontally(tween(200, easing = FastOutSlowInEasing)) { it },
+        ) {
             Column(
                 Modifier
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
-                    .fillMaxWidth(0.75f)
+                    .fillMaxWidth(0.8f)
                     .background(MaterialTheme.colorScheme.surface)
                     .statusBarsPadding()
                     .navigationBarsPadding()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                Text("设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "设置",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Spacer(Modifier.height(20.dp))
 
                 Row(
@@ -358,7 +371,11 @@ private fun SettingsDrawer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("保存原图原视频", fontWeight = FontWeight.Medium)
+                        Text(
+                            "保存原图原视频",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                         Text(
                             "开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）",
                             style = MaterialTheme.typography.bodySmall,
@@ -375,7 +392,11 @@ private fun SettingsDrawer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("水印跟随重力", fontWeight = FontWeight.Medium)
+                        Text(
+                            "水印跟随重力",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                         Text(
                             "开启后水印按重力 90° 旋转（跟随照片方向），并自动重置到预览画面右下角；关闭后使用固定角度",
                             style = MaterialTheme.typography.bodySmall,
@@ -391,7 +412,11 @@ private fun SettingsDrawer(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("固定旋转角", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "固定旋转角",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                         Spacer(Modifier.width(12.dp))
                         Slider(
                             value = watermark.rotationDeg,
@@ -400,7 +425,10 @@ private fun SettingsDrawer(
                             modifier = Modifier.weight(1f),
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("${watermark.rotationDeg.roundToInt()}°")
+                        Text(
+                            "${watermark.rotationDeg.roundToInt()}°",
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                     }
                 }
                 Spacer(Modifier.height(24.dp))
