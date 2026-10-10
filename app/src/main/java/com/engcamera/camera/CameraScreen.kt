@@ -9,6 +9,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,7 +45,9 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -53,7 +58,12 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -174,6 +184,7 @@ fun CameraScreen(
         if (!cameraGranted) {
             PermissionGate(onOpenSettings = ::openAppSettings)
         } else {
+            var showSettings by remember { mutableStateOf(false) }
             val previewView = remember {
                 PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
             }
@@ -252,10 +263,10 @@ fun CameraScreen(
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    IconButton(onClick = onOpenEditor) {
+                    IconButton(onClick = { showSettings = true }) {
                         Icon(
                             Icons.Default.Settings,
-                            contentDescription = "水印编辑",
+                            contentDescription = "设置",
                             tint = Color.White,
                             modifier = Modifier.rotate(rot.toFloat()),
                         )
@@ -294,6 +305,105 @@ fun CameraScreen(
 
                 // 底部控制条紧贴预览下方，不推到屏幕底部
                 BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery)
+            }
+
+            // 右上角设置：右侧滑出抽屉（约 3/4 屏宽）
+            SettingsDrawer(
+                visible = showSettings,
+                vm = vm,
+                onDismiss = { showSettings = false },
+            )
+        }
+    }
+}
+
+/** 设置抽屉：从右侧滑出，收纳与拍摄行为相关的设置项 */
+@Composable
+private fun SettingsDrawer(
+    visible: Boolean,
+    vm: CameraViewModel,
+    onDismiss: () -> Unit,
+) {
+    val saveOriginal by vm.saveOriginal.collectAsState()
+    val watermark by vm.watermark.collectAsState()
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+        exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            // 半透明遮罩，点击关闭
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0x88000000))
+                    .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+            )
+            Column(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.75f)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Text("设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(20.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("保存原图原视频", fontWeight = FontWeight.Medium)
+                        Text(
+                            "开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = saveOriginal, onCheckedChange = { vm.setSaveOriginal(it) })
+                }
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("水印跟随重力", fontWeight = FontWeight.Medium)
+                        Text(
+                            "开启后水印按重力 90° 旋转（跟随照片方向），并自动重置到预览画面右下角；关闭后使用固定角度",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = watermark.followGravity, onCheckedChange = { vm.setFollowGravity(it) })
+                }
+                if (!watermark.followGravity) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("固定旋转角", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.width(12.dp))
+                        Slider(
+                            value = watermark.rotationDeg,
+                            onValueChange = { vm.setRotationDeg(it) },
+                            valueRange = -180f..180f,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("${watermark.rotationDeg.roundToInt()}°")
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
