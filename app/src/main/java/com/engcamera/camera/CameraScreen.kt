@@ -187,6 +187,8 @@ fun CameraScreen(
             PermissionGate(onOpenSettings = ::openAppSettings)
         } else {
             var showSettings by remember { mutableStateOf(false) }
+            // 抽屉展开时返回键收起抽屉，而不是退出应用
+            androidx.activity.compose.BackHandler(enabled = showSettings) { showSettings = false }
             val previewView = remember {
                 PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
             }
