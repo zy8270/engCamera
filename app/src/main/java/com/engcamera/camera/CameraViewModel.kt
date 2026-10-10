@@ -208,6 +208,17 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     /** 点击对焦测光（预览区像素坐标），返回是否已下发 */
     fun focusAt(x: Float, y: Float): Boolean = engine?.focusMeter(x, y) ?: false
 
+    // ---------- 设置抽屉 ----------
+    val saveOriginal: StateFlow<Boolean> = container.repository.saveOriginal
+
+    fun setSaveOriginal(value: Boolean) = container.repository.setSaveOriginal(value)
+
+    fun setFollowGravity(enabled: Boolean) =
+        container.repository.update { it.copy(followGravity = enabled) }
+
+    fun setRotationDeg(deg: Float) =
+        container.repository.update { it.copy(rotationDeg = deg) }
+
     // ---------- 添加水印模式（给相册已有图片加水印） ----------
 
     /** 进入/退出添加水印模式；录像或拍照处理中不允许进入 */

@@ -195,65 +195,7 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 }
 
-                item {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                        // 保存原图原视频（设置项）
-                        val saveOriginal by vm.saveOriginal.collectAsState()
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text("保存原图原视频", fontWeight = FontWeight.Medium)
-                                Text(
-                                    "开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Switch(
-                                checked = saveOriginal,
-                                onCheckedChange = { vm.setSaveOriginal(it) },
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text("水印跟随重力", fontWeight = FontWeight.Medium)
-                                Text(
-                                    "开启后水印按重力 90° 旋转（跟随照片方向），并自动重置到预览画面右下角；关闭后使用固定角度",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Switch(
-                                checked = state.followGravity,
-                                onCheckedChange = { vm.setFollowGravity(it) },
-                            )
-                        }
-                        if (!state.followGravity) {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text("固定旋转角", style = MaterialTheme.typography.bodyMedium)
-                                Spacer(Modifier.width(12.dp))
-                                Slider(
-                                    value = state.rotationDeg,
-                                    onValueChange = { vm.setRotationDeg(it) },
-                                    valueRange = -180f..180f,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("${state.rotationDeg.roundToInt()}°")
-                            }
-                        }
-                        Spacer(Modifier.height(24.dp))
-                    }
-                }
+                
             }
         }
     }

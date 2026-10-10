@@ -140,10 +140,6 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** 字段填写历史（按标签，新在后，最多 5 条），编辑对话框快速填充用 */
     val fieldHistory: StateFlow<Map<String, List<String>>> = repo.fieldHistory
 
-    /** 保存原图原视频（设置项） */
-    val saveOriginal: StateFlow<Boolean> = repo.saveOriginal
-
-    fun setSaveOriginal(value: Boolean) = repo.setSaveOriginal(value)
 
     fun move(from: Int, to: Int) = repo.update { s ->
         if (from !in s.fields.indices || to !in s.fields.indices || from == to) {
@@ -156,7 +152,4 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setFollowGravity(enabled: Boolean) = repo.update { it.copy(followGravity = enabled) }
-
-    fun setRotationDeg(deg: Float) = repo.update { it.copy(rotationDeg = deg) }
 }
