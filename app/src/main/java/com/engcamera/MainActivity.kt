@@ -21,6 +21,27 @@ object Routes {
 
 class MainActivity : ComponentActivity() {
 
+    /** 首次组合完成标记（Compose 内容真正上屏）；熄屏/后台冷启动时组合可能被挂起 */
+    private var firstCompositionRan = false
+
+    /** 自愈重建次数上限（防重建循环） */
+    private var recreateAttempts = 0
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** 组合看门狗：屏幕亮着且窗口可见但 Compose 还没上屏（黑屏竞态）→ 重建 Activity 自愈 */
+    private val compositionWatchdog = object : Runnable {
+        override fun run() {
+            if (firstCompositionRan) return
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm?.isInteractive == true && recreateAttempts < 3) {
+                recreateAttempts++
+                recreate()
+            } else {
+                uiHandler.postDelayed(this, 1500)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 沉浸式：状态栏与导航栏全透明，内容延伸到系统栏下方
@@ -38,6 +59,10 @@ class MainActivity : ComponentActivity() {
         val container = (application as EngCameraApp).container
         setContent {
             EngCameraTheme {
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    firstCompositionRan = true
+                    recreateAttempts = 0
+                }
                 val navController = rememberNavController()
                 NavHost(navController = navController, startDestination = Routes.CAMERA) {
                     composable(Routes.CAMERA) {
@@ -58,5 +83,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        uiHandler.postDelayed(compositionWatchdog, 1500)
+    }
+
+    override fun onPause() {
+        uiHandler.removeCallbacks(compositionWatchdog)
+        super.onPause()
     }
 }
