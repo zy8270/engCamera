@@ -595,7 +595,12 @@ private fun BottomBar(
                                 text = {
                                     Text(
                                         q.label,
-                                        color = if (idx == ui.videoQualityIndex) Color(0xFF1976D2) else Color.Black,
+                                        // 跟随主题：暗色模式白字、亮色模式黑字，选中项用主题蓝
+                                        color = if (idx == ui.videoQualityIndex) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
                                     )
                                 },
                                 onClick = { vm.selectVideoQuality(idx) },
