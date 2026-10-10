@@ -2,6 +2,7 @@ package com.engcamera.data
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -31,6 +32,7 @@ class WatermarkRepository(private val context: Context) {
     private val stateKey = stringPreferencesKey("watermark_state_v2")
     private val columnsKey = intPreferencesKey("gallery_columns")
     private val historyKey = stringPreferencesKey("field_history")
+    private val saveOriginalKey = booleanPreferencesKey("save_original")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -41,6 +43,10 @@ class WatermarkRepository(private val context: Context) {
     /** 字段填写历史：标签 -> 最近填过的值（新在后，最多 5 条），用于编辑器快速填充 */
     private val _fieldHistory = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val fieldHistory: StateFlow<Map<String, List<String>>> = _fieldHistory.asStateFlow()
+
+    /** 保存原图原视频：开启后拍照/录像同时保存无水印原片与水印成片（默认关） */
+    private val _saveOriginal = MutableStateFlow(false)
+    val saveOriginal: StateFlow<Boolean> = _saveOriginal.asStateFlow()
 
     init {
         scope.launch {
@@ -55,6 +61,7 @@ class WatermarkRepository(private val context: Context) {
             }
             val cols = context.dataStore.data.first()[columnsKey] ?: 3
             _galleryColumns.value = cols.coerceIn(3, 5)
+            _saveOriginal.value = context.dataStore.data.first()[saveOriginalKey] ?: false
         }
     }
 
@@ -92,6 +99,13 @@ class WatermarkRepository(private val context: Context) {
         _state.value = next
         scope.launch {
             context.dataStore.edit { it[stateKey] = json.encodeToString(next) }
+        }
+    }
+
+    fun setSaveOriginal(value: Boolean) {
+        _saveOriginal.value = value
+        scope.launch {
+            context.dataStore.edit { it[saveOriginalKey] = value }
         }
     }
 
