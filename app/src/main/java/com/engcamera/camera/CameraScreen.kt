@@ -190,7 +190,12 @@ fun CameraScreen(
             // 抽屉展开时返回键收起抽屉，而不是退出应用
             androidx.activity.compose.BackHandler(enabled = showSettings) { showSettings = false }
             val previewView = remember {
-                PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
+                PreviewView(context).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    // TextureView 模式：避免 SurfaceView 在快速导航销毁时撕裂窗口
+                    // 导致整个 Activity 停止绘制（真机复现：编辑器快速连点保存后整屏黑）
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                }
             }
             val navLifecycle = LocalLifecycleOwner.current
 
