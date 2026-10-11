@@ -295,55 +295,28 @@ class LocationSource(private val context: Context) {
     }
 
     /**
-     * 在线反查（免 key，简体中文，不含国家级前缀——用户确认 2026-10-11）：
-     * 优先 Nominatim/OpenStreetMap（简体、可到区/街道级）；失败退 BigDataCloud（去国名，可能繁体）。
+     * 在线反查：Photon(Komoot/OSM)——真坐标、简体中文、免 key、可到街道级，不含国家级前缀。
+     * （弃用：Nominatim 国内直连不通；BigDataCloud 免费档实为 IP 定位会答错城市——实测广州坐标回湖北）
      */
-    private fun onlineReverseGeocode(location: Location): String? =
-        nominatimReverse(location) ?: bigDataCloudReverse(location)
-
-    private fun nominatimReverse(location: Location): String? = runCatching {
+    private fun onlineReverseGeocode(location: Location): String? = runCatching {
         val url = java.net.URL(
-            "https://nominatim.openstreetmap.org/reverse" +
-                "?lat=${location.latitude}&lon=${location.longitude}" +
-                "&format=jsonv2&accept-language=zh-CN&zoom=16",
+            "https://photon.komoot.io/reverse?lat=${location.latitude}&lon=${location.longitude}&lang=default",
         )
         val conn = url.openConnection() as java.net.HttpURLConnection
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
-        conn.setRequestProperty("User-Agent", "engCamera/1.0 (zy8270)")
         val json = conn.inputStream.bufferedReader().use { it.readText() }
-        val addr = (kotlinx.serialization.json.Json.parseToJsonElement(json)
-            as? kotlinx.serialization.json.JsonObject)?.get("address")
-            as? kotlinx.serialization.json.JsonObject ?: return@runCatching null
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(json) as? kotlinx.serialization.json.JsonObject
+        val feats = root?.get("features") as? kotlinx.serialization.json.JsonArray
+        val props = (feats?.firstOrNull() as? kotlinx.serialization.json.JsonObject)
+            ?.get("properties") as? kotlinx.serialization.json.JsonObject ?: return@runCatching null
         fun f(name: String): String? =
-            (addr[name] as? kotlinx.serialization.json.JsonPrimitive)?.content
-        // 中国地址常见字段：state=省 city=市 city_district/district=区 suburb=街道/镇
+            (props[name] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        // 例：state=广东省 city=广州市 district=冼村街道（缺 district 时用 locality）
         listOfNotNull(
             f("state"),
-            f("city") ?: f("municipality"),
-            f("city_district") ?: f("district") ?: f("county"),
-            f("suburb") ?: f("town"),
-        ).filter { it.isNotBlank() }.joinToString("").ifBlank { null }
-    }.getOrNull()
-
-    private fun bigDataCloudReverse(location: Location): String? = runCatching {
-        val url = java.net.URL(
-            "https://api.bigdatacloud.net/data/reverse-geocode-client" +
-                "?latitude=${location.latitude}&longitude=${location.longitude}&localityLanguage=zh",
-        )
-        val conn = url.openConnection() as java.net.HttpURLConnection
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
-        val json = conn.inputStream.bufferedReader().use { it.readText() }
-        val obj = kotlinx.serialization.json.Json.parseToJsonElement(json)
-            .let { it as kotlinx.serialization.json.JsonObject }
-        fun f(name: String): String? =
-            (obj[name] as? kotlinx.serialization.json.JsonPrimitive)?.let { kotlin.runCatching { it.content }.getOrNull() }
-        // 不含 countryName（国级省略）
-        listOfNotNull(
-            f("principalSubdivision"),
             f("city"),
-            f("locality"),
+            f("district") ?: f("locality"),
         ).filter { it.isNotBlank() }.joinToString("").ifBlank { null }
-    }.getOrNull()
+    }.getOrNull().getOrNull()
 }
