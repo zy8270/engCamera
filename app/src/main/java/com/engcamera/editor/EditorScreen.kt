@@ -308,6 +308,7 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismis
             )
         }
         // 面板：右下角约半屏，圆角+阴影，从底部滑入
+        // 对齐要挂在 AnimatedVisibility 上（挂内部 Column 不生效，面板会飘到顶部）
         androidx.compose.animation.AnimatedVisibility(
             visible = visible,
             enter = androidx.compose.animation.slideInVertically(
@@ -316,10 +317,13 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismis
             exit = androidx.compose.animation.slideOutVertically(
                 androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutSlowInEasing),
             ) { it } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                // 底部垫高到悬浮按钮顶线：按钮底边距16 + 按钮高约48
+                .padding(bottom = 64.dp),
         ) {
         Column(
             Modifier
-                .align(Alignment.BottomEnd)
                 .fillMaxWidth(0.94f)
                 .fillMaxHeight(0.5f)
                 .shadow(10.dp, RoundedCornerShape(20.dp))
