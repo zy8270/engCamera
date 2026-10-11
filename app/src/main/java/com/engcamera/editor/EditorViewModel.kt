@@ -140,6 +140,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** 字段填写历史（按标签，新在后，最多 5 条），编辑对话框快速填充用 */
     val fieldHistory: StateFlow<Map<String, List<String>>> = repo.fieldHistory
 
+    /** 工程组 */
+    val projects: StateFlow<com.engcamera.data.ProjectGroups> = repo.projects
+
+    fun selectProject(id: String) = repo.selectProject(id)
+
+    fun createProject(name: String) = repo.createProject(name)
+
+    fun deleteProjects(ids: Set<String>) = repo.deleteProjects(ids)
+
 
     fun move(from: Int, to: Int) = repo.update { s ->
         if (from !in s.fields.indices || to !in s.fields.indices || from == to) {
