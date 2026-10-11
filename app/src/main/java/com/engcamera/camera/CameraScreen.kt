@@ -365,10 +365,14 @@ private fun SettingsDrawer(
                     .fillMaxWidth(0.8f)
                     .background(MaterialTheme.colorScheme.surface)
                     .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .navigationBarsPadding(),
             ) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
                 Text(
                     "设置",
                     style = MaterialTheme.typography.titleLarge,
@@ -496,11 +500,11 @@ private fun SettingsDrawer(
                 )
                 Spacer(Modifier.height(16.dp))
 
-                Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(16.dp))
+                }
 
-                // 署名（发布日期随版本更新）
-                HorizontalDivider(color = Color(0xFF3A3A40))
-                Spacer(Modifier.height(10.dp))
+                // 署名固定置底（不随设置内容滚动；发布日期随版本更新）
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = Color(0xFF3A3A40))
                 Text(
                     "Rnzhy 2026.10.11 engCamera MIT",
                     style = MaterialTheme.typography.labelSmall,
@@ -516,9 +520,8 @@ private fun SettingsDrawer(
                                 )
                             }
                         }
-                        .padding(vertical = 6.dp),
+                        .padding(vertical = 10.dp),
                 )
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
