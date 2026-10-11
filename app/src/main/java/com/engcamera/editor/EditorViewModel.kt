@@ -31,6 +31,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** 自动定位文本（相机页共享同一个 LocationSource） */
     val locationText: StateFlow<String> = container.locationSource.text
 
+    /** 自动天气文本（随定位联动获取） */
+    val weatherText: StateFlow<String> = container.locationSource.weather
+
     private val _dynamic = MutableStateFlow(DynamicValues())
     val dynamic: StateFlow<DynamicValues> = _dynamic.asStateFlow()
 
@@ -50,8 +53,14 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 _dynamic.value = _dynamic.value.copy(
                     time = fmt.format(Date()),
                     location = locationText.value,
+                    weather = weatherText.value,
                 )
                 delay(1000)
+            }
+        }
+        viewModelScope.launch {
+            weatherText.collect { w ->
+                _dynamic.value = _dynamic.value.copy(weather = w)
             }
         }
         viewModelScope.launch {

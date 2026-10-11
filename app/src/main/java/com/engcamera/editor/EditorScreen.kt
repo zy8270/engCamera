@@ -86,6 +86,7 @@ fun EditorScreen(onBack: () -> Unit) {
     val dynamic by vm.dynamic.collectAsState()
     val rotationDeg by vm.rotationDeg.collectAsState()
     val autoLocation by vm.locationText.collectAsState()
+    val weatherText by vm.weatherText.collectAsState()
     val fieldHistory by vm.fieldHistory.collectAsState()
 
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
@@ -254,6 +255,7 @@ fun EditorScreen(onBack: () -> Unit) {
             field = field,
             history = (fieldHistory[field.label] ?: emptyList()).reversed(),
             autoLocation = autoLocation,
+            autoWeather = weatherText,
             currentTime = dynamic.time,
             onRefreshLocation = { vm.refreshLocation() },
             onDismiss = { editingField = null },
@@ -545,6 +547,7 @@ private fun FieldRow(
                             FieldType.DATETIME -> "拍照时自动填写时间"
                             FieldType.LOCATION -> "自动定位（可点此处手动编辑）"
                             FieldType.COUNT -> "每次拍照自动 +1"
+                            FieldType.WEATHER -> "自动获取天气（可手动填写）"
                             else -> "未填写"
                         }
                     },
@@ -569,6 +572,7 @@ private fun EditFieldDialog(
     field: WatermarkField,
     history: List<String>,
     autoLocation: String,
+    autoWeather: String,
     currentTime: String,
     onRefreshLocation: () -> Unit,
     onDismiss: () -> Unit,
@@ -584,6 +588,8 @@ private fun EditFieldDialog(
                 field.type == FieldType.LOCATION && field.value.isBlank() ->
                     autoLocation.takeIf { it.isNotBlank() && !it.startsWith("未获取") && it != "定位中…" }
                         ?: field.value
+                field.type == FieldType.WEATHER && field.value.isBlank() ->
+                    autoWeather.takeIf { it.isNotBlank() } ?: field.value
                 else -> field.value
             },
         )
@@ -594,6 +600,7 @@ private fun EditFieldDialog(
     val isCount = field.type == FieldType.COUNT
     val isLocation = field.type == FieldType.LOCATION
     val isDateTime = field.type == FieldType.DATETIME
+    val isWeather = field.type == FieldType.WEATHER
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -613,6 +620,7 @@ private fun EditFieldDialog(
                                 isCount -> "数值（纯数字，每次拍照保存后自动 +1）"
                                 isDateTime -> "时间（留空 = 拍照时自动填写当前时间）"
                                 isLocation -> "位置（留空 = 拍照时自动定位）"
+                                isWeather -> "天气（留空 = 拍照时自动获取）"
                                 else -> "内容"
                             },
                         )
@@ -636,7 +644,7 @@ private fun EditFieldDialog(
                     }
                 }
                 // 历史记录快速填充（按标签，最近在前）
-                if (!isCount && !isLocation && !isDateTime && history.isNotEmpty()) {
+                if (!isCount && !isLocation && !isDateTime && !isWeather && history.isNotEmpty()) {
                     Text(
                         "最近使用（点击填充）",
                         style = MaterialTheme.typography.bodySmall,

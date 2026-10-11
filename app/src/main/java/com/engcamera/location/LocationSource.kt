@@ -35,6 +35,10 @@ class LocationSource(private val context: Context) {
     private val _text = MutableStateFlow("未获取定位")
     val text: StateFlow<String> = _text.asStateFlow()
 
+    private val _weather = MutableStateFlow("")
+    /** 天气文本（如"晴 26℃"），随定位更新联动获取并缓存 */
+    val weather: StateFlow<String> = _weather.asStateFlow()
+
     // 地址缓存：定位回调很频繁（1-2 秒一次），每次都先显示坐标再等联网反查，
     // 会让中文地址"一下消失一下恢复"。缓存 60 秒或位移超 50 米才刷新文本。
     private var cachedLat = 0.0
@@ -179,7 +183,41 @@ class LocationSource(private val context: Context) {
             } else if (!hasAddress) {
                 _text.value = coords
             }
+            fetchWeather(location)
         }
+    }
+
+    /** Open-Meteo 当前天气（免费无 key），WMO 代码映射中文；失败静默保留旧值 */
+    private suspend fun fetchWeather(location: Location) = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = java.net.URL(
+                "https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}" +
+                    "&longitude=${location.longitude}&current_weather=true",
+            )
+            val json = url.openConnection().let { it as java.net.HttpURLConnection }.apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+            }.inputStream.bufferedReader().use { it.readText() }
+            val temp = Regex("\"temperature\":(-?[0-9.]+)").find(json)?.groupValues?.get(1)
+            val code = Regex("\"weathercode\":([0-9]+)").find(json)?.groupValues?.get(1)?.toIntOrNull()
+            if (temp != null && code != null) {
+                _weather.value = "${wmoText(code)} ${temp.trimEnd('0').trimEnd('.')}℃"
+            }
+        }
+    }
+
+    private fun wmoText(code: Int): String = when (code) {
+        0 -> "晴"
+        1, 2 -> "多云"
+        3 -> "阴"
+        45, 48 -> "雾"
+        in 51..57 -> "毛毛雨"
+        in 61..67 -> "雨"
+        in 71..77 -> "雪"
+        in 80..82 -> "阵雨"
+        85, 86 -> "阵雪"
+        in 95..99 -> "雷阵雨"
+        else -> "未知"
     }
 
     /** 联网反地理编码，失败返回 null，保持只显示经纬度 */

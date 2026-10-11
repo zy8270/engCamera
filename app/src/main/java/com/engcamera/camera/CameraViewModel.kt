@@ -129,10 +129,17 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 _dynamic.value = _dynamic.value.copy(
                     time = fmt.format(Date()),
                     location = locationSource.text.value,
+                    weather = locationSource.weather.value,
                 )
                 delay(1000)
             }
         }
+        viewModelScope.launch {
+            locationSource.weather.collect { w ->
+                _dynamic.value = _dynamic.value.copy(weather = w)
+            }
+        }
+
         gravitySensor.onQuantizedRoll = { deg ->
             val prev = lastRoll
             lastRoll = deg

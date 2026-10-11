@@ -183,6 +183,7 @@ object WatermarkRenderer {
         FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
         FieldType.LOCATION -> f.value.ifBlank { dynamic.location.ifBlank { "未获取定位" } }
         FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
+        FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
         else -> f.value
     }
 

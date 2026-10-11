@@ -63,7 +63,7 @@ class WatermarkRepository(private val context: Context) {
             val stored = context.dataStore.data.first()[stateKey]
             if (stored != null) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
-                    .onSuccess { _state.value = ensureCountField(migrateWidth(it)) }
+                    .onSuccess { _state.value = ensureCountField(ensureWeatherField(migrateWidth(it))) }
             }
             context.dataStore.data.first()[historyKey]?.let { raw ->
                 runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }
@@ -89,6 +89,16 @@ class WatermarkRepository(private val context: Context) {
     private fun ensureCountField(s: WatermarkState): WatermarkState =
         if (s.fields.none { it.type == FieldType.COUNT }) {
             s.copy(fields = s.fields + WatermarkField("f_count", FieldType.COUNT, "计数", "1"))
+        } else {
+            s
+        }
+
+    /** 存量数据补齐天气字段（固定项不可删除，只可关闭） */
+    private fun ensureWeatherField(s: WatermarkState): WatermarkState =
+        if (s.fields.none { it.type == FieldType.WEATHER }) {
+            // 插在计数之前，与默认字段顺序一致
+            val idx = s.fields.indexOfFirst { it.type == FieldType.COUNT }.let { if (it < 0) s.fields.size else it }
+            s.copy(fields = s.fields.toMutableList().apply add@{ add(idx, WatermarkField("f_weather", FieldType.WEATHER, "天气", "")) })
         } else {
             s
         }
