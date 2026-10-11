@@ -65,8 +65,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -93,8 +91,6 @@ fun EditorScreen(onBack: () -> Unit) {
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showProjectGroups by remember { mutableStateOf(false) }
-    // 工程组悬浮按钮的顶边位置（根坐标，px），面板底部精确贴它
-    var fabTopPx by remember { mutableFloatStateOf(0f) }
 
     val listState = rememberLazyListState()
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -109,8 +105,7 @@ fun EditorScreen(onBack: () -> Unit) {
                 shadowElevation = 8.dp,
                 modifier = Modifier
                     .padding(end = 16.dp, bottom = 16.dp)
-                    .shadow(8.dp, RoundedCornerShape(14.dp))
-                    .onGloballyPositioned { fabTopPx = it.boundsInRoot().top },
+                    .shadow(8.dp, RoundedCornerShape(14.dp)),
                 onClick = { showProjectGroups = true },
             ) {
                 Row(
@@ -262,12 +257,7 @@ fun EditorScreen(onBack: () -> Unit) {
         )
     }
 
-    ProjectGroupSelector(
-        visible = showProjectGroups,
-        vm = vm,
-        fabTopPx = fabTopPx,
-        onDismiss = { showProjectGroups = false },
-    )
+    ProjectGroupSelector(visible = showProjectGroups, vm = vm, onDismiss = { showProjectGroups = false })
 }
 
 /** 工程组图标：三条横线，最后一条带三角形（表示一组配置的集合/切换） */
@@ -296,7 +286,7 @@ private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
  * 点工程名切换，勾选后批量删除，笔重命名。
  */
 @Composable
-private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, fabTopPx: Float, onDismiss: () -> Unit) {
+private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismiss: () -> Unit) {
     val groups by vm.projects.collectAsState()
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
@@ -329,8 +319,8 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, fabTopPx
             ) { it } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                // 底部精确贴悬浮按钮顶线（其实测顶边位置换算 dp；未测得时兜底 64dp）
-                .padding(bottom = with(LocalDensity.current) { if (fabTopPx > 0) fabTopPx.toDp() else 64.dp }),
+                // 底部垫高到悬浮按钮顶线：按钮底边距16 + 按钮高约48
+                .padding(bottom = 64.dp),
         ) {
         Column(
             Modifier
