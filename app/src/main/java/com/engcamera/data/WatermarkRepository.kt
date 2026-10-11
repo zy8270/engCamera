@@ -164,6 +164,17 @@ class WatermarkRepository(private val context: Context) {
         return id
     }
 
+    /** 重命名工程 */
+    fun renameProject(id: String, name: String) {
+        if (name.isBlank()) return
+        _projects.value = _projects.value.let { g ->
+            g.copy(projects = g.projects.map { if (it.id == id) it.copy(name = name.trim()) else it })
+        }
+        scope.launch {
+            context.dataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
+        }
+    }
+
     /** 批量删除工程；删光则重建默认工程；当前工程被删则切到剩余第一个 */
     fun deleteProjects(ids: Set<String>) {
         if (ids.isEmpty()) return

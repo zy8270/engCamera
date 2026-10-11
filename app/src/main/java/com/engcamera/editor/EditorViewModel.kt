@@ -149,6 +149,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteProjects(ids: Set<String>) = repo.deleteProjects(ids)
 
+    fun renameProject(id: String, name: String) = repo.renameProject(id, name)
+
 
     fun move(from: Int, to: Int) = repo.update { s ->
         if (from !in s.fields.indices || to !in s.fields.indices || from == to) {

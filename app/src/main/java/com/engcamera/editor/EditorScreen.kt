@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -60,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -95,6 +97,27 @@ fun EditorScreen(onBack: () -> Unit) {
     var dragOffset by remember { mutableFloatStateOf(0f) }
 
     Scaffold(
+        floatingActionButton = {
+            // 工程组入口：屏幕右下角悬浮按钮（带阴影）
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primary,
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .padding(end = 16.dp, bottom = 16.dp)
+                    .shadow(8.dp, RoundedCornerShape(14.dp)),
+                onClick = { showProjectGroups = true },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ProjectGroupIcon()
+                    Spacer(Modifier.width(8.dp))
+                    Text("工程组", color = Color.White)
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text("水印编辑器") },
@@ -202,30 +225,7 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 }
 
-                item {
-                    // 工程组入口（右下角）：多份水印配置快速切换
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        onClick = { showProjectGroups = true },
-                    ) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.End,
-                        ) {
-                            ProjectGroupIcon()
-                            Spacer(Modifier.width(8.dp))
-                            Text("工程组", color = Color.White)
-                        }
-                    }
-                    Spacer(Modifier.height(24.dp))
-                }
+
 
                 
             }
@@ -289,6 +289,8 @@ private fun ProjectGroupSelector(vm: EditorViewModel, onDismiss: () -> Unit) {
     val groups by vm.projects.collectAsState()
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<com.engcamera.data.ProjectGroupEntry?>(null) }
 
     Box(Modifier.fillMaxSize()) {
         // 遮罩
@@ -382,18 +384,43 @@ private fun ProjectGroupSelector(vm: EditorViewModel, onDismiss: () -> Unit) {
                             )
                         }
                         IconButton(onClick = {
-                            vm.deleteProjects(setOf(entry.id))
-                            pendingDelete -= entry.id
+                            renameTarget = entry
+                            showRename = true
                         }) {
                             Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "删除" + entry.name,
-                                tint = Color(0xFFFF6E6E),
+                                Icons.Default.Edit,
+                                contentDescription = "重命名" + entry.name,
+                                tint = Color(0xFFCAC4D0),
                             )
                         }
                     }
                 }
             }
+        }
+
+        if (showRename && renameTarget != null) {
+            var name by remember(renameTarget) { mutableStateOf(renameTarget!!.name) }
+            AlertDialog(
+                onDismissRequest = { showRename = false },
+                title = { Text("重命名工程") },
+                text = {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("工程名") },
+                        singleLine = true,
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.renameProject(renameTarget!!.id, name)
+                        showRename = false
+                    }) { Text("确定") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRename = false }) { Text("取消") }
+                },
+            )
         }
 
         if (showCreate) {
