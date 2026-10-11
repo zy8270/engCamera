@@ -31,7 +31,7 @@ class WatermarkRepository(private val context: Context) {
 
     // v2 键：v0.1.0 的旧默认（顶部居中、重力关闭）与新版语义不同，直接启用新默认
     private val stateKey = stringPreferencesKey("watermark_state_v2")
-    private val columnsKey = intPreferencesKey("gallery_columns")
+    private val columnsKey = intPreferencesKey("gallery_columns_v2") // v2：默认 4 列，弃用旧的 3 列默认
     private val historyKey = stringPreferencesKey("field_history")
     private val saveOriginalKey = booleanPreferencesKey("save_original")
     private val projectsKey = stringPreferencesKey("projects_v1")
@@ -70,7 +70,7 @@ class WatermarkRepository(private val context: Context) {
                 runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }
                     .onSuccess { _fieldHistory.value = it }
             }
-            val cols = context.appDataStore.data.first()[columnsKey] ?: 3
+            val cols = context.appDataStore.data.first()[columnsKey] ?: 4
             _galleryColumns.value = cols.coerceIn(3, 5)
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
