@@ -558,9 +558,11 @@ private fun EditFieldDialog(
         },
         dismissButton = {
             Row {
-                // 时间/位置/天气：清空手动值恢复自动获取，并关闭对话框
+                // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。均关闭对话框
                 if (isDateTime || isLocation || isWeather) {
                     TextButton(onClick = { onConfirm(label, "", isTitle) }) { Text("重置") }
+                } else if (isCount) {
+                    TextButton(onClick = { onConfirm(label, "1", isTitle) }) { Text("重置") }
                 }
                 TextButton(onClick = onDismiss) { Text("取消") }
             }
