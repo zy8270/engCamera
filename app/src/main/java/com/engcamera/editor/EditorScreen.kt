@@ -506,28 +506,38 @@ private fun EditFieldDialog(
                                 )
                             }
                         }
-                        // 简易滚动条：按可见比例与位置绘制滑块
-                        val info = historyState.layoutInfo
-                        val totalItems = info.totalItemsCount
-                        val visibleItems = info.visibleItemsInfo.size
+                        // 滚动条：滑块位置在绘制阶段更新（graphicsLayer 读派生状态），
+                        // 不随滚动逐帧重组，避免抖动
+                        val trackDp = 175.dp
+                        val infoForSize = historyState.layoutInfo
+                        val totalItems = infoForSize.totalItemsCount
+                        val visibleItems = infoForSize.visibleItemsInfo.size
                         if (totalItems > visibleItems && visibleItems > 0) {
-                            val first = info.visibleItemsInfo.first()
-                            val last = info.visibleItemsInfo.last()
-                            val viewportPx = (last.offset + last.size) - first.offset
-                            val contentPx = first.size * totalItems
-                            val frac = ((-first.offset).toFloat() / (contentPx - viewportPx)).coerceIn(0f, 1f)
-                            val density = LocalDensity.current
-                            val viewportDp = with(density) { viewportPx.toDp() }
-                            val thumbDp = (viewportDp * visibleItems / totalItems).coerceAtLeast(24.dp)
-                            val thumbOffsetDp = with(density) {
-                                (frac * (viewportPx - thumbDp.toPx())).toDp()
+                            val thumbDp = (trackDp * visibleItems / totalItems).coerceAtLeast(24.dp)
+                            val fraction by remember {
+                                androidx.compose.runtime.derivedStateOf {
+                                    val info = historyState.layoutInfo
+                                    val total = info.totalItemsCount
+                                    val first = info.visibleItemsInfo.firstOrNull() ?: return@derivedStateOf 0f
+                                    val itemPx = first.size
+                                    val viewportPx = info.viewportEndOffset - info.viewportStartOffset
+                                    val contentPx = itemPx * total
+                                    if (contentPx <= viewportPx) return@derivedStateOf 0f
+                                    val scrolledPx = first.index * itemPx - first.offset
+                                    (scrolledPx.toFloat() / (contentPx - viewportPx)).coerceIn(0f, 1f)
+                                }
                             }
+                            val density = LocalDensity.current
+                            val trackPx = with(density) { trackDp.toPx() }
+                            val thumbPx = with(density) { thumbDp.toPx() }
                             Box(
                                 Modifier
                                     .align(Alignment.TopEnd)
-                                    .padding(top = thumbOffsetDp)
                                     .width(3.dp)
                                     .height(thumbDp)
+                                    .graphicsLayer {
+                                        translationY = fraction * (trackPx - thumbPx)
+                                    }
                                     .clip(RoundedCornerShape(2.dp))
                                     .background(Color(0x66FFFFFF)),
                             )
