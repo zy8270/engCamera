@@ -293,13 +293,20 @@ class LocationSource(private val context: Context) {
         val weak = sysLine.isNullOrBlank() || sysLine.length <= 4
         if (!weak) return@withContext sysLine
 
-        val composed = addr?.let {
-            listOfNotNull(
-                it.adminArea,                      // 省
-                it.locality,                       // 市
-                it.subLocality ?: it.subAdminArea, // 区/县
-                it.thoroughfare,                   // 镇/乡/街道/路（用户确认：到街道即可，不含门牌号）
-            ).map { a -> a.trim() }.filter { a -> a.isNotBlank() && a != "null" }
+        val composed = addr?.let { a ->
+            // 对齐谷歌整行组词：省 市 区 村(featureName) 路(thoroughfare) 巷号(subThoroughfare) 小区(premise)
+            // 例：广东省 广州市 天河区 新塘 西约新村大街 上十巷15号 小新塘回迁房D1区（用户确认 2026-10-11）
+            val village = a.featureName?.trim()
+                ?.takeIf { f -> f.isNotBlank() && f != "null" && f != a.thoroughfare && f != a.subLocality }
+            buildList {
+                add(a.adminArea)
+                add(a.locality)
+                add(a.subLocality ?: a.subAdminArea)
+                add(village)
+                add(a.thoroughfare)
+                add(a.subThoroughfare)
+                add(a.premise)
+            }.mapNotNull { x -> x?.trim()?.takeIf { it.isNotBlank() && it != "null" } }
                 .joinToString("")
         }?.takeIf { it.length > 4 }
         if (composed != null) {
