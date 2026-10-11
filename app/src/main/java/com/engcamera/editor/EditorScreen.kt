@@ -257,9 +257,7 @@ fun EditorScreen(onBack: () -> Unit) {
         )
     }
 
-    if (showProjectGroups) {
-        ProjectGroupSelector(vm = vm, onDismiss = { showProjectGroups = false })
-    }
+    ProjectGroupSelector(visible = showProjectGroups, vm = vm, onDismiss = { showProjectGroups = false })
 }
 
 /** 工程组图标：三条横线，最后一条带三角形（表示一组配置的集合/切换） */
@@ -283,9 +281,12 @@ private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
     }
 }
 
-/** 工程组选择器：右下角弹出约半屏；点工程名切换，勾选后可批量删除，垃圾桶单删 */
+/**
+ * 工程组选择器：右下角弹出约半屏（下滑入+遮罩淡入，与设置抽屉同款动画）；
+ * 点工程名切换，勾选后批量删除，笔重命名。
+ */
 @Composable
-private fun ProjectGroupSelector(vm: EditorViewModel, onDismiss: () -> Unit) {
+private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismiss: () -> Unit) {
     val groups by vm.projects.collectAsState()
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
@@ -293,20 +294,36 @@ private fun ProjectGroupSelector(vm: EditorViewModel, onDismiss: () -> Unit) {
     var renameTarget by remember { mutableStateOf<com.engcamera.data.ProjectGroupEntry?>(null) }
 
     Box(Modifier.fillMaxSize()) {
-        // 遮罩
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color(0x88000000))
-                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
-        )
-        // 面板：右下角，约半屏
+        // 遮罩：独立淡入淡出
+        androidx.compose.animation.AnimatedVisibility(
+            visible = visible,
+            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(240)),
+            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0x88000000))
+                    .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+            )
+        }
+        // 面板：右下角约半屏，圆角+阴影，从底部滑入
+        androidx.compose.animation.AnimatedVisibility(
+            visible = visible,
+            enter = androidx.compose.animation.slideInVertically(
+                androidx.compose.animation.core.tween(240, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            ) { it } + androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(240)),
+            exit = androidx.compose.animation.slideOutVertically(
+                androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            ) { it } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
+        ) {
         Column(
             Modifier
                 .align(Alignment.BottomEnd)
                 .fillMaxWidth(0.94f)
                 .fillMaxHeight(0.5f)
-                .background(Color(0xFF1E1E22))
+                .shadow(10.dp, RoundedCornerShape(20.dp))
+                .background(Color(0xFF1E1E22), RoundedCornerShape(20.dp))
                 .navigationBarsPadding()
                 .padding(12.dp),
         ) {
@@ -396,6 +413,7 @@ private fun ProjectGroupSelector(vm: EditorViewModel, onDismiss: () -> Unit) {
                     }
                 }
             }
+        }
         }
 
         if (showRename && renameTarget != null) {
