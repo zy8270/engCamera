@@ -43,6 +43,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 data class CameraUiState(
     /** 0 关 / 1 开 / 2 自动 */
@@ -225,6 +226,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     val shutterSound: StateFlow<Boolean> = container.repository.shutterSound
 
     fun setShutterSound(value: Boolean) = container.repository.setShutterSound(value)
+
+    /** 水印宽度（当前工程样式，0.3~0.9，两位小数） */
+    fun setWatermarkWidth(ratio: Float) = container.repository.update {
+        it.copy(style = it.style.copy(maxWidthRatio = (ratio * 100).roundToInt() / 100f))
+    }
 
     /** 播放系统快门音：仅设置开启时（用户实测 MIUI 上 mustPlayShutterSound 恒真，强制逻辑已移除） */
     private fun playShutterIfNeeded() {
