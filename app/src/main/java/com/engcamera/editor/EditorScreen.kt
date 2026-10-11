@@ -225,6 +225,9 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 }
 
+                // 底部占位：字段多时可多滑一段，避免右下角工程组悬浮按钮盖住最后一行的删除按钮
+                item { Spacer(Modifier.height(88.dp)) }
+
 
 
                 
