@@ -239,6 +239,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     fun setShutterSound(value: Boolean) = container.repository.setShutterSound(value)
 
+    val volumeShutter: StateFlow<Boolean> = container.repository.volumeShutter
+
+    fun setVolumeShutter(value: Boolean) = container.repository.setVolumeShutter(value)
+
     /** 水印宽度（当前工程样式，0.3~0.9，两位小数） */
     fun setWatermarkWidth(ratio: Float) = container.repository.update {
         it.copy(style = it.style.copy(maxWidthRatio = (ratio * 100).roundToInt() / 100f))
