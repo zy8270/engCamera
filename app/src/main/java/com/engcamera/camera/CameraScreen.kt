@@ -422,37 +422,6 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "水印宽度",
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            "拖动调节水印块宽度（跟随当前工程保存）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "${(watermark.style.maxWidthRatio * 100).roundToInt()}%",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                Slider(
-                    value = watermark.style.maxWidthRatio,
-                    onValueChange = { vm.setWatermarkWidth(it) },
-                    valueRange = 0.3f..0.9f,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(16.dp))
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
                             "水印跟随重力",
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -491,6 +460,39 @@ private fun SettingsDrawer(
                         )
                     }
                 }
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "水印宽度",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "拖动调节水印块宽度（跟随当前工程保存）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${(watermark.style.maxWidthRatio * 100).roundToInt()}%",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Slider(
+                    value = watermark.style.maxWidthRatio,
+                    onValueChange = { vm.setWatermarkWidth(it) },
+                    valueRange = 0.3f..0.9f,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+
                 Spacer(Modifier.height(24.dp))
             }
         }
