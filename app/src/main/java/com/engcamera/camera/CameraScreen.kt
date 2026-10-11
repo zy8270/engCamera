@@ -554,8 +554,12 @@ private fun SettingsDrawer(
 
                 // 署名固定置底（不随设置内容滚动；发布日期随版本更新）
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = Color(0xFF3A3A40))
+                // versionCode 运行时读取（发布日期随版本手更）
+                val versionCode = runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+                }.getOrDefault(0L)
                 Text(
-                    "Rnzhy 2026.10.11 engCamera MIT",
+                    "Rnzhy 2026.10.11 $versionCode engCamera MIT",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
