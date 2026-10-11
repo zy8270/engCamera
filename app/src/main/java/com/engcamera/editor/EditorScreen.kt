@@ -329,7 +329,9 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, fabHeigh
             ) { it } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                // 底部 = 按钮底边距16dp + 实测按钮高度；未测得时兜底 48dp
+                // Scaffold 会把悬浮按钮抬到导航栏之上，面板同理先让出导航栏，
+                // 再垫 按钮底边距16dp + 实测按钮高度（未测得时兜底 48dp）
+                .navigationBarsPadding()
                 .padding(bottom = 16.dp + with(LocalDensity.current) {
                     if (fabHeightPx > 0) fabHeightPx.toDp() else 48.dp
                 }),
@@ -340,7 +342,6 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, fabHeigh
                 .fillMaxHeight(0.5f)
                 .shadow(10.dp, RoundedCornerShape(20.dp))
                 .background(Color(0xFF1E1E22), RoundedCornerShape(20.dp))
-                .navigationBarsPadding()
                 .padding(12.dp),
         ) {
             // 头部：工程组 | 删除工程 | 新建工程
