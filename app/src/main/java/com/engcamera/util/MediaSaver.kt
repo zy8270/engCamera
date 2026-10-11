@@ -157,8 +157,14 @@ object MediaSaver {
 
         queryCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false)
         queryCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true)
-        // 按拍摄时间从新到旧；拍摄时间缺失时回退入库时间
-        return out.sortedByDescending { it.sortKey() }
+        // 按拍摄时间从新到旧；拍摄时间缺失回退入库时间。
+        // 时间相同（同秒双张：原图+水印版）时按插入先后决胜（早插入的在前）——
+        // DATE_TAKEN 可能被 MIUI 按 EXIF 覆盖回同值，靠插入序保证 原图在前、水印在后
+        return out.sortedWith(
+            compareByDescending<MediaEntry> { it.sortKey() }
+                .thenBy { it.dateAdded }
+                .thenBy { it.id },
+        )
     }
 
     /** EXIF 方向转旋转角（计划书 9：合成前必须旋转） */
