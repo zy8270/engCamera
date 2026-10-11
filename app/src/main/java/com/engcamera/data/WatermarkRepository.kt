@@ -40,7 +40,7 @@ class WatermarkRepository(private val context: Context) {
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
 
-    private val _galleryColumns = MutableStateFlow(3)
+    private val _galleryColumns = MutableStateFlow(4)
     val galleryColumns: StateFlow<Int> = _galleryColumns.asStateFlow()
 
     /** 字段填写历史：标签 -> 最近填过的值（新在后，最多 5 条），用于编辑器快速填充 */
@@ -226,7 +226,7 @@ class WatermarkRepository(private val context: Context) {
     }
 
     fun setGalleryColumns(columns: Int) {
-        val c = columns.coerceIn(3, 5)
+        val c = columns.coerceIn(3, 6)
         _galleryColumns.value = c
         scope.launch {
             context.appDataStore.edit { it[columnsKey] = c }

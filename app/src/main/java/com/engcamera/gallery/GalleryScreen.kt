@@ -316,7 +316,7 @@ fun GalleryScreen(
                             } while (event.changes.any { it.pressed })
                             if (zoomed) {
                                 // 张开变少列、捏合变多列（3-5 列）
-                                val target = (columns / pinchZoom).roundToInt().coerceIn(3, 5)
+                                val target = (columns / pinchZoom).roundToInt().coerceIn(3, 6)
                                 pinchZoom = 1f
                                 if (target != columns) vm.setColumns(target)
                             }

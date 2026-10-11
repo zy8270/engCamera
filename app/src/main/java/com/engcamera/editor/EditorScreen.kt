@@ -541,6 +541,17 @@ private fun FieldRow(
                             color = MaterialTheme.colorScheme.primary,
                         )
                     }
+                    // 时间/位置/天气被手动定格（值非空）时提示：不会自动刷新
+                    if ((field.type == FieldType.DATETIME || field.type == FieldType.LOCATION ||
+                            field.type == FieldType.WEATHER) && field.value.isNotBlank()
+                    ) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "自定义",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFFFB300),
+                        )
+                    }
                 }
                 Text(
                     field.value.ifBlank {
