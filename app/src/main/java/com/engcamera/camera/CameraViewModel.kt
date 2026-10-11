@@ -76,7 +76,8 @@ data class CameraUiState(
     data class AnnotateItem(val uri: android.net.Uri, val aspect: Float)
 }
 
-class CameraViewModel(app: Application) : AndroidViewModel(app) {
+class CameraViewModel(app: Application) : AndroidViewModel(app),
+    com.engcamera.projectgroup.ProjectGroupHandler {
 
     private val container = (app as EngCameraApp).container
     private val context = app
@@ -217,6 +218,17 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 点击对焦测光（预览区像素坐标），返回是否已下发 */
     fun focusAt(x: Float, y: Float): Boolean = engine?.focusMeter(x, y) ?: false
+
+    // ---------- 工程组（相机页快捷切换） ----------
+    override val projects: StateFlow<com.engcamera.data.ProjectGroups> = container.repository.projects
+
+    override fun selectProject(id: String) = container.repository.selectProject(id)
+
+    override fun createProject(name: String) = container.repository.createProject(name)
+
+    override fun deleteProjects(ids: Set<String>) = container.repository.deleteProjects(ids)
+
+    override fun renameProject(id: String, name: String) = container.repository.renameProject(id, name)
 
     // ---------- 设置抽屉 ----------
     val saveOriginal: StateFlow<Boolean> = container.repository.saveOriginal
