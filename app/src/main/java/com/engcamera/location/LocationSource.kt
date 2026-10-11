@@ -295,9 +295,11 @@ class LocationSource(private val context: Context) {
 
         val composed = addr?.let {
             listOfNotNull(
-                it.adminArea,                    // 省
-                it.locality,                     // 市
+                it.adminArea,                      // 省
+                it.locality,                       // 市
                 it.subLocality ?: it.subAdminArea, // 区/县
+                it.thoroughfare,                   // 镇/乡/街道/路
+                it.subThoroughfare,                // 门牌号（竞品显示到村门牌即在此）
             ).map { a -> a.trim() }.filter { a -> a.isNotBlank() && a != "null" }
                 .joinToString("")
         }?.takeIf { it.length > 4 }
