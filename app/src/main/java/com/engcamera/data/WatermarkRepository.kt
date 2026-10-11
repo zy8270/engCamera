@@ -44,7 +44,7 @@ class WatermarkRepository(private val context: Context) {
     private val _galleryColumns = MutableStateFlow(4)
     val galleryColumns: StateFlow<Int> = _galleryColumns.asStateFlow()
 
-    /** 字段填写历史：标签 -> 最近填过的值（新在后，最多 5 条），用于编辑器快速填充 */
+    /** 字段填写历史：标签 -> 最近填过的值（新在后，最多 50 条），用于编辑器快速填充 */
     private val _fieldHistory = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val fieldHistory: StateFlow<Map<String, List<String>>> = _fieldHistory.asStateFlow()
 
@@ -123,7 +123,7 @@ class WatermarkRepository(private val context: Context) {
         if (value.isBlank()) return
         _fieldHistory.value = _fieldHistory.value.toMutableMap().apply {
             val list = (this[label] ?: emptyList()).filter { it != value } + value
-            put(label, list.takeLast(5))
+            put(label, list.takeLast(50))
         }
         scope.launch {
             context.appDataStore.edit { it[historyKey] = json.encodeToString(_fieldHistory.value) }

@@ -475,25 +475,63 @@ private fun EditFieldDialog(
                         Text("刷新定位")
                     }
                 }
-                // 历史记录快速填充（按标签，最近在前）
+                // 历史记录快速填充（按标签，最近在前）：最多显示 5 行可上下滚动，右侧滚动条
                 if (!isCount && !isLocation && !isDateTime && !isWeather && history.isNotEmpty()) {
                     Text(
                         "最近使用（点击填充）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    history.forEach { item ->
-                        Text(
-                            item,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                    val historyState = rememberLazyListState()
+                    // 每行约 35dp，视口 5 行
+                    Box(Modifier.height(175.dp)) {
+                        LazyColumn(
+                            state = historyState,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { value = item }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                        )
+                                .padding(end = 12.dp),
+                        ) {
+                            items(history.size) { idx ->
+                                val item = history[idx]
+                                Text(
+                                    item,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { value = item }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+                        // 简易滚动条：按可见比例与位置绘制滑块
+                        val info = historyState.layoutInfo
+                        val totalItems = info.totalItemsCount
+                        val visibleItems = info.visibleItemsInfo.size
+                        if (totalItems > visibleItems && visibleItems > 0) {
+                            val first = info.visibleItemsInfo.first()
+                            val last = info.visibleItemsInfo.last()
+                            val viewportPx = (last.offset + last.size) - first.offset
+                            val contentPx = first.size * totalItems
+                            val frac = ((-first.offset).toFloat() / (contentPx - viewportPx)).coerceIn(0f, 1f)
+                            val density = LocalDensity.current
+                            val viewportDp = with(density) { viewportPx.toDp() }
+                            val thumbDp = (viewportDp * visibleItems / totalItems).coerceAtLeast(24.dp)
+                            val thumbOffsetDp = with(density) {
+                                (frac * (viewportPx - thumbDp.toPx())).toDp()
+                            }
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = thumbOffsetDp)
+                                    .width(3.dp)
+                                    .height(thumbDp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(Color(0x66FFFFFF)),
+                            )
+                        }
                     }
                 }
             }
