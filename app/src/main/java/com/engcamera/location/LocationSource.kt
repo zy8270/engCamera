@@ -296,15 +296,15 @@ class LocationSource(private val context: Context) {
         val composed = addr?.let { a ->
             // 对齐谷歌整行组词：省 市 区 村(featureName) 路(thoroughfare) 巷号(subThoroughfare) 小区(premise)
             // 例：广东省 广州市 天河区 新塘 西约新村大街 上十巷15号 小新塘回迁房D1区（用户确认 2026-10-11）
-            val village = a.featureName?.trim()
+            val place = a.featureName?.trim()
                 ?.takeIf { f -> f.isNotBlank() && f != "null" && f != a.thoroughfare && f != a.subLocality }
+            // 用户确认顺序：省 市 区 路(thoroughfare) 地点/小区(featureName, premises)；门牌号(subThoroughfare)不要
             buildList {
                 add(a.adminArea)
                 add(a.locality)
                 add(a.subLocality ?: a.subAdminArea)
-                add(village)
                 add(a.thoroughfare)
-                add(a.subThoroughfare)
+                add(place)
                 add(a.premises)
             }.mapNotNull { x -> x?.trim()?.takeIf { it.isNotBlank() && it != "null" } }
                 .joinToString("")
