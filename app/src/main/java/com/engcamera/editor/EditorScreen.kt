@@ -52,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -65,6 +66,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -91,6 +93,8 @@ fun EditorScreen(onBack: () -> Unit) {
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showProjectGroups by remember { mutableStateOf(false) }
+    // 工程组按钮实测高度（px）：面板底部 = 按钮底边距(16dp) + 按钮高，精确贴合按钮顶线
+    var fabHeightPx by remember { mutableIntStateOf(0) }
 
     val listState = rememberLazyListState()
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -105,7 +109,8 @@ fun EditorScreen(onBack: () -> Unit) {
                 shadowElevation = 8.dp,
                 modifier = Modifier
                     .padding(end = 16.dp, bottom = 16.dp)
-                    .shadow(8.dp, RoundedCornerShape(14.dp)),
+                    .shadow(8.dp, RoundedCornerShape(14.dp))
+                    .onSizeChanged { fabHeightPx = it.height },
                 onClick = { showProjectGroups = true },
             ) {
                 Row(
@@ -257,7 +262,12 @@ fun EditorScreen(onBack: () -> Unit) {
         )
     }
 
-    ProjectGroupSelector(visible = showProjectGroups, vm = vm, onDismiss = { showProjectGroups = false })
+    ProjectGroupSelector(
+        visible = showProjectGroups,
+        vm = vm,
+        fabHeightPx = fabHeightPx,
+        onDismiss = { showProjectGroups = false },
+    )
 }
 
 /** 工程组图标：三条横线，最后一条带三角形（表示一组配置的集合/切换） */
@@ -286,7 +296,7 @@ private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
  * 点工程名切换，勾选后批量删除，笔重命名。
  */
 @Composable
-private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismiss: () -> Unit) {
+private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, fabHeightPx: Int, onDismiss: () -> Unit) {
     val groups by vm.projects.collectAsState()
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
@@ -319,8 +329,10 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismis
             ) { it } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                // 底部垫高到悬浮按钮顶线：按钮底边距16 + 按钮高约48
-                .padding(bottom = 64.dp),
+                // 底部 = 按钮底边距16dp + 实测按钮高度；未测得时兜底 48dp
+                .padding(bottom = 16.dp + with(LocalDensity.current) {
+                    if (fabHeightPx > 0) fabHeightPx.toDp() else 48.dp
+                }),
         ) {
         Column(
             Modifier
