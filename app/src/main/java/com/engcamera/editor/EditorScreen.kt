@@ -258,6 +258,7 @@ fun EditorScreen(onBack: () -> Unit) {
             autoWeather = weatherText,
             currentTime = dynamic.time,
             onRefreshLocation = { vm.refreshLocation() },
+            onRefreshWeather = { vm.refreshWeather() },
             onDismiss = { editingField = null },
             onConfirm = { label, value, isTitle ->
                 vm.updateField(field.id, label, value, isTitle)
@@ -575,6 +576,7 @@ private fun EditFieldDialog(
     autoWeather: String,
     currentTime: String,
     onRefreshLocation: () -> Unit,
+    onRefreshWeather: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (label: String, value: String, isTitle: Boolean) -> Unit,
 ) {
@@ -631,6 +633,18 @@ private fun EditFieldDialog(
                         KeyboardOptions.Default
                     },
                 )
+                if (isWeather) {
+                    Text(
+                        "自动天气：${if (autoWeather.isBlank()) "未获取" else autoWeather}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onRefreshWeather) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("刷新天气")
+                    }
+                }
                 if (isLocation) {
                     Text(
                         "自动定位：$autoLocation",

@@ -9,6 +9,10 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import androidx.datastore.preferences.core.doublePreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import com.engcamera.data.appDataStore
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -20,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -32,6 +37,43 @@ class LocationSource(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // 持久化缓存：上次定位文本/天气/坐标。弱网或未定位时启动直接用缓存，不清空
+    private var cachedLat = 0.0
+    private var cachedLon = 0.0
+    private var lastLocation: Location? = null
+
+    init {
+        scope.launch {
+            runCatching {
+                val prefs = context.appDataStore.data.first()
+                val savedText = prefs[stringPreferencesKey("last_location_text")]
+                val savedWeather = prefs[stringPreferencesKey("last_weather")]
+                cachedLat = prefs[doublePreferencesKey("last_lat")] ?: 0.0
+                cachedLon = prefs[doublePreferencesKey("last_lon")] ?: 0.0
+                if (!savedText.isNullOrBlank()) {
+                    hasAddress = true
+                    _text.value = savedText
+                }
+                if (!savedWeather.isNullOrBlank()) _weather.value = savedWeather
+            }
+        }
+    }
+
+    private fun persistCache() {
+        scope.launch {
+            runCatching {
+                context.appDataStore.edit {
+                    it[stringPreferencesKey("last_location_text")] = _text.value
+                    it[stringPreferencesKey("last_weather")] = _weather.value
+                    if (cachedLat != 0.0 || cachedLon != 0.0) {
+                        it[doublePreferencesKey("last_lat")] = cachedLat
+                        it[doublePreferencesKey("last_lon")] = cachedLon
+                    }
+                }
+            }
+        }
+    }
+
     private val _text = MutableStateFlow("未获取定位")
     val text: StateFlow<String> = _text.asStateFlow()
 
@@ -41,8 +83,6 @@ class LocationSource(private val context: Context) {
 
     // 地址缓存：定位回调很频繁（1-2 秒一次），每次都先显示坐标再等联网反查，
     // 会让中文地址"一下消失一下恢复"。缓存 60 秒或位移超 50 米才刷新文本。
-    private var cachedLat = 0.0
-    private var cachedLon = 0.0
     private var cachedAtMs = 0L
     private var hasAddress = false
 
@@ -171,6 +211,7 @@ class LocationSource(private val context: Context) {
         if (cacheValid(location)) return // 缓存有效：文本保持稳定不闪动
         cachedLat = location.latitude
         cachedLon = location.longitude
+        lastLocation = location
         cachedAtMs = System.currentTimeMillis()
         val coords = String.format(Locale.US, "%.6f, %.6f", location.latitude, location.longitude)
         // 已有中文地址时不要先退回纯坐标（反查失败则保留旧地址），只有从未拿到过地址才先显示坐标
@@ -184,6 +225,7 @@ class LocationSource(private val context: Context) {
                 _text.value = coords
             }
             fetchWeather(location)
+            persistCache()
         }
     }
 
@@ -202,8 +244,19 @@ class LocationSource(private val context: Context) {
             val code = Regex("\"weathercode\":([0-9]+)").find(json)?.groupValues?.get(1)?.toIntOrNull()
             if (temp != null && code != null) {
                 _weather.value = "${wmoText(code)} ${temp.trimEnd('0').trimEnd('.')}℃"
+                persistCache()
             }
         }
+    }
+
+    /** 手动刷新天气：用最近一次定位坐标强制重取（编辑器"刷新天气"按钮用） */
+    fun refreshWeather() {
+        val loc = lastLocation ?: Location("cache").apply {
+            latitude = cachedLat
+            longitude = cachedLon
+        }
+        if (loc.latitude == 0.0 && loc.longitude == 0.0) return
+        scope.launch { fetchWeather(loc) }
     }
 
     private fun wmoText(code: Int): String = when (code) {

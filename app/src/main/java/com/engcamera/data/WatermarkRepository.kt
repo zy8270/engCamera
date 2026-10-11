@@ -17,7 +17,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-private val Context.dataStore by preferencesDataStore(name = "eng_camera")
+/** 全 app 共享的 DataStore（LocationSource 缓存也用它，避免多实例冲突） */
+internal val Context.appDataStore by preferencesDataStore(name = "eng_camera")
 
 /**
  * 水印模板持久化：字段、样式、位置、旋转角、重力开关；外加相册列数记忆。
@@ -60,20 +61,20 @@ class WatermarkRepository(private val context: Context) {
 
     init {
         scope.launch {
-            val stored = context.dataStore.data.first()[stateKey]
+            val stored = context.appDataStore.data.first()[stateKey]
             if (stored != null) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
                     .onSuccess { _state.value = ensureCountField(ensureWeatherField(migrateWidth(it))) }
             }
-            context.dataStore.data.first()[historyKey]?.let { raw ->
+            context.appDataStore.data.first()[historyKey]?.let { raw ->
                 runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }
                     .onSuccess { _fieldHistory.value = it }
             }
-            val cols = context.dataStore.data.first()[columnsKey] ?: 3
+            val cols = context.appDataStore.data.first()[columnsKey] ?: 3
             _galleryColumns.value = cols.coerceIn(3, 5)
-            _saveOriginal.value = context.dataStore.data.first()[saveOriginalKey] ?: false
-            _shutterSound.value = context.dataStore.data.first()[shutterSoundKey] ?: false
-            val storedProjects = context.dataStore.data.first()[projectsKey]
+            _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
+            _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
+            val storedProjects = context.appDataStore.data.first()[projectsKey]
             _projects.value = runCatching { json.decodeFromString<ProjectGroups>(storedProjects!!) }
                 .getOrElse {
                     // 首次使用：现有水印状态打包为"默认工程"
@@ -119,7 +120,7 @@ class WatermarkRepository(private val context: Context) {
             put(label, list.takeLast(5))
         }
         scope.launch {
-            context.dataStore.edit { it[historyKey] = json.encodeToString(_fieldHistory.value) }
+            context.appDataStore.edit { it[historyKey] = json.encodeToString(_fieldHistory.value) }
         }
     }
 
@@ -129,7 +130,7 @@ class WatermarkRepository(private val context: Context) {
         _state.value = next
         syncCurrentProject(next)
         scope.launch {
-            context.dataStore.edit {
+            context.appDataStore.edit {
                 it[stateKey] = json.encodeToString(next)
                 it[projectsKey] = json.encodeToString(_projects.value)
             }
@@ -154,7 +155,7 @@ class WatermarkRepository(private val context: Context) {
         _state.value = entry.state
         _projects.value = g.copy(current = id)
         scope.launch {
-            context.dataStore.edit {
+            context.appDataStore.edit {
                 it[stateKey] = json.encodeToString(entry.state)
                 it[projectsKey] = json.encodeToString(_projects.value)
             }
@@ -169,7 +170,7 @@ class WatermarkRepository(private val context: Context) {
             g.copy(projects = g.projects + ProjectGroupEntry(id, finalName, _state.value))
         }
         scope.launch {
-            context.dataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
+            context.appDataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
         }
         return id
     }
@@ -181,7 +182,7 @@ class WatermarkRepository(private val context: Context) {
             g.copy(projects = g.projects.map { if (it.id == id) it.copy(name = name.trim()) else it })
         }
         scope.launch {
-            context.dataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
+            context.appDataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
         }
     }
 
@@ -203,7 +204,7 @@ class WatermarkRepository(private val context: Context) {
         g = g.copy(current = nextCurrent, projects = remaining)
         _projects.value = g
         scope.launch {
-            context.dataStore.edit {
+            context.appDataStore.edit {
                 it[stateKey] = json.encodeToString(nextState)
                 it[projectsKey] = json.encodeToString(g)
             }
@@ -213,14 +214,14 @@ class WatermarkRepository(private val context: Context) {
     fun setShutterSound(value: Boolean) {
         _shutterSound.value = value
         scope.launch {
-            context.dataStore.edit { it[shutterSoundKey] = value }
+            context.appDataStore.edit { it[shutterSoundKey] = value }
         }
     }
 
     fun setSaveOriginal(value: Boolean) {
         _saveOriginal.value = value
         scope.launch {
-            context.dataStore.edit { it[saveOriginalKey] = value }
+            context.appDataStore.edit { it[saveOriginalKey] = value }
         }
     }
 
@@ -228,7 +229,7 @@ class WatermarkRepository(private val context: Context) {
         val c = columns.coerceIn(3, 5)
         _galleryColumns.value = c
         scope.launch {
-            context.dataStore.edit { it[columnsKey] = c }
+            context.appDataStore.edit { it[columnsKey] = c }
         }
     }
 
