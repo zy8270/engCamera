@@ -219,10 +219,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setShutterSound(value: Boolean) = container.repository.setShutterSound(value)
 
-    /** 播放系统快门音：设置开启时；部分地区法律强制（mustPlayShutterSound）时无论开关都播 */
+    /** 播放系统快门音：仅设置开启时（用户实测 MIUI 上 mustPlayShutterSound 恒真，强制逻辑已移除） */
     private fun playShutterIfNeeded() {
-        val forced = runCatching { MediaActionSound.mustPlayShutterSound() }.getOrDefault(false)
-        if (!forced && !container.repository.shutterSound.value) return
+        if (!container.repository.shutterSound.value) return
         runCatching {
             (shutterPlayer ?: MediaActionSound().also { shutterPlayer = it })
                 .play(MediaActionSound.SHUTTER_CLICK)
