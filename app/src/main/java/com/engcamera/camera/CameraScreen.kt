@@ -335,6 +335,7 @@ private fun SettingsDrawer(
     vm: CameraViewModel,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
     val saveOriginal by vm.saveOriginal.collectAsState()
     val shutterSound by vm.shutterSound.collectAsState()
     val watermark by vm.watermark.collectAsState()
