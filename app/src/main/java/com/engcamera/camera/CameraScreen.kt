@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -189,6 +190,7 @@ fun CameraScreen(
             PermissionGate(onOpenSettings = ::openAppSettings)
         } else {
             var showSettings by remember { mutableStateOf(false) }
+            var showProjectGroups by remember { mutableStateOf(false) }
             // 抽屉展开时返回键收起抽屉，而不是退出应用
             androidx.activity.compose.BackHandler(enabled = showSettings) { showSettings = false }
             val previewView = remember {
@@ -311,12 +313,20 @@ fun CameraScreen(
                         ui = ui,
                         rot = rot,
                         onOpenEditor = onOpenEditor,
+                        onOpenProjectGroups = { showProjectGroups = true },
                     )
                 }
 
                 // 底部控制条紧贴预览下方，不推到屏幕底部
                 BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery)
             }
+
+            // 工程组快捷切换选择器（与编辑器共用）
+            com.engcamera.projectgroup.ProjectGroupSelector(
+                visible = showProjectGroups,
+                handler = vm,
+                onDismiss = { showProjectGroups = false },
+            )
 
             // 右上角设置：右侧滑出抽屉（约 3/4 屏宽）
             SettingsDrawer(
@@ -538,6 +548,7 @@ private fun PreviewArea(
     ui: CameraUiState,
     rot: Int,
     onOpenEditor: () -> Unit,
+    onOpenProjectGroups: () -> Unit = {},
 ) {
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     Box(
@@ -560,6 +571,26 @@ private fun PreviewArea(
             modifier = Modifier.fillMaxSize(),
         )
         focusPoint?.let { pos -> FocusIndicator(pos) }
+        // 工程组快捷入口：预览右下角常驻，半透明灰底双箭头；图案随重力旋转、位置固定
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .padding(10.dp)
+                .size(44.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0x66808080))
+                .clickable { onOpenProjectGroups() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.SwapHoriz,
+                contentDescription = "工程组快捷切换",
+                tint = Color(0xCCFFFFFF),
+                modifier = Modifier
+                    .size(26.dp)
+                    .rotate(rot.toFloat()),
+            )
+        }
         // 后置焦段选择（右上角，位置固定）
         if (!ui.frontCamera && ui.lensLabels.size > 1) {
             Row(

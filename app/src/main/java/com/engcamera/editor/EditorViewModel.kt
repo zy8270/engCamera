@@ -21,7 +21,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class EditorViewModel(app: Application) : AndroidViewModel(app) {
+class EditorViewModel(app: Application) : AndroidViewModel(app),
+    com.engcamera.projectgroup.ProjectGroupHandler {
 
     private val container = (app as EngCameraApp).container
     private val repo = container.repository
@@ -153,15 +154,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     val fieldHistory: StateFlow<Map<String, List<String>>> = repo.fieldHistory
 
     /** 工程组 */
-    val projects: StateFlow<com.engcamera.data.ProjectGroups> = repo.projects
+    override val projects: StateFlow<com.engcamera.data.ProjectGroups> = repo.projects
 
-    fun selectProject(id: String) = repo.selectProject(id)
+    override fun selectProject(id: String) = repo.selectProject(id)
 
-    fun createProject(name: String) = repo.createProject(name)
+    override fun createProject(name: String) = repo.createProject(name)
 
-    fun deleteProjects(ids: Set<String>) = repo.deleteProjects(ids)
+    override fun deleteProjects(ids: Set<String>) = repo.deleteProjects(ids)
 
-    fun renameProject(id: String, name: String) = repo.renameProject(id, name)
+    override fun renameProject(id: String, name: String) = repo.renameProject(id, name)
 
 
     fun move(from: Int, to: Int) = repo.update { s ->
