@@ -273,15 +273,46 @@ class LocationSource(private val context: Context) {
         else -> "未知"
     }
 
-    /** 联网反地理编码，失败返回 null，保持只显示经纬度 */
+    /**
+     * 反地理编码：优先系统 Geocoder；结果太粗（仅国家级，常见于 vivo 等无 GMS 机型，
+     * 系统 Geocoder 后端只给"中国"）时降级在线反查（BigDataCloud 免 key，中文）。
+     * 都失败返回 null，保持只显示经纬度。
+     */
     private suspend fun reverseGeocode(location: Location): String? = withContext(Dispatchers.IO) {
-        runCatching {
+        val sysLine = runCatching {
             if (!Geocoder.isPresent()) return@runCatching null
             @Suppress("DEPRECATION")
             Geocoder(context, Locale.CHINA)
                 .getFromLocation(location.latitude, location.longitude, 1)
                 ?.firstOrNull()
-                ?.getAddressLine(0)
-        }.getOrNull()
+        }.getOrNull()?.getAddressLine(0)?.trim()
+
+        val weak = sysLine.isNullOrBlank() || sysLine.length <= 4
+        if (!weak) return@withContext sysLine
+        val online = onlineReverseGeocode(location)
+        android.util.Log.d("LocationSrc", "geocoder weak ('$sysLine') -> online: '$online'")
+        online
     }
+
+    /** BigDataCloud 客户端反查（免 key）：拼 中国 省 市 区 格式 */
+    private fun onlineReverseGeocode(location: Location): String? = runCatching {
+        val url = java.net.URL(
+            "https://api.bigdatacloud.net/data/reverse-geocode-client" +
+                "?latitude=${location.latitude}&longitude=${location.longitude}&localityLanguage=zh",
+        )
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val json = conn.inputStream.bufferedReader().use { it.readText() }
+        val obj = kotlinx.serialization.json.Json.parseToJsonElement(json)
+            .let { it as kotlinx.serialization.json.JsonObject }
+        fun f(name: String): String? =
+            (obj[name] as? kotlinx.serialization.json.JsonPrimitive)?.let { kotlin.runCatching { it.content }.getOrNull() }
+        listOfNotNull(
+            f("countryName"),
+            f("principalSubdivision"),
+            f("city"),
+            f("locality"),
+        ).filter { it.isNotBlank() }.joinToString(" ").ifBlank { null }
+    }.getOrNull()
 }
