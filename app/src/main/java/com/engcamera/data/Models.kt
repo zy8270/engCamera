@@ -97,6 +97,7 @@ fun defaultFields(): List<WatermarkField> = listOf(
         type = FieldType.COUNT,
         label = "计数",
         value = "1",
+        enabled = false, // 计数默认关闭（用户确认 2026-10-11）
     ),
 )
 

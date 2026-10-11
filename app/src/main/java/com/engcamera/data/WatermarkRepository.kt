@@ -80,6 +80,20 @@ class WatermarkRepository(private val context: Context) {
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
             _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
+            // 一次性迁移：计数默认关闭（2026-10-11）——已有状态里的计数也关一次，用户可再手动开
+            if (context.appDataStore.data.first()[booleanPreferencesKey("count_default_off_migrated")] != true) {
+                _state.value = _state.value.copy(
+                    fields = _state.value.fields.map {
+                        if (it.type == FieldType.COUNT && it.enabled) it.copy(enabled = false) else it
+                    },
+                )
+                scope.launch {
+                    context.appDataStore.edit {
+                        it[booleanPreferencesKey("count_default_off_migrated")] = true
+                        it[stateKey] = json.encodeToString(_state.value)
+                    }
+                }
+            }
             val storedProjects = context.appDataStore.data.first()[projectsKey]
             _projects.value = runCatching { json.decodeFromString<ProjectGroups>(storedProjects!!) }
                 .getOrElse {
