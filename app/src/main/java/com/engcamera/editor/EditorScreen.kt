@@ -120,7 +120,21 @@ fun EditorScreen(onBack: () -> Unit) {
         },
         topBar = {
             TopAppBar(
-                title = { Text("水印编辑器") },
+                title = {
+                    val groups by vm.projects.collectAsState()
+                    val current = groups.projects.firstOrNull { it.id == groups.current }?.name
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("水印编辑器")
+                        if (current != null) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                current,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -467,8 +481,10 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismis
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        vm.createProject(name)
+                        val id = vm.createProject(name)
+                        vm.selectProject(id) // 创建后自动切换到新工程
                         showCreate = false
+                        onDismiss() // 返回水印编辑器
                     }) { Text("创建") }
                 },
                 dismissButton = {
