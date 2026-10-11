@@ -33,6 +33,7 @@ class WatermarkRepository(private val context: Context) {
     private val columnsKey = intPreferencesKey("gallery_columns")
     private val historyKey = stringPreferencesKey("field_history")
     private val saveOriginalKey = booleanPreferencesKey("save_original")
+    private val shutterSoundKey = booleanPreferencesKey("shutter_sound")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -48,6 +49,10 @@ class WatermarkRepository(private val context: Context) {
     private val _saveOriginal = MutableStateFlow(false)
     val saveOriginal: StateFlow<Boolean> = _saveOriginal.asStateFlow()
 
+    /** 快门声音：拍照时播放系统快门音（默认关，兼容部分地区法律） */
+    private val _shutterSound = MutableStateFlow(false)
+    val shutterSound: StateFlow<Boolean> = _shutterSound.asStateFlow()
+
     init {
         scope.launch {
             val stored = context.dataStore.data.first()[stateKey]
@@ -62,6 +67,7 @@ class WatermarkRepository(private val context: Context) {
             val cols = context.dataStore.data.first()[columnsKey] ?: 3
             _galleryColumns.value = cols.coerceIn(3, 5)
             _saveOriginal.value = context.dataStore.data.first()[saveOriginalKey] ?: false
+            _shutterSound.value = context.dataStore.data.first()[shutterSoundKey] ?: false
         }
     }
 
@@ -99,6 +105,13 @@ class WatermarkRepository(private val context: Context) {
         _state.value = next
         scope.launch {
             context.dataStore.edit { it[stateKey] = json.encodeToString(next) }
+        }
+    }
+
+    fun setShutterSound(value: Boolean) {
+        _shutterSound.value = value
+        scope.launch {
+            context.dataStore.edit { it[shutterSoundKey] = value }
         }
     }
 

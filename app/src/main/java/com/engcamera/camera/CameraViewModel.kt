@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaActionSound
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.net.Uri
@@ -211,6 +212,22 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 设置抽屉 ----------
     val saveOriginal: StateFlow<Boolean> = container.repository.saveOriginal
+
+    private var shutterPlayer: MediaActionSound? = null
+
+    val shutterSound: StateFlow<Boolean> = container.repository.shutterSound
+
+    fun setShutterSound(value: Boolean) = container.repository.setShutterSound(value)
+
+    /** 播放系统快门音：设置开启时；部分地区法律强制（mustPlayShutterSound）时无论开关都播 */
+    private fun playShutterIfNeeded() {
+        val forced = runCatching { MediaActionSound.mustPlayShutterSound() }.getOrDefault(false)
+        if (!forced && !container.repository.shutterSound.value) return
+        runCatching {
+            (shutterPlayer ?: MediaActionSound().also { shutterPlayer = it })
+                .play(MediaActionSound.SHUTTER_CLICK)
+        }
+    }
 
     fun setSaveOriginal(value: Boolean) = container.repository.setSaveOriginal(value)
 
@@ -451,6 +468,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _ui.update { it.copy(capturing = true) }
+        playShutterIfNeeded()
         val frameRotation = frameRotationFor(quantizedRoll.value)
         val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
         e.takePhoto(file) { ok ->
@@ -682,6 +700,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         analyzer.release()
+        runCatching { shutterPlayer?.release() }
+        shutterPlayer = null
         super.onCleared()
     }
 
