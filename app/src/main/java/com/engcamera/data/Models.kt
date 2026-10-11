@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 /** 水印字段类型 */
 @Serializable
 enum class FieldType {
-    PROJECT_NAME, NOTE, DATETIME, LOCATION, CUSTOM, COUNT,
+    PROJECT_NAME, NOTE, DATETIME, LOCATION, CUSTOM, COUNT, WEATHER,
 }
 
 /** 单个水印字段（对应计划书 6.1） */
@@ -55,6 +55,8 @@ data class DynamicValues(
     val time: String = "",
     /** 位置文本：地址 + 经纬度，或降级后的经纬度/未获取定位 */
     val location: String = "未获取定位",
+    /** 天气文本（如"晴 26℃"），跟随定位自动获取 */
+    val weather: String = "",
 )
 
 /** 默认字段（对应计划书 6.1 + 用户补充：计数） */
@@ -82,6 +84,12 @@ fun defaultFields(): List<WatermarkField> = listOf(
         id = "f_location",
         type = FieldType.LOCATION,
         label = "位置",
+        value = "",
+    ),
+    WatermarkField(
+        id = "f_weather",
+        type = FieldType.WEATHER,
+        label = "天气",
         value = "",
     ),
     WatermarkField(
