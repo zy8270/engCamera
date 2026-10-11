@@ -158,12 +158,12 @@ object MediaSaver {
         queryCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false)
         queryCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true)
         // 按拍摄时间从新到旧；拍摄时间缺失回退入库时间。
-        // 时间相同（同秒双张：原图+水印版）时按插入先后决胜（早插入的在前）——
-        // DATE_TAKEN 可能被 MIUI 按 EXIF 覆盖回同值，靠插入序保证 原图在前、水印在后
+        // 时间相同（同秒双张）时后插入的在前——水印版后插入，因此 水印=最新=第一张、原图第二张
+        // （用户确认 2026-10-11：两个相册都以水印图为最新；DATE_TAKEN 可能被 MIUI 按 EXIF 覆盖回同值）
         return out.sortedWith(
             compareByDescending<MediaEntry> { it.sortKey() }
-                .thenBy { it.dateAdded }
-                .thenBy { it.id },
+                .thenByDescending { it.dateAdded }
+                .thenByDescending { it.id },
         )
     }
 

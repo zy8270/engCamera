@@ -515,14 +515,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, frameRotation,
         )
-        // 双张保存排序三保险（用户实测：MIUI 相册同秒内按文件名排，主名在前）：
-        // ① 原图先插入（date_added 更早）② 原图占主文件名（水印版带 (1)）
-        // ③ 原图 DATE_TAKEN 晚 1 秒（按时间排也是原图在前）
+        // 双张保存（用户确认 2026-10-11 最终语义：水印图=最新=相册第一张，原图第二张）：
+        // ① 原图先插入占主文件名（系统相册实测把 (1) 排最前，维持该行为）
+        // ② 水印版 DATE_TAKEN 晚 1 秒（MIUI 未覆盖时间时按时间排也是水印在前）
         val takenAt = System.currentTimeMillis()
         if (container.repository.saveOriginal.value) {
-            runCatching { MediaSaver.saveBitmap(context, upright, takenAt + 1000) }
+            runCatching { MediaSaver.saveBitmap(context, upright, takenAt) }
         }
-        MediaSaver.saveBitmap(context, out, takenAt)
+        MediaSaver.saveBitmap(context, out, takenAt + 1000)
         out.recycle()
         upright.recycle()
         tempFile.delete()
@@ -625,14 +625,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             if (burned != null) {
                 Log.d("CameraVM", "burn ok: ${burned.length()} bytes")
                 val takenAt = System.currentTimeMillis()
-                // 原图先存（主文件名+date_added 早）；DATE_TAKEN 晚 1 秒保证按时间排序也是原图在前
+                // 原图先存（主文件名）；水印版 DATE_TAKEN 晚 1 秒（水印=最新，与照片语义一致）
                 var originalSaved = false
                 if (container.repository.saveOriginal.value) {
                     originalSaved = runCatching {
-                        MediaSaver.saveVideoFile(context, source, takenAt + 1000)
+                        MediaSaver.saveVideoFile(context, source, takenAt)
                     }.isSuccess
                 }
-                saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt) }.getOrNull()
+                saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt + 1000) }.getOrNull()
                 watermarked = saved != null
                 if (saved == null && originalSaved) {
                     _ui.update { it.copy(toast = "水印视频保存失败，已保留原片") }
