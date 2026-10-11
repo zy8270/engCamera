@@ -95,12 +95,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val navController = rememberNavController()
-                // 连点返回会把根目的地也弹掉导致 Activity finish（真机复现：编辑器双击保存=整屏黑）。
-                // 400ms 防抖，期间重复的 pop 一律忽略。
+                // 连点返回会把根目的地也弹掉导致 Activity finish（真机复现：编辑器双击保存=整屏黑，
+                // 且 finish 后看门狗随之消亡无法自愈）。双保险：400ms 防抖 + 根页面绝不弹。
                 var lastPopAt = 0L
                 fun debouncedPop() {
                     val now = android.os.SystemClock.uptimeMillis()
-                    if (now - lastPopAt > 400) {
+                    if (now - lastPopAt > 400 && navController.previousBackStackEntry != null) {
                         lastPopAt = now
                         navController.popBackStack()
                     }
