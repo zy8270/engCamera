@@ -66,7 +66,13 @@ object WatermarkRenderer {
 
         val titleHeight = titleLayout?.height ?: 0
         val bodyHeight = bodyLayouts.sumOf { it.height.toDouble() }.toInt()
-        val blockHeight = (titleHeight + bodyHeight + pad * 2).toInt().coerceAtLeast(1)
+        // 垂直边距统一为半格（pad/2）：标题条内上下各半格，正文上下各半格，
+        // 块顶/块底到文字的距离一致（此前正文底边贴死块底、顶边一整格，不对称）
+        val blockHeight = if (titleHeight > 0) {
+            (titleHeight + bodyHeight + pad * 2).toInt().coerceAtLeast(1)
+        } else {
+            (bodyHeight + pad).toInt().coerceAtLeast(1)
+        }
 
         val bitmap = Bitmap.createBitmap(blockWidth, blockHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -95,7 +101,7 @@ object WatermarkRenderer {
                 bgPaint,
             )
         }
-        var y = pad
+        var y = pad / 2f
         titleLayout?.let {
             canvas.save()
             // 标题在蓝条内水平居中（ALIGN_CENTER）+ 垂直居中（上下各留一半内边距）
