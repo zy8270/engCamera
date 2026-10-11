@@ -497,6 +497,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             src
         }
+        // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）
+        val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
+        if (noWatermark) {
+            MediaSaver.saveBitmap(context, upright)
+            upright.recycle()
+            tempFile.delete()
+            return
+        }
         // 保存原图（设置开启时）：无水印的转正原图
         if (container.repository.saveOriginal.value) {
             runCatching { MediaSaver.saveBitmap(context, upright) }

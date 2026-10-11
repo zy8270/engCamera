@@ -1,19 +1,30 @@
 package com.engcamera.watermark
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import com.engcamera.data.DynamicValues
 import com.engcamera.data.WatermarkState
 import kotlin.math.cos
@@ -51,7 +62,60 @@ fun WatermarkOverlay(
             }
         }
 
-        if (block != null && widthPx > 0 && heightPx > 0) {
+        if (widthPx > 0 && heightPx > 0) {
+            if (state.fields.none { it.enabled }) {
+                // 全部字段关闭：齿轮占位图标替代水印块（仅预览不烧录），
+                // 位置=水印锚点（重新启用字段后水印出现在这里），点击进编辑器、可拖动
+                val iconPx = with(density) { 52.dp.toPx() }.roundToInt()
+                val (gl, gt) = WatermarkRenderer.positionBlock(
+                    widthPx, heightPx, iconPx, iconPx,
+                    state.anchorX, state.anchorY, rotationDeg,
+                )
+                Box(
+                    Modifier
+                        .offset { IntOffset(gl.roundToInt(), gt.roundToInt()) }
+                        .graphicsLayer { rotationZ = rotationDeg }
+                        .pointerInput(rotationDeg) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                var isDrag = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) {
+                                        if (!isDrag) onTap()
+                                        break
+                                    }
+                                    val deltaLocal = change.position - change.previousPosition
+                                    if (!isDrag && deltaLocal.getDistance() > viewConfiguration.touchSlop) {
+                                        isDrag = true
+                                    }
+                                    if (isDrag) {
+                                        change.consume()
+                                        val rad = Math.toRadians(rotationDeg.toDouble())
+                                        val sx = (deltaLocal.x * cos(rad) - deltaLocal.y * sin(rad)).toFloat()
+                                        val sy = (deltaLocal.x * sin(rad) + deltaLocal.y * cos(rad)).toFloat()
+                                        if (widthPx > 0 && heightPx > 0) {
+                                            onDrag(sx / widthPx, sy / heightPx)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0x66000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "水印设置",
+                        tint = Color(0xB3FFFFFF),
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+            } else if (block != null) {
             val (left, top) = WatermarkRenderer.positionBlock(
                 widthPx, heightPx,
                 block.width, block.height,
@@ -96,6 +160,7 @@ fun WatermarkOverlay(
                         }
                     },
             )
+            }
         }
     }
 }
