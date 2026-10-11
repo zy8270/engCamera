@@ -500,7 +500,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）
         val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
         if (noWatermark) {
-            MediaSaver.saveBitmap(context, upright)
+            MediaSaver.saveBitmap(context, upright, System.currentTimeMillis())
             upright.recycle()
             tempFile.delete()
             return
@@ -515,10 +515,13 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, frameRotation,
         )
-        MediaSaver.saveBitmap(context, out)
+        // 双张保存时显式写 DATE_TAKEN：原图比水印版晚 1 秒，
+        // 任何相册按时间（新的在前）排序都是 原图在前、水印在后（用户确认 2026-10-11）
+        val takenAt = System.currentTimeMillis()
+        MediaSaver.saveBitmap(context, out, takenAt)
         out.recycle()
         if (container.repository.saveOriginal.value) {
-            runCatching { MediaSaver.saveBitmap(context, upright) }
+            runCatching { MediaSaver.saveBitmap(context, upright, takenAt + 1000) }
         }
         upright.recycle()
         tempFile.delete()
@@ -620,7 +623,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 .getOrNull()
             if (burned != null) {
                 Log.d("CameraVM", "burn ok: ${burned.length()} bytes")
-                saved = runCatching { MediaSaver.saveVideoFile(context, burned) }.getOrNull()
+                saved = runCatching { MediaSaver.saveVideoFile(context, burned, System.currentTimeMillis()) }.getOrNull()
                 watermarked = saved != null
             }
             if (saved == null) {
@@ -632,7 +635,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         if (watermarked && container.repository.saveOriginal.value) {
-            runCatching { MediaSaver.saveVideoFile(context, source) }.onSuccess {
+            val takenAt = System.currentTimeMillis() + 1000 // 原图在前（晚 1 秒，与照片一致）
+            runCatching { MediaSaver.saveVideoFile(context, source, takenAt) }.onSuccess {
                 _mediaVersion.value += 1
             }
         }
