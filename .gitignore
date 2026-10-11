@@ -17,3 +17,5 @@ local.properties
 engcamera.keystore
 app/keystore.properties
 .idea/
+base.apk
+/*.apk
