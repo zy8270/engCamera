@@ -505,10 +505,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             tempFile.delete()
             return
         }
-        // 保存原图（设置开启时）：无水印的转正原图
-        if (container.repository.saveOriginal.value) {
-            runCatching { MediaSaver.saveBitmap(context, upright) }
-        }
+        // 水印版先存（占主文件名），开启"保存原图"时原图后存（同秒插入自动得 (1) 后缀），
+        // 保证系统相册与 app 相册里水印版都排在原图前（用户确认 2026-10-11）
         val out = Bitmap.createBitmap(upright.width, upright.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawBitmap(upright, 0f, 0f, null)
@@ -517,9 +515,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, frameRotation,
         )
-        upright.recycle()
         MediaSaver.saveBitmap(context, out)
         out.recycle()
+        if (container.repository.saveOriginal.value) {
+            runCatching { MediaSaver.saveBitmap(context, upright) }
+        }
+        upright.recycle()
         tempFile.delete()
     }
 
