@@ -34,6 +34,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** 自动天气文本（随定位联动获取） */
     val weatherText: StateFlow<String> = container.locationSource.weather
 
+    /** 手动刷新天气（编辑器"刷新天气"按钮用） */
+    fun refreshWeather() = container.locationSource.refreshWeather()
+
     private val _dynamic = MutableStateFlow(DynamicValues())
     val dynamic: StateFlow<DynamicValues> = _dynamic.asStateFlow()
 
