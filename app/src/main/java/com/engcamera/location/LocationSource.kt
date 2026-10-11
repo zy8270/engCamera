@@ -279,18 +279,35 @@ class LocationSource(private val context: Context) {
      * 都失败返回 null，保持只显示经纬度。
      */
     private suspend fun reverseGeocode(location: Location): String? = withContext(Dispatchers.IO) {
-        val sysLine = runCatching {
+        val addr = runCatching {
             if (!Geocoder.isPresent()) return@runCatching null
             @Suppress("DEPRECATION")
             Geocoder(context, Locale.CHINA)
                 .getFromLocation(location.latitude, location.longitude, 1)
                 ?.firstOrNull()
-        }.getOrNull()?.getAddressLine(0)?.trim()
+        }.getOrNull()
 
+        // 优先拼好的整行（多数机型正常）；部分机型（vivo 等）字段齐全但 getAddressLine(0)
+        // 只拼到国名——实测同机竞品读结构化字段能出完整地址，故弱结果时先试字段拼接，再走在线
+        val sysLine = addr?.getAddressLine(0)?.trim()
         val weak = sysLine.isNullOrBlank() || sysLine.length <= 4
         if (!weak) return@withContext sysLine
+
+        val composed = addr?.let {
+            listOfNotNull(
+                it.adminArea,                    // 省
+                it.locality,                     // 市
+                it.subLocality ?: it.subAdminArea, // 区/县
+            ).map { a -> a.trim() }.filter { a -> a.isNotBlank() && a != "null" }
+                .joinToString("")
+        }?.takeIf { it.length > 4 }
+        if (composed != null) {
+            android.util.Log.d("LocationSrc", "line weak ('$sysLine') -> fields composed: '$composed'")
+            return@withContext composed
+        }
+
         val online = onlineReverseGeocode(location)
-        android.util.Log.d("LocationSrc", "geocoder weak ('$sysLine') -> online: '$online'")
+        android.util.Log.d("LocationSrc", "fields empty ('$sysLine') -> online: '$online'")
         online
     }
 
