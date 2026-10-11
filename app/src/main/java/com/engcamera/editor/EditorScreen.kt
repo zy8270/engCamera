@@ -483,8 +483,9 @@ private fun EditFieldDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     val historyState = rememberLazyListState()
-                    // 每行约 35dp，视口 5 行
-                    Box(Modifier.height(175.dp)) {
+                    // 每行约 35dp；高度随条数动态（最多 5 行），条数少不撑空白
+                    val historyRows = history.size.coerceAtMost(5)
+                    Box(Modifier.height((historyRows * 35).dp)) {
                         LazyColumn(
                             state = historyState,
                             modifier = Modifier
@@ -508,7 +509,7 @@ private fun EditFieldDialog(
                         }
                         // 滚动条：滑块位置在绘制阶段更新（graphicsLayer 读派生状态），
                         // 不随滚动逐帧重组，避免抖动
-                        val trackDp = 175.dp
+                        val trackDp = (historyRows * 35).dp
                         val infoForSize = historyState.layoutInfo
                         val totalItems = infoForSize.totalItemsCount
                         val visibleItems = infoForSize.visibleItemsInfo.size
