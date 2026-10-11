@@ -42,7 +42,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -493,6 +495,28 @@ private fun SettingsDrawer(
                 )
                 Spacer(Modifier.height(16.dp))
 
+                Spacer(Modifier.height(16.dp))
+
+                // 署名（发布日期随版本更新）
+                HorizontalDivider(color = Color(0xFF3A3A40))
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Rnzhy 2026.10.11 engCamera MIT",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/zy8270/engCamera")),
+                                )
+                            }
+                        }
+                        .padding(vertical = 6.dp),
+                )
                 Spacer(Modifier.height(24.dp))
             }
         }
