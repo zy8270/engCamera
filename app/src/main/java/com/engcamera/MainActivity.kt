@@ -126,6 +126,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        // 音量键拍照（设置开启且相机页在场时消费，不调节音量）
+        if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ||
+            keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+        ) {
+            val c = (application as EngCameraApp).container
+            if (c.repository.volumeShutter.value) {
+                c.volumeKeyHandler?.let { handler ->
+                    if (handler()) return true
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onResume() {
         super.onResume()
         lastHeartbeat = heartbeat.get()

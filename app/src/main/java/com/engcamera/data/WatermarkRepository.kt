@@ -36,6 +36,7 @@ class WatermarkRepository(private val context: Context) {
     private val saveOriginalKey = booleanPreferencesKey("save_original")
     private val projectsKey = stringPreferencesKey("projects_v1")
     private val shutterSoundKey = booleanPreferencesKey("shutter_sound")
+    private val volumeShutterKey = booleanPreferencesKey("volume_shutter")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -54,6 +55,10 @@ class WatermarkRepository(private val context: Context) {
     /** 快门声音：拍照时播放系统快门音（默认关，兼容部分地区法律） */
     private val _shutterSound = MutableStateFlow(false)
     val shutterSound: StateFlow<Boolean> = _shutterSound.asStateFlow()
+
+    /** 音量键拍照：主界面音量键视同快门（默认开） */
+    private val _volumeShutter = MutableStateFlow(true)
+    val volumeShutter: StateFlow<Boolean> = _volumeShutter.asStateFlow()
 
     /** 工程组：多份水印配置快速切换；current 的 state 始终等于 state 流 */
     private val _projects = MutableStateFlow(ProjectGroups())
@@ -74,6 +79,7 @@ class WatermarkRepository(private val context: Context) {
             _galleryColumns.value = cols.coerceIn(3, 5)
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
+            _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
             val storedProjects = context.appDataStore.data.first()[projectsKey]
             _projects.value = runCatching { json.decodeFromString<ProjectGroups>(storedProjects!!) }
                 .getOrElse {
@@ -211,6 +217,13 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
+    fun setVolumeShutter(value: Boolean) {
+        _volumeShutter.value = value
+        scope.launch {
+            context.appDataStore.edit { it[volumeShutterKey] = value }
+        }
+    }
+
     fun setShutterSound(value: Boolean) {
         _shutterSound.value = value
         scope.launch {
@@ -255,4 +268,7 @@ class WatermarkRepository(private val context: Context) {
 class AppContainer(context: Context) {
     val repository = WatermarkRepository(context)
     val locationSource = com.engcamera.location.LocationSource(context)
+
+    /** 音量键→快门：由相机页组合期间注册、离开时清空（编辑器/相册页不触发） */
+    var volumeKeyHandler: (() -> Boolean)? = null
 }

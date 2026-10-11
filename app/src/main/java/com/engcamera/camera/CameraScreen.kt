@@ -321,6 +321,23 @@ fun CameraScreen(
                 BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery)
             }
 
+            // 音量键→快门（设置开启时 Activity 转发；仅相机页组合期间注册）
+            val appContainer = (context.applicationContext as com.engcamera.EngCameraApp).container
+            DisposableEffect(navLifecycle, vm) {
+                appContainer.volumeKeyHandler = {
+                    val st = vm.ui.value
+                    when {
+                        st.annotating -> { vm.confirmAnnotate(); true }
+                        st.videoMode -> {
+                            if (st.recording) vm.stopRecording() else startRecordingWithPermission(false)
+                            true
+                        }
+                        else -> { vm.takePhoto(); true }
+                    }
+                }
+                onDispose { appContainer.volumeKeyHandler = null }
+            }
+
             // 工程组快捷切换选择器（与编辑器共用）
             com.engcamera.projectgroup.ProjectGroupSelector(
                 visible = showProjectGroups,
@@ -348,6 +365,7 @@ private fun SettingsDrawer(
     val context = LocalContext.current
     val saveOriginal by vm.saveOriginal.collectAsState()
     val shutterSound by vm.shutterSound.collectAsState()
+    val volumeShutter by vm.volumeShutter.collectAsState()
     val watermark by vm.watermark.collectAsState()
     Box(Modifier.fillMaxSize()) {
         // 遮罩独立渐变（不随抽屉位移），由明到暗淡入
@@ -430,6 +448,27 @@ private fun SettingsDrawer(
                     }
                     Spacer(Modifier.width(8.dp))
                     Switch(checked = shutterSound, onCheckedChange = { vm.setShutterSound(it) })
+                }
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "音量键拍照",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "主界面按音量键视同按下快门",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = volumeShutter, onCheckedChange = { vm.setVolumeShutter(it) })
                 }
                 Spacer(Modifier.height(16.dp))
 
