@@ -305,7 +305,7 @@ class LocationSource(private val context: Context) {
                 add(village)
                 add(a.thoroughfare)
                 add(a.subThoroughfare)
-                add(a.premise)
+                add(a.premises)
             }.mapNotNull { x -> x?.trim()?.takeIf { it.isNotBlank() && it != "null" } }
                 .joinToString("")
         }?.takeIf { it.length > 4 }
