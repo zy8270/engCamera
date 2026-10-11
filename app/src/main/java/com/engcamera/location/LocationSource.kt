@@ -318,5 +318,5 @@ class LocationSource(private val context: Context) {
             f("city"),
             f("district") ?: f("locality"),
         ).filter { it.isNotBlank() }.joinToString("").ifBlank { null }
-    }.getOrNull().getOrNull()
+    }.getOrNull()
 }
