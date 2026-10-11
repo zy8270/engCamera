@@ -294,8 +294,39 @@ class LocationSource(private val context: Context) {
         online
     }
 
-    /** BigDataCloud 客户端反查（免 key）：拼 中国 省 市 区 格式 */
-    private fun onlineReverseGeocode(location: Location): String? = runCatching {
+    /**
+     * 在线反查（免 key，简体中文，不含国家级前缀——用户确认 2026-10-11）：
+     * 优先 Nominatim/OpenStreetMap（简体、可到区/街道级）；失败退 BigDataCloud（去国名，可能繁体）。
+     */
+    private fun onlineReverseGeocode(location: Location): String? =
+        nominatimReverse(location) ?: bigDataCloudReverse(location)
+
+    private fun nominatimReverse(location: Location): String? = runCatching {
+        val url = java.net.URL(
+            "https://nominatim.openstreetmap.org/reverse" +
+                "?lat=${location.latitude}&lon=${location.longitude}" +
+                "&format=jsonv2&accept-language=zh-CN&zoom=16",
+        )
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        conn.setRequestProperty("User-Agent", "engCamera/1.0 (zy8270)")
+        val json = conn.inputStream.bufferedReader().use { it.readText() }
+        val addr = (kotlinx.serialization.json.Json.parseToJsonElement(json)
+            as? kotlinx.serialization.json.JsonObject)?.get("address")
+            as? kotlinx.serialization.json.JsonObject ?: return@runCatching null
+        fun f(name: String): String? =
+            (addr[name] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        // 中国地址常见字段：state=省 city=市 city_district/district=区 suburb=街道/镇
+        listOfNotNull(
+            f("state"),
+            f("city") ?: f("municipality"),
+            f("city_district") ?: f("district") ?: f("county"),
+            f("suburb") ?: f("town"),
+        ).filter { it.isNotBlank() }.joinToString("").ifBlank { null }
+    }.getOrNull()
+
+    private fun bigDataCloudReverse(location: Location): String? = runCatching {
         val url = java.net.URL(
             "https://api.bigdatacloud.net/data/reverse-geocode-client" +
                 "?latitude=${location.latitude}&longitude=${location.longitude}&localityLanguage=zh",
@@ -308,11 +339,11 @@ class LocationSource(private val context: Context) {
             .let { it as kotlinx.serialization.json.JsonObject }
         fun f(name: String): String? =
             (obj[name] as? kotlinx.serialization.json.JsonPrimitive)?.let { kotlin.runCatching { it.content }.getOrNull() }
+        // 不含 countryName（国级省略）
         listOfNotNull(
-            f("countryName"),
             f("principalSubdivision"),
             f("city"),
             f("locality"),
-        ).filter { it.isNotBlank() }.joinToString(" ").ifBlank { null }
+        ).filter { it.isNotBlank() }.joinToString("").ifBlank { null }
     }.getOrNull()
 }
