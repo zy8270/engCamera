@@ -374,7 +374,7 @@ private fun ProjectGroupSelector(visible: Boolean, vm: EditorViewModel, onDismis
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "新建工程",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { showCreate = true }
