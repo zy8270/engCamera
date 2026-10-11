@@ -52,8 +52,9 @@ fun WatermarkOverlay(
         val widthPx = with(density) { maxWidth.toPx() }.roundToInt()
         val heightPx = with(density) { maxHeight.toPx() }.roundToInt()
 
-        // 状态、动态文本或宽度变化时重新渲染（时间每秒变化一次）
-        val block = remember(state, dynamic, widthPx, heightPx, scaleByShortSide) {
+        // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
+        // 若作为 key 会导致每帧重建位图，拖动卡顿）
+        val block = remember(state.fields, state.style, dynamic, widthPx, heightPx, scaleByShortSide) {
             if (widthPx > 0) {
                 val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
                 WatermarkRenderer.render(state, scaleBasis, dynamic)

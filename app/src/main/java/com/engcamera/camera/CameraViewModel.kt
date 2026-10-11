@@ -384,6 +384,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     }
 
     fun stopEverything() {
+        // 拖动防抖未落盘的锚点在此兜底写入
+        if (anchorPersistJob?.isActive == true) {
+            anchorPersistJob = null
+            viewModelScope.launch { container.repository.persistStateToDisk() }
+        }
         // 暂停时只停录像与传感器；相机用例交给生命周期自动停启，
         // 主动 unbind 会导致恢复时需要整体重绑（白屏诱因之一）
         if (_ui.value.recording) stopRecording()
@@ -391,14 +396,22 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         locationSource.stop()
     }
 
+    /** 拖动落盘防抖：拖动期间只改内存，停手 400ms 后写一次盘 */
+    private var anchorPersistJob: kotlinx.coroutines.Job? = null
+
     // ---------- 水印拖动（任何方向下均生效，锚点为当前画面内的块中心） ----------
     fun onDragWatermark(dx: Float, dy: Float) {
-        android.util.Log.d("CameraVM", "onDragWatermark dx=$dx dy=$dy")
-        container.repository.update { st ->
+        // 每帧只改内存（update persist=false），停手 400ms 后落盘一次——逐帧写盘是拖动卡顿根源
+        container.repository.update(persist = false) { st ->
             st.copy(
                 anchorX = (st.anchorX + dx).coerceIn(0f, 1f),
                 anchorY = (st.anchorY + dy).coerceIn(0f, 1f),
             )
+        }
+        anchorPersistJob?.cancel()
+        anchorPersistJob = viewModelScope.launch {
+            delay(400)
+            container.repository.persistStateToDisk()
         }
     }
 
@@ -727,6 +740,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     }
 
     override fun onCleared() {
+        if (anchorPersistJob?.isActive == true) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { container.repository.persistStateToDisk() }
+            }
+        }
         analyzer.release()
         runCatching { shutterPlayer?.release() }
         shutterPlayer = null
