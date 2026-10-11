@@ -334,6 +334,7 @@ private fun SettingsDrawer(
     onDismiss: () -> Unit,
 ) {
     val saveOriginal by vm.saveOriginal.collectAsState()
+    val shutterSound by vm.shutterSound.collectAsState()
     val watermark by vm.watermark.collectAsState()
     Box(Modifier.fillMaxSize()) {
         // 遮罩独立渐变（不随抽屉位移），由明到暗淡入
@@ -391,6 +392,27 @@ private fun SettingsDrawer(
                     }
                     Spacer(Modifier.width(8.dp))
                     Switch(checked = saveOriginal, onCheckedChange = { vm.setSaveOriginal(it) })
+                }
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "快门声音",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "拍照时播放系统快门音（部分地区的法律要求开启）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = shutterSound, onCheckedChange = { vm.setShutterSound(it) })
                 }
                 Spacer(Modifier.height(16.dp))
 
