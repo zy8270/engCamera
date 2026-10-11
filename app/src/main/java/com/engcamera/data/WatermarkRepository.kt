@@ -144,16 +144,24 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
-    /** 所有修改走这里：同步更新内存，异步落盘。isTitle 唯一性在这里统一保证（待确认 5）。 */
-    fun update(transform: (WatermarkState) -> WatermarkState) {
+    /**
+     * 所有修改走这里：同步更新内存，按需落盘。isTitle 唯一性在这里统一保证（待确认 5）。
+     * persist=false 用于高频更新（如拖动水印每帧），调用方需自行 debounce 后 persistState()。
+     */
+    fun update(persist: Boolean = true, transform: (WatermarkState) -> WatermarkState) {
         val next = enforceTitleUniqueness(transform(_state.value))
         _state.value = next
         syncCurrentProject(next)
-        scope.launch {
-            context.appDataStore.edit {
-                it[stateKey] = json.encodeToString(next)
-                it[projectsKey] = json.encodeToString(_projects.value)
-            }
+        if (persist) {
+            scope.launch { persistStateToDisk() }
+        }
+    }
+
+    /** 立即把当前水印状态与工程组写入 DataStore */
+    suspend fun persistStateToDisk() {
+        context.appDataStore.edit {
+            it[stateKey] = json.encodeToString(_state.value)
+            it[projectsKey] = json.encodeToString(_projects.value)
         }
     }
 
