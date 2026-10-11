@@ -320,6 +320,8 @@ private fun EditFieldDialog(
         )
     }
     var isTitle by remember(field) { mutableStateOf(field.isTitle) }
+    // 时间字段手动值二次确认：非空时间会定格后续所有拍照，防误触（预填值+随手点确定）
+    var confirmTimeFreeze by remember(field) { mutableStateOf(false) }
     val isCount = field.type == FieldType.COUNT
     val isLocation = field.type == FieldType.LOCATION
     val isDateTime = field.type == FieldType.DATETIME
@@ -388,12 +390,38 @@ private fun EditFieldDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(label, value, isTitle) }) { Text("确定") }
+            TextButton(onClick = {
+                if (isDateTime && value.isNotBlank()) {
+                    confirmTimeFreeze = true
+                } else {
+                    onConfirm(label, value, isTitle)
+                }
+            }) { Text("确定") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
+
+    // 时间定格二次确认
+    if (confirmTimeFreeze) {
+        AlertDialog(
+            onDismissRequest = { confirmTimeFreeze = false },
+            title = { Text("时间将定格") },
+            text = {
+                Text("手动设置时间后，后续所有拍照都会使用这个固定时间（清空后恢复自动取当前时间）。确定要定格时间吗？")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmTimeFreeze = false
+                    onConfirm(label, value, isTitle)
+                }) { Text("确定定格") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmTimeFreeze = false }) { Text("取消") }
+            },
+        )
+    }
 }
 
 @Composable
