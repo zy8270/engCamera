@@ -91,3 +91,20 @@ fun defaultFields(): List<WatermarkField> = listOf(
         value = "1",
     ),
 )
+
+/** 工程组条目：一个工程 = 一份完整水印状态（字段/样式/位置） */
+@Serializable
+data class ProjectGroupEntry(
+    val id: String,
+    val name: String,
+    val state: WatermarkState,
+)
+
+/** 工程组存储：列表 + 当前选中的工程 id */
+@Serializable
+data class ProjectGroups(
+    val current: String = "default",
+    val projects: List<ProjectGroupEntry> = listOf(
+        ProjectGroupEntry("default", "默认工程", WatermarkState()),
+    ),
+)

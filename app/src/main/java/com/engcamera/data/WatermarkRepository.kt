@@ -33,6 +33,7 @@ class WatermarkRepository(private val context: Context) {
     private val columnsKey = intPreferencesKey("gallery_columns")
     private val historyKey = stringPreferencesKey("field_history")
     private val saveOriginalKey = booleanPreferencesKey("save_original")
+    private val projectsKey = stringPreferencesKey("projects_v1")
     private val shutterSoundKey = booleanPreferencesKey("shutter_sound")
 
     private val _state = MutableStateFlow(WatermarkState())
@@ -53,6 +54,10 @@ class WatermarkRepository(private val context: Context) {
     private val _shutterSound = MutableStateFlow(false)
     val shutterSound: StateFlow<Boolean> = _shutterSound.asStateFlow()
 
+    /** 工程组：多份水印配置快速切换；current 的 state 始终等于 state 流 */
+    private val _projects = MutableStateFlow(ProjectGroups())
+    val projects: StateFlow<ProjectGroups> = _projects.asStateFlow()
+
     init {
         scope.launch {
             val stored = context.dataStore.data.first()[stateKey]
@@ -68,6 +73,15 @@ class WatermarkRepository(private val context: Context) {
             _galleryColumns.value = cols.coerceIn(3, 5)
             _saveOriginal.value = context.dataStore.data.first()[saveOriginalKey] ?: false
             _shutterSound.value = context.dataStore.data.first()[shutterSoundKey] ?: false
+            val storedProjects = context.dataStore.data.first()[projectsKey]
+            _projects.value = runCatching { json.decodeFromString<ProjectGroups>(storedProjects!!) }
+                .getOrElse {
+                    // 首次使用：现有水印状态打包为"默认工程"
+                    ProjectGroups(
+                        current = "default",
+                        projects = listOf(ProjectGroupEntry("default", "默认工程", _state.value)),
+                    )
+                }
         }
     }
 
@@ -103,8 +117,75 @@ class WatermarkRepository(private val context: Context) {
     fun update(transform: (WatermarkState) -> WatermarkState) {
         val next = enforceTitleUniqueness(transform(_state.value))
         _state.value = next
+        syncCurrentProject(next)
         scope.launch {
-            context.dataStore.edit { it[stateKey] = json.encodeToString(next) }
+            context.dataStore.edit {
+                it[stateKey] = json.encodeToString(next)
+                it[projectsKey] = json.encodeToString(_projects.value)
+            }
+        }
+    }
+
+    /** 当前工程的 state 槽位与 state 流保持一致（切换/编辑后都调用） */
+    private fun syncCurrentProject(state: WatermarkState) {
+        _projects.value = _projects.value.let { g ->
+            g.copy(
+                projects = g.projects.map { if (it.id == g.current) it.copy(state = state) else it },
+            )
+        }
+    }
+
+    // ---------- 工程组 ----------
+    /** 切换工程：水印内容整体换为目标工程的数据 */
+    fun selectProject(id: String) {
+        val g = _projects.value
+        val entry = g.projects.firstOrNull { it.id == id } ?: return
+        syncCurrentProject(_state.value)
+        _state.value = entry.state
+        _projects.value = g.copy(current = id)
+        scope.launch {
+            context.dataStore.edit {
+                it[stateKey] = json.encodeToString(entry.state)
+                it[projectsKey] = json.encodeToString(_projects.value)
+            }
+        }
+    }
+
+    /** 新建工程：复制当前工程的水印（新工地通常与旧工地相近，改名微调即用） */
+    fun createProject(name: String): String {
+        val id = "p_${System.currentTimeMillis()}"
+        val finalName = name.ifBlank { "工程${_projects.value.projects.size + 1}" }
+        _projects.value = _projects.value.let { g ->
+            g.copy(projects = g.projects + ProjectGroupEntry(id, finalName, _state.value))
+        }
+        scope.launch {
+            context.dataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
+        }
+        return id
+    }
+
+    /** 批量删除工程；删光则重建默认工程；当前工程被删则切到剩余第一个 */
+    fun deleteProjects(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        var g = _projects.value
+        var remaining = g.projects.filter { it.id !in ids }
+        if (remaining.isEmpty()) {
+            remaining = listOf(ProjectGroupEntry("default", "默认工程", WatermarkState()))
+        }
+        var nextState = _state.value
+        var nextCurrent = g.current
+        if (remaining.none { it.id == g.current }) {
+            nextCurrent = remaining.first().id
+            nextState = remaining.first().state
+            _state.value = nextState
+        }
+        g = g.copy(current = nextCurrent, projects = remaining)
+        _projects.value = g
+        scope.launch {
+            context.dataStore.edit {
+                it[stateKey] = json.encodeToString(nextState)
+                it[projectsKey] = json.encodeToString(g)
+            }
         }
     }
 

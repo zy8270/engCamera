@@ -1,6 +1,7 @@
 package com.engcamera.editor
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,6 +42,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,6 +55,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,6 +88,7 @@ fun EditorScreen(onBack: () -> Unit) {
 
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var showProjectGroups by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -187,12 +194,37 @@ fun EditorScreen(onBack: () -> Unit) {
                         onClick = { showAddDialog = true },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(horizontal = 16.dp),
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
                         Text("添加字段")
                     }
+                }
+
+                item {
+                    // 工程组入口（右下角）：多份水印配置快速切换
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        onClick = { showProjectGroups = true },
+                    ) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            ProjectGroupIcon()
+                            Spacer(Modifier.width(8.dp))
+                            Text("工程组", color = Color.White)
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
                 }
 
                 
@@ -223,6 +255,175 @@ fun EditorScreen(onBack: () -> Unit) {
                 showAddDialog = false
             },
         )
+    }
+
+    if (showProjectGroups) {
+        ProjectGroupSelector(vm = vm, onDismiss = { showProjectGroups = false })
+    }
+}
+
+/** 工程组图标：三条横线，最后一条带三角形（表示一组配置的集合/切换） */
+@Composable
+private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier.size(width = 20.dp, height = 16.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 2.2f
+        drawLine(Color.White, Offset(0f, h * 0.15f), Offset(w * 0.85f, h * 0.15f), stroke)
+        drawLine(Color.White, Offset(0f, h * 0.45f), Offset(w * 0.85f, h * 0.45f), stroke)
+        val y = h * 0.78f
+        drawLine(Color.White, Offset(0f, y), Offset(w * 0.55f, y), stroke)
+        val tri = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w * 0.62f, y - h * 0.16f)
+            lineTo(w * 0.62f, y + h * 0.16f)
+            lineTo(w * 0.82f, y)
+            close()
+        }
+        drawPath(tri, Color.White)
+    }
+}
+
+/** 工程组选择器：右下角弹出约半屏；点工程名切换，勾选后可批量删除，垃圾桶单删 */
+@Composable
+private fun ProjectGroupSelector(vm: EditorViewModel, onDismiss: () -> Unit) {
+    val groups by vm.projects.collectAsState()
+    var pendingDelete by remember { mutableStateOf(setOf<String>()) }
+    var showCreate by remember { mutableStateOf(false) }
+
+    Box(Modifier.fillMaxSize()) {
+        // 遮罩
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0x88000000))
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        )
+        // 面板：右下角，约半屏
+        Column(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.5f)
+                .background(Color(0xFF1E1E22))
+                .navigationBarsPadding()
+                .padding(12.dp),
+        ) {
+            // 头部：工程组 | 删除工程 | 新建工程
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "工程组",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "删除工程",
+                    color = if (pendingDelete.isEmpty()) Color(0xFF666666) else Color(0xFFFF6E6E),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = pendingDelete.isNotEmpty()) {
+                            vm.deleteProjects(pendingDelete)
+                            pendingDelete = emptySet()
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "新建工程",
+                    color = Color.White,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showCreate = true }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "点工程名切换；勾选后可批量删除",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFCAC4D0),
+            )
+            Spacer(Modifier.height(6.dp))
+
+            LazyColumn(Modifier.weight(1f)) {
+                items(groups.projects.size, key = { groups.projects[it].id }) { i ->
+                    val entry = groups.projects[i]
+                    val active = entry.id == groups.current
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = entry.id in pendingDelete,
+                            onCheckedChange = { on ->
+                                pendingDelete = if (on) pendingDelete + entry.id else pendingDelete - entry.id
+                            },
+                        )
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    vm.selectProject(entry.id)
+                                    onDismiss()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                entry.name + if (active) "（当前）" else "",
+                                color = if (active) MaterialTheme.colorScheme.primary else Color.White,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                            )
+                        }
+                        IconButton(onClick = {
+                            vm.deleteProjects(setOf(entry.id))
+                            pendingDelete -= entry.id
+                        }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "删除" + entry.name,
+                                tint = Color(0xFFFF6E6E),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showCreate) {
+            var name by remember { mutableStateOf("工程" + (groups.projects.size + 1)) }
+            AlertDialog(
+                onDismissRequest = { showCreate = false },
+                title = { Text("新建工程") },
+                text = {
+                    Column {
+                        Text("将复制当前工程的水印内容，可在切换后修改。")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("工程名") },
+                            singleLine = true,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.createProject(name)
+                        showCreate = false
+                    }) { Text("创建") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCreate = false }) { Text("取消") }
+                },
+            )
+        }
     }
 }
 
