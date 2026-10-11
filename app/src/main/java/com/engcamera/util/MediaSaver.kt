@@ -44,12 +44,13 @@ object MediaSaver {
         return "$FILE_PREFIX$ts.$ext"
     }
 
-    /** 保存水印成片 JPEG，返回 Uri */
-    suspend fun saveBitmap(context: Context, bitmap: Bitmap): Uri = withContext(Dispatchers.IO) {
+    /** 保存水印成片 JPEG，返回 Uri。takenAtMs 显式写入 DATE_TAKEN（不写则由系统猜，双张保存时排序不稳定） */
+    suspend fun saveBitmap(context: Context, bitmap: Bitmap, takenAtMs: Long? = null): Uri = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("jpg"))
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            takenAtMs?.let { put(MediaStore.MediaColumns.DATE_TAKEN, it) }
             if (Build.VERSION.SDK_INT >= 29) {
                 put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_DIR)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -67,12 +68,13 @@ object MediaSaver {
         uri
     }
 
-    /** 把缓存中的录像文件转存进 MediaStore，返回 Uri */
-    suspend fun saveVideoFile(context: Context, src: File): Uri = withContext(Dispatchers.IO) {
+    /** 把缓存中的录像文件转存进 MediaStore，返回 Uri。takenAtMs 同 saveBitmap */
+    suspend fun saveVideoFile(context: Context, src: File, takenAtMs: Long? = null): Uri = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("mp4"))
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            takenAtMs?.let { put(MediaStore.MediaColumns.DATE_TAKEN, it) }
             if (Build.VERSION.SDK_INT >= 29) {
                 put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_DIR)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
