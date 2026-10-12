@@ -134,23 +134,6 @@ fun ColorPickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = hexText,
-                    onValueChange = { s ->
-                        hexText = s.take(9)
-                        parseHex(s)?.let { argb ->
-                            val hsv = FloatArray(3)
-                            android.graphics.Color.colorToHSV(argb.toInt(), hsv)
-                            hue = hsv[0]
-                            sat = hsv[1]
-                            value = hsv[2]
-                            alpha = ((argb ushr 24) and 0xFF) / 255f
-                        }
-                    },
-                    label = { Text("#AARRGGBB") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
         },
         confirmButton = {
