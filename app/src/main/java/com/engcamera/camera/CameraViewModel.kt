@@ -66,6 +66,8 @@ data class CameraUiState(
     val videoQualityIndex: Int = 0,
     /** 画质选择菜单展开 */
     val showQualityMenu: Boolean = false,
+    /** 电子变焦倍数（zoomState 回流） */
+    val zoomRatio: Float = 1f,
     /** 添加水印模式（给相册已有图片加水印）：待处理队列（uri + 宽高比）与当前索引 */
     val annotating: Boolean = false,
     val annotateQueue: List<AnnotateItem> = emptyList(),
@@ -120,6 +122,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private var activeRecording: Recording? = null
     private var pendingVideoFile: File? = null
     private var timerJob: Job? = null
+    private var zoomCollectJob: Job? = null
 
     /** 录像开始瞬间的水印快照 + 成片坐标系换算角（合成时使用，所见即所得） */
     private var videoWatermarkSnapshot: Triple<WatermarkState, DynamicValues, Int>? = null
@@ -193,6 +196,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val currentIdx = qualities.indexOfFirst { it.quality == e.videoQuality.quality }.coerceAtLeast(0)
         // 切镜头后所选画质可能不被新镜头支持（如前摄无 4K）：落到该镜头支持的最高档
         e.videoQuality = qualities[currentIdx]
+        // 电子变焦：收集 zoomState 回流（重绑换相机实例时重挂收集）
+        zoomCollectJob?.cancel()
+        zoomCollectJob = viewModelScope.launch {
+            e.zoomRatio.collect { z -> _ui.update { it.copy(zoomRatio = z) } }
+        }
         _ui.update { s ->
             s.copy(
                 lensLabels = e.backLenses.map { it.label },
@@ -217,6 +225,20 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     fun toggleQualityMenu() {
         _ui.update { it.copy(showQualityMenu = !it.showQualityMenu) }
+    }
+
+    /** 双指捏合电子变焦：factor 为本次手势的增量倍数（引擎内部夹取范围） */
+    fun onPinchZoom(factor: Float) {
+        val target = _ui.value.zoomRatio * factor
+        engine?.setZoomRatio(target)
+        _ui.update { it.copy(zoomRatio = target) }
+    }
+
+    /** 变焦徽标点击：1× 与 2× 之间快速切换 */
+    fun toggleZoom() {
+        val target = if (_ui.value.zoomRatio > 1.5f) 1f else 2f
+        engine?.setZoomRatio(target)
+        _ui.update { it.copy(zoomRatio = target) }
     }
 
     /** 点击对焦测光（预览区像素坐标），返回是否已下发 */
