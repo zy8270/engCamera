@@ -66,7 +66,9 @@ object TemplatePresets {
             fields = stdFields,
             options = listOf(
                 TemplateOptionDef("titleBgColor", "标题底色", "color"),
+                TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
                 TemplateOptionDef("bodyBgColor", "正文底色", "color"),
+                TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
             ),
         ),
         WatermarkTemplate(
