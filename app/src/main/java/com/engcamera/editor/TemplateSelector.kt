@@ -362,12 +362,15 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
             )
         }
         if (template.backend == TemplateBackend.WEB) {
+            // 网页模板按成片参考宽渲染再等比缩放：用缩略图实际宽度会让
+            // max-width 内容挤成窄竖条（用户反馈"预览宽度窄过了"）
+            val webWidth = 1080
             val tick by WebTemplateRenderer.tick.collectAsState()
-            val key = WebTemplateRenderer.cacheKey(fakeState, template, SAMPLE_DYNAMIC, widthPx)
+            val key = WebTemplateRenderer.cacheKey(fakeState, template, SAMPLE_DYNAMIC, webWidth)
             val bmp = remember(key, tick) { WebTemplateRenderer.current(key) }
             LaunchedEffect(key) {
                 if (WebTemplateRenderer.current(key) == null) {
-                    WebTemplateRenderer.warmAsync(context, key, template, fakeState, SAMPLE_DYNAMIC, widthPx)
+                    WebTemplateRenderer.warmAsync(context, key, template, fakeState, SAMPLE_DYNAMIC, webWidth)
                 }
             }
             if (bmp != null) {
