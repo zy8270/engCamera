@@ -51,6 +51,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
 
     fun deleteUserTemplate(id: String) = repo.deleteUserTemplate(id)
 
+    override fun resetCurrentProject() = repo.resetCurrentProject()
+
     /** 模板选项：颜色类（写入 WatermarkStyle 对应键） */
     fun setTemplateColor(key: String, color: Long) = repo.update { s ->
         val st = when (key) {
