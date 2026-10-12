@@ -30,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
@@ -109,6 +110,7 @@ fun EditorScreen(onBack: () -> Unit) {
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showProjectGroups by remember { mutableStateOf(false) }
+    var showTemplates by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -116,23 +118,43 @@ fun EditorScreen(onBack: () -> Unit) {
 
     Scaffold(
         floatingActionButton = {
-            // 工程组入口：屏幕右下角悬浮按钮（带阴影）
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.primary,
-                shadowElevation = 8.dp,
-                modifier = Modifier
-                    .padding(end = 16.dp, bottom = 16.dp)
-                    .shadow(8.dp, RoundedCornerShape(14.dp)),
-                onClick = { showProjectGroups = true },
+            // 右下角两枚入口：魔法棒（水印模板）叠在工程组上方
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.padding(end = 16.dp, bottom = 16.dp),
             ) {
-                Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
+                    shadowElevation = 8.dp,
+                    onClick = { showTemplates = true },
                 ) {
-                    ProjectGroupIcon()
-                    Spacer(Modifier.width(8.dp))
-                    Text("工程组", color = MaterialTheme.colorScheme.onPrimary)
+                    Icon(
+                        Icons.Default.AutoFixHigh,
+                        contentDescription = "水印模板",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(13.dp)
+                            .size(24.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                // 工程组入口：屏幕右下角悬浮按钮（带阴影）
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.shadow(8.dp, RoundedCornerShape(14.dp)),
+                    onClick = { showProjectGroups = true },
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ProjectGroupIcon()
+                        Spacer(Modifier.width(8.dp))
+                        Text("工程组", color = MaterialTheme.colorScheme.onPrimary)
+                    }
                 }
             }
         },
@@ -175,7 +197,19 @@ fun EditorScreen(onBack: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.roundToInt()
-                    val block = remember(state, dynamic, widthPx) {
+                    // 网页模板：渲染完成 tick 触发重组取新缓存
+                    val webTick by com.engcamera.watermark.WebTemplateRenderer.tick.collectAsState()
+                    LaunchedEffect(state.fields, state.style, dynamic, widthPx) {
+                        val key = com.engcamera.watermark.WatermarkRenderer.webCacheKey(state, dynamic, widthPx)
+                        if (key != null && com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
+                            com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
+                                com.engcamera.watermark.WebTemplateRenderer.warmAsync(
+                                    context, key, tpl, state, dynamic, widthPx,
+                                )
+                            }
+                        }
+                    }
+                    val block = remember(state, dynamic, widthPx, webTick) {
                         WatermarkRenderer.render(state, widthPx, dynamic)
                     }
                     Image(
@@ -244,6 +278,20 @@ fun EditorScreen(onBack: () -> Unit) {
                     )
                 }
 
+                // 模板选项（当前模板暴露的可调样式）
+                val currentTemplate = com.engcamera.data.WatermarkTemplates.find(state.templateId)
+                if (currentTemplate != null && currentTemplate.options.isNotEmpty()) {
+                    item {
+                        TemplateOptionsCard(
+                            template = currentTemplate,
+                            style = state.style,
+                            onColor = vm::setTemplateColor,
+                            onScalar = vm::setTemplateScalar,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+
                 item {
                     Button(
                         onClick = { showAddDialog = true },
@@ -257,8 +305,8 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 }
 
-                // 底部占位：字段多时可多滑一段，避免右下角工程组悬浮按钮盖住最后一行的删除按钮
-                item { Spacer(Modifier.height(88.dp)) }
+                // 底部占位：字段多时可多滑一段，避免右下角两枚悬浮按钮盖住最后一行的删除按钮
+                item { Spacer(Modifier.height(132.dp)) }
 
 
 
@@ -298,6 +346,12 @@ fun EditorScreen(onBack: () -> Unit) {
         visible = showProjectGroups,
         handler = vm,
         onDismiss = { showProjectGroups = false },
+    )
+
+    TemplateSelector(
+        visible = showTemplates,
+        vm = vm,
+        onDismiss = { showTemplates = false },
     )
 }
 
@@ -395,8 +449,8 @@ private fun FieldRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // 仅备注/自定义字段可删除；时间、位置、计数为固定项（只可关闭隐藏）
-            if (field.type == FieldType.NOTE || field.type == FieldType.CUSTOM) {
+            // 仅可删除字段（deletable 由模板定义；旧数据已按类型规则迁移）显示删除按钮
+            if (field.deletable) {
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = "删除字段")
                 }

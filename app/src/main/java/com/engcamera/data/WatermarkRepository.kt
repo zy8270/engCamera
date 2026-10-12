@@ -38,6 +38,8 @@ class WatermarkRepository(private val context: Context) {
     private val shutterSoundKey = booleanPreferencesKey("shutter_sound")
     private val volumeShutterKey = booleanPreferencesKey("volume_shutter")
     private val themeModeKey = stringPreferencesKey("theme_mode")
+    private val templatesKey = stringPreferencesKey("templates_v1") // 用户导入的水印模板
+    private val deletableMigratedKey = booleanPreferencesKey("deletable_migrated_v1")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -64,6 +66,10 @@ class WatermarkRepository(private val context: Context) {
     /** 外观主题：跟随系统 / 日间 / 夜间（默认跟随系统） */
     private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    /** 用户导入的水印模板（内置模板见 TemplatePresets） */
+    private val _userTemplates = MutableStateFlow<List<WatermarkTemplate>>(emptyList())
+    val userTemplates: StateFlow<List<WatermarkTemplate>> = _userTemplates.asStateFlow()
 
     /** 工程组：多份水印配置快速切换；current 的 state 始终等于 state 流 */
     private val _projects = MutableStateFlow(ProjectGroups())
@@ -111,6 +117,33 @@ class WatermarkRepository(private val context: Context) {
                         projects = listOf(ProjectGroupEntry("default", "默认工程", _state.value)),
                     )
                 }
+            // 用户导入模板
+            context.appDataStore.data.first()[templatesKey]?.let { raw ->
+                runCatching { json.decodeFromString<List<WatermarkTemplate>>(raw) }
+                    .onSuccess { _userTemplates.value = it }
+            }
+            // 模板解析桥：内置 + 用户导入
+            WatermarkTemplates.resolver = { id ->
+                TemplatePresets.find(id)
+                    ?: _userTemplates.value.firstOrNull { it.id == id }
+            }
+            // 一次性迁移：deletable 标志（旧数据按类型规则：仅 NOTE/CUSTOM 可删），覆盖所有工程槽位
+            if (context.appDataStore.data.first()[deletableMigratedKey] != true) {
+                fun migrate(fields: List<WatermarkField>) = fields.map {
+                    it.copy(deletable = it.type == FieldType.NOTE || it.type == FieldType.CUSTOM)
+                }
+                _state.value = _state.value.copy(fields = migrate(_state.value.fields))
+                _projects.value = _projects.value.copy(
+                    projects = _projects.value.projects.map { p -> p.copy(state = p.state.copy(fields = migrate(p.state.fields))) },
+                )
+                scope.launch {
+                    context.appDataStore.edit {
+                        it[deletableMigratedKey] = true
+                        it[stateKey] = json.encodeToString(_state.value)
+                        it[projectsKey] = json.encodeToString(_projects.value)
+                    }
+                }
+            }
         }
     }
 
@@ -251,6 +284,78 @@ class WatermarkRepository(private val context: Context) {
         _volumeShutter.value = value
         scope.launch {
             context.appDataStore.edit { it[volumeShutterKey] = value }
+        }
+    }
+
+    // ---------- 水印模板 ----------
+
+    /** 当前工程的模板 id */
+    val currentTemplateId: String get() = _state.value.templateId
+
+    /** 应用模板：布局与字段配置随模板走，字段值按类型保留（工程名/备注/计数等不丢），锚点与宽度不动 */
+    fun applyTemplate(id: String) {
+        val tpl = WatermarkTemplates.find(id) ?: return
+        val cur = _state.value
+        val newFields = tpl.fields.map { def ->
+            val existing = cur.fields.firstOrNull { it.type == def.type }
+            WatermarkField(
+                id = existing?.id ?: "f_${def.type.name.lowercase()}_${System.currentTimeMillis()}",
+                type = def.type,
+                label = def.label,
+                value = existing?.value.orEmpty(),
+                enabled = def.enabled,
+                isTitle = def.isTitle,
+                deletable = def.deletable,
+            )
+        }
+        update {
+            it.copy(
+                templateId = tpl.id,
+                fields = newFields,
+                style = tpl.style.copy(maxWidthRatio = cur.style.maxWidthRatio),
+            )
+        }
+    }
+
+    /**
+     * 导入网页模板（HTML 片段契约见 TemplateHtml）。
+     * @return 成功返回模板名，失败返回 null
+     */
+    fun importTemplate(html: String, fallbackName: String): String? {
+        val parsed = com.engcamera.watermark.TemplateHtml.parseImport(html, fallbackName) ?: return null
+        val (name, defs) = parsed
+        val tpl = WatermarkTemplate(
+            id = "u_${System.currentTimeMillis()}",
+            name = name,
+            backend = TemplateBackend.WEB,
+            html = html,
+            fields = defs,
+            options = listOf(
+                TemplateOptionDef("bgOpacity", "面板不透明度", "slider", 10f, 100f),
+                TemplateOptionDef("accentColor", "强调色", "color"),
+            ),
+            builtIn = false,
+        )
+        _userTemplates.value = _userTemplates.value + tpl
+        scope.launch {
+            context.appDataStore.edit { it[templatesKey] = json.encodeToString(_userTemplates.value) }
+        }
+        return name
+    }
+
+    /** 导出当前模板的 HTML 源（仅网页模板可导出；返回 null 表示不可导出） */
+    fun exportTemplateHtml(): Pair<String, String>? {
+        val tpl = WatermarkTemplates.find(_state.value.templateId) ?: return null
+        val html = tpl.html ?: return null
+        return "${tpl.name}.html" to html
+    }
+
+    /** 删除用户导入的模板；当前工程正在用它则先切回经典 */
+    fun deleteUserTemplate(id: String) {
+        if (_state.value.templateId == id) applyTemplate("classic")
+        _userTemplates.value = _userTemplates.value.filterNot { it.id == id }
+        scope.launch {
+            context.appDataStore.edit { it[templatesKey] = json.encodeToString(_userTemplates.value) }
         }
     }
 

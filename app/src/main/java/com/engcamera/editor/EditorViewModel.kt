@@ -38,6 +38,42 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     /** 手动刷新天气（编辑器"刷新天气"按钮用） */
     fun refreshWeather() = container.locationSource.refreshWeather()
 
+    // ---------- 水印模板 ----------
+
+    val userTemplates: StateFlow<List<com.engcamera.data.WatermarkTemplate>> = repo.userTemplates
+
+    fun applyTemplate(id: String) = repo.applyTemplate(id)
+
+    fun importTemplate(html: String, fallbackName: String): String? =
+        repo.importTemplate(html, fallbackName)
+
+    fun exportTemplateHtml(): Pair<String, String>? = repo.exportTemplateHtml()
+
+    fun deleteUserTemplate(id: String) = repo.deleteUserTemplate(id)
+
+    /** 模板选项：颜色类（写入 WatermarkStyle 对应键） */
+    fun setTemplateColor(key: String, color: Long) = repo.update { s ->
+        val st = when (key) {
+            "accentColor" -> s.style.copy(accentColor = color)
+            "titleBgColor" -> s.style.copy(titleBgColor = color)
+            "bodyBgColor" -> s.style.copy(bodyBgColor = color)
+            "bodyTextColor" -> s.style.copy(bodyTextColor = color)
+            "borderColor" -> s.style.copy(borderColor = color)
+            else -> s.style
+        }
+        s.copy(style = st)
+    }
+
+    /** 模板选项：数值类 */
+    fun setTemplateScalar(key: String, value: Float) = repo.update { s ->
+        val st = when (key) {
+            "bgOpacity" -> s.style.copy(bgOpacity = value.toInt().coerceIn(0, 100))
+            "cornerRatio" -> s.style.copy(cornerRatio = value)
+            else -> s.style
+        }
+        s.copy(style = st)
+    }
+
     private val _dynamic = MutableStateFlow(DynamicValues())
     val dynamic: StateFlow<DynamicValues> = _dynamic.asStateFlow()
 
