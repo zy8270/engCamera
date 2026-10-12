@@ -13,6 +13,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,15 +54,30 @@ fun WatermarkOverlay(
         val density = LocalDensity.current
         val widthPx = with(density) { maxWidth.toPx() }.roundToInt()
         val heightPx = with(density) { maxHeight.toPx() }.roundToInt()
+        val context = androidx.compose.ui.platform.LocalContext.current
+        // 网页模板渲染完成会 bump tick，触发重组取新缓存位图
+        val webTick by WebTemplateRenderer.tick.collectAsState()
 
         // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
         // 若作为 key 会导致每帧重建位图，拖动卡顿）
-        val block = remember(state.fields, state.style, dynamic, widthPx, heightPx, scaleByShortSide) {
+        val block = remember(state.fields, state.style, dynamic, widthPx, heightPx, scaleByShortSide, webTick) {
             if (widthPx > 0) {
                 val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
                 WatermarkRenderer.render(state, scaleBasis, dynamic)
             } else {
                 null
+            }
+        }
+
+        // 网页模板：缓存未命中时触发后台渲染（完成经 tick 回来重组）
+        LaunchedEffect(state.fields, state.style, dynamic, widthPx, heightPx) {
+            if (widthPx > 0) {
+                val key = WatermarkRenderer.webCacheKey(state, dynamic, widthPx)
+                if (key != null && WebTemplateRenderer.current(key) == null) {
+                    com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
+                        WebTemplateRenderer.warmAsync(context, key, tpl, state, dynamic, widthPx)
+                    }
+                }
             }
         }
 

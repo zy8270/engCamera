@@ -20,6 +20,8 @@ data class WatermarkField(
     val value: String,
     val enabled: Boolean = true,
     val isTitle: Boolean = false,
+    /** 是否可删除（模板定义；旧数据按类型规则迁移：仅 NOTE/CUSTOM 可删） */
+    val deletable: Boolean = true,
 )
 
 /** 水印样式（对应计划书 6.2，颜色为 ARGB Long） */
@@ -35,6 +37,11 @@ data class WatermarkStyle(
     val paddingRatio: Float = 0.014f,         // 内边距比例
     val lineSpacingRatio: Float = 0.006f,     // 行距比例
     val cornerRatio: Float = 0.006f,          // 圆角比例
+    // ---- 0.6.0 模板系统扩展（各模板按需使用）----
+    val layout: String = "CLASSIC",           // 原生布局标识（见 WatermarkRenderer）
+    val accentColor: Long = 0xFF1D4E89,       // 主题强调色（线条/竖条/角标）
+    val borderColor: Long = 0xFFFFFFFF,       // 边框颜色（边框卡片等）
+    val bgOpacity: Int = 100,                 // 背景不透明度百分比（0-100）
 )
 
 /** 水印整体状态（对应计划书 6.3） */
@@ -49,6 +56,8 @@ data class WatermarkState(
     val rotationDeg: Float = 0f,
     /** 重力跟随开启后按重力 90° 量化旋转水印，方向切换时自动落到预览画面右下角 */
     val followGravity: Boolean = true,
+    /** 当前水印模板 id（内置见 TemplatePresets，用户导入的存 DataStore） */
+    val templateId: String = "classic",
 )
 
 /** 拍照瞬间填充的动态值 */
@@ -70,6 +79,7 @@ fun defaultFields(): List<WatermarkField> = listOf(
         label = "工程名称",
         value = "XX 工程施工记录",
         isTitle = true,
+        deletable = false,
     ),
     WatermarkField(
         id = "f_note",
@@ -82,18 +92,21 @@ fun defaultFields(): List<WatermarkField> = listOf(
         type = FieldType.DATETIME,
         label = "时间",
         value = "",
+        deletable = false,
     ),
     WatermarkField(
         id = "f_location",
         type = FieldType.LOCATION,
         label = "位置",
         value = "",
+        deletable = false,
     ),
     WatermarkField(
         id = "f_weather",
         type = FieldType.WEATHER,
         label = "天气",
         value = "",
+        deletable = false,
     ),
     WatermarkField(
         id = "f_count",
@@ -101,7 +114,51 @@ fun defaultFields(): List<WatermarkField> = listOf(
         label = "计数",
         value = "1",
         enabled = false, // 计数默认关闭（用户确认 2026-10-11）
+        deletable = false,
     ),
+)
+
+// ================= 水印模板（0.6.0） =================
+
+/** 模板渲染后端：原生 Canvas（内置默认，高性能） / WebView 网页（导入与花哨内置） */
+@Serializable
+enum class TemplateBackend { NATIVE, WEB }
+
+/** 模板的字段定义：切换模板时生成字段，deletable 覆盖类型默认规则 */
+@Serializable
+data class TemplateFieldDef(
+    val type: FieldType,
+    val label: String,
+    val enabled: Boolean = true,
+    val deletable: Boolean = false,
+    val isTitle: Boolean = false,
+)
+
+/** 模板暴露的可调选项（编辑器内编辑；值写入 WatermarkStyle 对应键） */
+@Serializable
+data class TemplateOptionDef(
+    val key: String,          // style 键：accentColor/bodyBgColor/bgOpacity/cornerRatio...
+    val label: String,        // 显示名：主题色/底色/不透明度...
+    val kind: String,         // "color" | "slider" | "switch"
+    val min: Float = 0f,
+    val max: Float = 1f,
+)
+
+/**
+ * 水印模板：布局+默认样式+字段配置+可调选项。
+ * NATIVE 用 style.layout 标识布局由 WatermarkRenderer 绘制；
+ * WEB 用 html（占位符 {{TYPE|label=..|deletable=..}}，data-name 为模板名）由 WebView 渲染。
+ */
+@Serializable
+data class WatermarkTemplate(
+    val id: String,
+    val name: String,
+    val backend: TemplateBackend = TemplateBackend.NATIVE,
+    val html: String? = null,
+    val fields: List<TemplateFieldDef> = emptyList(),
+    val style: WatermarkStyle = WatermarkStyle(),
+    val options: List<TemplateOptionDef> = emptyList(),
+    val builtIn: Boolean = true,
 )
 
 /** 工程组条目：一个工程 = 一份完整水印状态（字段/样式/位置） */
