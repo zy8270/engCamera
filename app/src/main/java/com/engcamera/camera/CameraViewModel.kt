@@ -191,6 +191,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val e = engine ?: return
         val qualities = e.getSupportedVideoQualities()
         val currentIdx = qualities.indexOfFirst { it.quality == e.videoQuality.quality }.coerceAtLeast(0)
+        // 切镜头后所选画质可能不被新镜头支持（如前摄无 4K）：落到该镜头支持的最高档
+        e.videoQuality = qualities[currentIdx]
         _ui.update { s ->
             s.copy(
                 lensLabels = e.backLenses.map { it.label },

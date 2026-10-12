@@ -5,6 +5,7 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
+import android.media.CamcorderProfile
 import android.util.Log
 import android.util.Rational
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -14,6 +15,7 @@ import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
 import androidx.camera.core.ViewPort
@@ -81,13 +83,74 @@ class CameraEngine(
             field = value
         }
 
-    /** 可选画质列表（实际分辨率，CameraX 按档位匹配设备支持的最佳尺寸） */
-    fun getSupportedVideoQualities(): List<VideoQuality> = listOf(
-        VideoQuality("3840×2160", "2160p", 4), // UHD 4K
-        VideoQuality("1920×1080", "1080p", 3), // FHD
-        VideoQuality("1280×720", "720p", 1),   // HD
-        VideoQuality("720×480", "480p", 2),    // SD
+    /** 可选画质列表：按当前镜头真实能力生成（档位来自 CameraX，规格来自 CamcorderProfile），全失败退静态四档 */
+    fun getSupportedVideoQualities(): List<VideoQuality> {
+        val info = selectedLensCameraInfo()
+        val supported = info?.let {
+            runCatching { QualitySelector.getSupportedQualities(it).toSet() }.getOrNull()
+        }
+        // CamcorderProfile 只有 int cameraId 的 API（String 形式无），转数字；非常规 id 兜底 0 号机
+        val legacyId = info
+            ?.let { runCatching { Camera2CameraInfo.from(it).cameraId }.getOrNull() }
+            ?.toIntOrNull() ?: 0
+        val list = mutableListOf<VideoQuality>()
+        for (tier in qualityTiers) {
+            if (supported != null && tier.cameraX !in supported) continue
+            val profile = if (CamcorderProfile.hasProfile(legacyId, tier.profileQuality)) {
+                runCatching { CamcorderProfile.get(legacyId, tier.profileQuality) }.getOrNull()
+            } else {
+                null
+            }
+            list += VideoQuality(
+                label = profile?.let { "${it.videoFrameWidth}×${it.videoFrameHeight}" } ?: tier.nominalLabel,
+                spec = tier.nominalSpec + (profile?.let { " · ${it.videoFrameRate}fps" } ?: ""),
+                quality = tier.id,
+            )
+        }
+        return list.ifEmpty { defaultQualities() }
+    }
+
+    private fun defaultQualities(): List<VideoQuality> = listOf(
+        VideoQuality("3840×2160", "2160p", 4),
+        VideoQuality("1920×1080", "1080p", 3),
+        VideoQuality("1280×720", "720p", 1),
+        VideoQuality("720×480", "480p", 2),
     )
+
+    /** 画质档位定义：内部 id ↔ CameraX Quality ↔ CamcorderProfile 常量 + 标准目标规格（设备数据缺失时兜底显示） */
+    private class QualityTier(
+        val id: Int,
+        val cameraX: Quality,
+        val profileQuality: Int,
+        val nominalLabel: String,
+        val nominalSpec: String,
+    )
+
+    private val qualityTiers = listOf(
+        QualityTier(4, Quality.UHD, CamcorderProfile.QUALITY_2160P, "3840×2160", "2160p"),
+        QualityTier(3, Quality.FHD, CamcorderProfile.QUALITY_1080P, "1920×1080", "1080p"),
+        QualityTier(1, Quality.HD, CamcorderProfile.QUALITY_720P, "1280×720", "720p"),
+        QualityTier(2, Quality.SD, CamcorderProfile.QUALITY_480P, "720×480", "480p"),
+    )
+
+    /** 当前镜头的 CameraInfo（随前后摄/焦段切换）；拿不到返回 null */
+    private fun selectedLensCameraInfo(): CameraInfo? {
+        val p = provider ?: return null
+        return runCatching {
+            p.availableCameraInfos.firstOrNull { info ->
+                if (frontCamera) {
+                    info.lensFacing == CameraSelector.LENS_FACING_FRONT
+                } else {
+                    val id = selectedLensId
+                    if (id == null) {
+                        info.lensFacing == CameraSelector.LENS_FACING_BACK
+                    } else {
+                        runCatching { Camera2CameraInfo.from(info).cameraId == id }.getOrDefault(false)
+                    }
+                }
+            }
+        }.getOrNull()
+    }
 
     /** 将画质索引映射为 CameraX Quality 常量 */
     private fun qualityConst(q: VideoQuality): androidx.camera.video.Quality = when (q.quality) {
