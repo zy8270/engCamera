@@ -190,7 +190,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     fun onEngineBound() {
         val e = engine ?: return
         val qualities = e.getSupportedVideoQualities()
-        val currentIdx = qualities.indexOfFirst { it.label == e.videoQuality.label }.coerceAtLeast(0)
+        val currentIdx = qualities.indexOfFirst { it.quality == e.videoQuality.quality }.coerceAtLeast(0)
         _ui.update { s ->
             s.copy(
                 lensLabels = e.backLenses.map { it.label },

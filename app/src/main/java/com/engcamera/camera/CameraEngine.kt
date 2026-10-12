@@ -71,28 +71,26 @@ class CameraEngine(
         videoCapture?.targetRotation = rotation
     }
 
-    /** 画质选项 */
-    data class VideoQuality(val label: String, val quality: Int)
+    /** 画质选项：label=实际分辨率，spec=录制规格简称（0.6.0 弃用"高清/超清"模糊描述） */
+    data class VideoQuality(val label: String, val spec: String, val quality: Int)
 
     /** 当前选中的录像画质（CameraX Quality 常量） */
     @Volatile
-    var videoQuality: VideoQuality = VideoQuality("高清", 1) // 1=HD
+    var videoQuality: VideoQuality = VideoQuality("1280×720", "720p", 1) // 1=HD
         set(value) {
             field = value
         }
 
-    /** 可选画质列表（标准档位，CameraX 自动匹配设备支持的最佳分辨率） */
+    /** 可选画质列表（实际分辨率，CameraX 按档位匹配设备支持的最佳尺寸） */
     fun getSupportedVideoQualities(): List<VideoQuality> = listOf(
-        VideoQuality("最高", 0),   // HIGHEST
-        VideoQuality("超清", 4),   // UHD 4K
-        VideoQuality("全高清", 3), // FHD 1080p
-        VideoQuality("高清", 1),   // HD 720p
-        VideoQuality("标清", 2),   // SD
+        VideoQuality("3840×2160", "2160p", 4), // UHD 4K
+        VideoQuality("1920×1080", "1080p", 3), // FHD
+        VideoQuality("1280×720", "720p", 1),   // HD
+        VideoQuality("720×480", "480p", 2),    // SD
     )
 
     /** 将画质索引映射为 CameraX Quality 常量 */
     private fun qualityConst(q: VideoQuality): androidx.camera.video.Quality = when (q.quality) {
-        0 -> androidx.camera.video.Quality.HIGHEST
         4 -> androidx.camera.video.Quality.UHD
         3 -> androidx.camera.video.Quality.FHD
         2 -> androidx.camera.video.Quality.SD

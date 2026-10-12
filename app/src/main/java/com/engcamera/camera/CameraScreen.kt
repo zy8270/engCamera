@@ -965,15 +965,23 @@ private fun BottomBar(
                         ui.videoQualities.forEachIndexed { idx, q ->
                             androidx.compose.material3.DropdownMenuItem(
                                 text = {
-                                    Text(
-                                        q.label,
-                                        // 跟随主题：暗色模式白字、亮色模式黑字，选中项用主题蓝
-                                        color = if (idx == ui.videoQualityIndex) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        },
-                                    )
+                                    // 实际分辨率 + 录制规格（0.6.0 弃用"高清/超清"模糊描述）
+                                    Column {
+                                        Text(
+                                            q.label,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (idx == ui.videoQualityIndex) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                        )
+                                        Text(
+                                            q.spec,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 },
                                 onClick = { vm.selectVideoQuality(idx) },
                             )
