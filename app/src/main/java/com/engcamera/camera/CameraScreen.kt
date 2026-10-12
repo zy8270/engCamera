@@ -98,17 +98,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.engcamera.data.ThemeMode
-import com.engcamera.ui.theme.ChromeAmber
 import com.engcamera.ui.theme.ChromeBadge
 import com.engcamera.ui.theme.ChromeBrand
 import com.engcamera.ui.theme.ChromeDanger
-import com.engcamera.ui.theme.ChromeDim
-import com.engcamera.ui.theme.ChromeHint
 import com.engcamera.ui.theme.ChromeIcon
 import com.engcamera.ui.theme.ChromeNeutral
 import com.engcamera.ui.theme.ChromeScrim
-import com.engcamera.ui.theme.ChromeSoft
-import com.engcamera.ui.theme.ChromeThumbBg
 import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkOverlay
 
@@ -128,12 +123,17 @@ fun CameraScreen(
     val dynamic by vm.dynamic.collectAsState()
     val ui by vm.ui.collectAsState()
 
-    // 取景器界面恒深色：状态栏/导航栏图标强制浅色（取景画面不可预测，浮层控件恒深色，
-    // 行业惯例不随应用主题切换）；离开相机页时由相册/编辑器按主题恢复
-    DisposableEffect(Unit) {
+    // 主界面跟随主题（0.6.0 用户拍板：日间浅色背景+深色快门按键）；系统栏图标随主题。
+    // 仅取景画面上的小浮层（镜头胶囊/录像角标/对焦圈/工程组快捷钮）保持深色半透明，
+    // 因为它们压在不可预测的实时画面上
+    val darkTheme = LocalAppDarkTheme.current
+    DisposableEffect(darkTheme) {
+        val style =
+            if (darkTheme) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
         (context as? ComponentActivity)?.enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            statusBarStyle = style,
+            navigationBarStyle = style,
         )
         onDispose { }
     }
@@ -210,28 +210,13 @@ fun CameraScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         if (!cameraGranted) {
             PermissionGate(onOpenSettings = ::openAppSettings)
         } else {
             var showSettings by remember { mutableStateOf(false) }
             var showProjectGroups by remember { mutableStateOf(false) }
-            // 设置抽屉是主题表面：日间模式下抽屉展开时状态栏图标转深色（否则白图标落在白抽屉上不可见），
-            // 关闭抽屉恢复取景器的浅色图标；夜间模式恒浅色图标
-            val darkTheme = LocalAppDarkTheme.current
-            DisposableEffect(showSettings, darkTheme) {
-                val style = if (showSettings && !darkTheme) {
-                    SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
-                } else {
-                    SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
-                }
-                (context as? ComponentActivity)?.enableEdgeToEdge(
-                    statusBarStyle = style,
-                    navigationBarStyle = style,
-                )
-                onDispose { }
-            }
             // 抽屉展开时返回键收起抽屉，而不是退出应用
             androidx.activity.compose.BackHandler(enabled = showSettings) { showSettings = false }
             val previewView = remember {
@@ -312,7 +297,11 @@ fun CameraScreen(
                                 else -> Icons.Default.FlashOff
                             },
                             contentDescription = "闪光灯",
-                            tint = if (ui.flashIndex == 0) Color.White else ChromeAmber,
+                            tint = if (ui.flashIndex == 0) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
                             modifier = Modifier.rotate(rot.toFloat()),
                         )
                     }
@@ -321,7 +310,7 @@ fun CameraScreen(
                         Icon(
                             Icons.Default.Settings,
                             contentDescription = "设置",
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.rotate(rot.toFloat()),
                         )
                     }
@@ -784,10 +773,10 @@ private fun AnnotateArea(
     onOpenEditor: () -> Unit,
     onPick: () -> Unit,
 ) {
-    Box(modifier.aspectRatio(3f / 4f).background(Color.Black)) {
+    Box(modifier.aspectRatio(3f / 4f).background(MaterialTheme.colorScheme.surfaceVariant)) {
         val item = ui.annotateQueue.getOrNull(ui.annotateIndex)
         if (item == null) {
-            // 空状态：黑屏 + 大圆圈 +，点击打开图片选择器
+            // 空状态：素色屏 + 大圆圈 +，点击打开图片选择器
             Column(
                 Modifier
                     .fillMaxSize()
@@ -799,13 +788,22 @@ private fun AnnotateArea(
                     Modifier
                         .size(96.dp)
                         .clip(CircleShape)
-                        .border(3.dp, Color.White, CircleShape),
+                        .border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("+", color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "+",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 44.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
                 Spacer(Modifier.height(14.dp))
-                Text("点击选择要加水印的图片", color = ChromeHint, fontSize = 13.sp)
+                Text(
+                    "点击选择要加水印的图片",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
             }
         } else {
             // 图片按原比例居中（等比缩放），水印浮层铺在图片实际显示区上（所见即所得）
@@ -894,11 +892,11 @@ private fun BottomBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活灰、激活白
+            // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活 onSurfaceVariant、激活主色
             Row(
                 Modifier
                     .clip(RoundedCornerShape(20.dp))
-                    .background(ChromeSoft),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
             ) {
                 IconButton(
                     onClick = { vm.toggleAnnotate() },
@@ -907,7 +905,11 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.Draw,
                         contentDescription = "给图片添加水印",
-                        tint = if (ui.annotating) Color.White else ChromeDim,
+                        tint = if (ui.annotating) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -918,7 +920,11 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.PhotoCamera,
                         contentDescription = "拍照模式",
-                        tint = if (!ui.annotating && !ui.videoMode) Color.White else ChromeDim,
+                        tint = if (!ui.annotating && !ui.videoMode) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -929,7 +935,11 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.Videocam,
                         contentDescription = "录像模式",
-                        tint = if (!ui.annotating && ui.videoMode) Color.White else ChromeDim,
+                        tint = if (!ui.annotating && ui.videoMode) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -939,11 +949,11 @@ private fun BottomBar(
                 Box {
                     Text(
                         text = ui.videoQualities.getOrNull(ui.videoQualityIndex)?.label ?: "画质",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(ChromeBadge)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
                             .clickable { vm.toggleQualityMenu() }
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     )
@@ -989,8 +999,8 @@ private fun BottomBar(
                     .size(52.dp)
                     .rotate(rot.toFloat())
                     .clip(RoundedCornerShape(10.dp))
-                    .background(ChromeThumbBg)
-                    .border(1.5.dp, Color.White, RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .border(1.5.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(10.dp))
                     .clickable { onOpenGallery() },
                 contentAlignment = Alignment.Center,
             ) {
@@ -1003,11 +1013,11 @@ private fun BottomBar(
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
-                    Icon(
-                        Icons.Default.PhotoCamera,
-                        contentDescription = "相册",
-                        tint = ChromeHint,
-                    )
+                        Icon(
+                            Icons.Default.PhotoCamera,
+                            contentDescription = "相册",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                 }
             }
 
@@ -1029,7 +1039,7 @@ private fun BottomBar(
                 Icon(
                     Icons.Default.Cameraswitch,
                     contentDescription = "前后摄切换",
-                    tint = Color.White,
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.rotate(rot.toFloat()),
                 )
             }
@@ -1053,7 +1063,8 @@ private fun Shutter(
             .background(if (ui.recording) Color(0x33FF5252) else Color.Transparent)
             .border(
                 width = 5.dp,
-                color = if (ui.recording) ChromeDanger else Color.White,
+                // 快门随主题：日间深色圈/芯、夜间浅色（用户拍板 2026-10-12）
+                color = if (ui.recording) ChromeDanger else MaterialTheme.colorScheme.onSurface,
                 shape = CircleShape,
             )
             .pointerInput(ui.videoMode, ui.recording, ui.annotating) {
@@ -1090,13 +1101,13 @@ private fun Shutter(
     ) {
         if (ui.annotating) {
             // 添加水印模式：快门变成"确认"
-            Text("确认", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("确认", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         } else if (!ui.recording) {
             Box(
                 Modifier
                     .size(58.dp)
                     .clip(CircleShape)
-                    .background(Color.White),
+                    .background(MaterialTheme.colorScheme.onSurface),
             )
         }
     }
@@ -1115,13 +1126,13 @@ private fun PermissionGate(onOpenSettings: () -> Unit) {
         Icon(
             Icons.Default.PhotoCamera,
             contentDescription = null,
-            tint = ChromeDim,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(56.dp),
         )
         Spacer(Modifier.height(16.dp))
         Text(
             "需要相机权限才能拍照\n请在系统设置中授权",
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(16.dp))
