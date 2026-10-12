@@ -20,6 +20,7 @@ import androidx.lifecycle.viewModelScope
 import com.engcamera.EngCameraApp
 import com.engcamera.data.DynamicValues
 import com.engcamera.data.FieldType
+import com.engcamera.data.ThemeMode
 import com.engcamera.data.WatermarkState
 import com.engcamera.scan.BarcodeAnalyzer
 import com.engcamera.sensor.GravitySensor
@@ -242,6 +243,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     val volumeShutter: StateFlow<Boolean> = container.repository.volumeShutter
 
     fun setVolumeShutter(value: Boolean) = container.repository.setVolumeShutter(value)
+
+    /** 外观主题：跟随系统 / 日间 / 夜间 */
+    val themeMode: StateFlow<ThemeMode> = container.repository.themeMode
+
+    fun setThemeMode(mode: ThemeMode) = container.repository.setThemeMode(mode)
 
     /** 水印宽度（当前工程样式，0.3~0.9，两位小数） */
     fun setWatermarkWidth(ratio: Float) = container.repository.update {

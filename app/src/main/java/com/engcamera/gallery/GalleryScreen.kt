@@ -6,8 +6,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.MediaStore
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -63,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -75,6 +79,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.runtime.DisposableEffect
 import coil.compose.AsyncImage
+import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.util.MediaSaver
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -96,6 +101,16 @@ fun GalleryScreen(
     val state by vm.state.collectAsState()
     val context = LocalContext.current
     val density = LocalDensity.current
+
+    // 系统栏图标对比度按当前主题（相机页强制浅色图标，进入本页恢复）
+    val darkTheme = LocalAppDarkTheme.current
+    DisposableEffect(darkTheme) {
+        val style =
+            if (darkTheme) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        (context as? ComponentActivity)?.enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+        onDispose { }
+    }
 
     // 存储读取权限（用户确认：相册浏览手机全部照片/视频）
     fun readPermissions(): Array<String> =
@@ -208,7 +223,7 @@ fun GalleryScreen(
     Column(
             Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(MaterialTheme.colorScheme.background)
                 .statusBarsPadding(),
         ) {
         // 顶部：返回、标题、多选状态、删除
@@ -219,25 +234,25 @@ fun GalleryScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
             }
             Column(Modifier.weight(1f)) {
                 Text(
                     if (state.selectionMode) "已选 ${state.selected.size} 项" else "照片与录像",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 if (!state.selectionMode) {
                     Text(
                         "共 ${entries.size} 项",
-                        color = Color(0xFFAAAAAA),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
             if (state.selectionMode) {
                 IconButton(onClick = { vm.clearSelection() }) {
-                    Icon(Icons.Default.Close, contentDescription = "取消多选", tint = Color.White)
+                    Icon(Icons.Default.Close, contentDescription = "取消多选", tint = MaterialTheme.colorScheme.onSurface)
                 }
                 IconButton(
                     onClick = { requestDelete() },
@@ -246,7 +261,11 @@ fun GalleryScreen(
                     Icon(
                         Icons.Default.Delete,
                         contentDescription = "删除选中项",
-                        tint = if (state.selected.isEmpty()) Color(0xFF666666) else Color(0xFFFF5252),
+                        tint = if (state.selected.isEmpty()) {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
                     )
                 }
             }
@@ -263,7 +282,7 @@ fun GalleryScreen(
             ) {
                 Text(
                     "浏览手机相册需要存储权限",
-                    color = Color(0xFFAAAAAA),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
                 Button(
@@ -285,10 +304,10 @@ fun GalleryScreen(
                 Icon(
                     Icons.Default.PhotoCamera,
                     contentDescription = null,
-                    tint = Color(0xFF666666),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp),
                 )
-                Text("相册里还没有照片\n去拍一张吧", color = Color(0xFFAAAAAA), textAlign = TextAlign.Center)
+                Text("相册里还没有照片\n去拍一张吧", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                 Button(onClick = onGoShoot, modifier = Modifier.padding(top = 16.dp)) {
                     Text("去拍照")
                 }
@@ -428,12 +447,13 @@ private fun MediaCell(
                     )
                 }
             } else {
-                // 未选中：白色空心圆
+                // 未选中：白色空心圆（带投影，浅色照片上也可见）
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(4.dp)
                         .size(24.dp)
+                        .shadow(2.dp, CircleShape)
                         .border(2.dp, Color.White, CircleShape),
                 )
             }

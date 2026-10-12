@@ -5,7 +5,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
@@ -94,6 +97,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.engcamera.data.ThemeMode
+import com.engcamera.ui.theme.ChromeAmber
+import com.engcamera.ui.theme.ChromeBadge
+import com.engcamera.ui.theme.ChromeBrand
+import com.engcamera.ui.theme.ChromeDanger
+import com.engcamera.ui.theme.ChromeDim
+import com.engcamera.ui.theme.ChromeHint
+import com.engcamera.ui.theme.ChromeIcon
+import com.engcamera.ui.theme.ChromeNeutral
+import com.engcamera.ui.theme.ChromeScrim
+import com.engcamera.ui.theme.ChromeSoft
+import com.engcamera.ui.theme.ChromeThumbBg
+import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkOverlay
 
 /**
@@ -111,6 +127,16 @@ fun CameraScreen(
     val effective by vm.effectiveWatermark.collectAsState()
     val dynamic by vm.dynamic.collectAsState()
     val ui by vm.ui.collectAsState()
+
+    // 取景器界面恒深色：状态栏/导航栏图标强制浅色（取景画面不可预测，浮层控件恒深色，
+    // 行业惯例不随应用主题切换）；离开相机页时由相册/编辑器按主题恢复
+    DisposableEffect(Unit) {
+        (context as? ComponentActivity)?.enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
+        onDispose { }
+    }
 
     var cameraGranted by remember {
         mutableStateOf(
@@ -191,6 +217,21 @@ fun CameraScreen(
         } else {
             var showSettings by remember { mutableStateOf(false) }
             var showProjectGroups by remember { mutableStateOf(false) }
+            // 设置抽屉是主题表面：日间模式下抽屉展开时状态栏图标转深色（否则白图标落在白抽屉上不可见），
+            // 关闭抽屉恢复取景器的浅色图标；夜间模式恒浅色图标
+            val darkTheme = LocalAppDarkTheme.current
+            DisposableEffect(showSettings, darkTheme) {
+                val style = if (showSettings && !darkTheme) {
+                    SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                } else {
+                    SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                }
+                (context as? ComponentActivity)?.enableEdgeToEdge(
+                    statusBarStyle = style,
+                    navigationBarStyle = style,
+                )
+                onDispose { }
+            }
             // 抽屉展开时返回键收起抽屉，而不是退出应用
             androidx.activity.compose.BackHandler(enabled = showSettings) { showSettings = false }
             val previewView = remember {
@@ -271,7 +312,7 @@ fun CameraScreen(
                                 else -> Icons.Default.FlashOff
                             },
                             contentDescription = "闪光灯",
-                            tint = if (ui.flashIndex == 0) Color.White else Color(0xFFFFD54F),
+                            tint = if (ui.flashIndex == 0) Color.White else ChromeAmber,
                             modifier = Modifier.rotate(rot.toFloat()),
                         )
                     }
@@ -367,6 +408,7 @@ private fun SettingsDrawer(
     val shutterSound by vm.shutterSound.collectAsState()
     val volumeShutter by vm.volumeShutter.collectAsState()
     val watermark by vm.watermark.collectAsState()
+    val themeMode by vm.themeMode.collectAsState()
     Box(Modifier.fillMaxSize()) {
         // 遮罩独立渐变（不随抽屉位移），由明到暗淡入
         AnimatedVisibility(
@@ -378,7 +420,7 @@ private fun SettingsDrawer(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) { detectTapGestures { onDismiss() } }
-                    .background(Color(0x88000000)),
+                    .background(ChromeScrim),
             )
         }
         AnimatedVisibility(
@@ -408,6 +450,24 @@ private fun SettingsDrawer(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.height(20.dp))
+
+                // 外观：跟随系统 / 日间 / 夜间（0.6.0 新增，DataStore 持久化）
+                Text(
+                    "外观",
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "日间/夜间模式，或跟随系统",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                ThemeModeSelector(
+                    selected = themeMode,
+                    onSelect = { vm.setThemeMode(it) },
+                )
+                Spacer(Modifier.height(16.dp))
 
                 Row(
                     Modifier.fillMaxWidth(),
@@ -553,13 +613,13 @@ private fun SettingsDrawer(
                 }
 
                 // 署名固定置底（不随设置内容滚动；发布日期随版本更新）
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = Color(0xFF3A3A40))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 // versionCode 运行时读取（发布日期随版本手更）
                 val versionCode = runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                 }.getOrDefault(0L)
                 Text(
-                    "Rnzhy 2026.10.11 $versionCode engCamera MIT",
+                    "Rnzhy 2026.10.12 $versionCode engCamera MIT",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -621,14 +681,14 @@ private fun PreviewArea(
                 .padding(10.dp)
                 .size(44.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0x66808080))
+                .background(ChromeNeutral)
                 .clickable { onOpenProjectGroups() },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 Icons.Default.SwapHoriz,
                 contentDescription = "工程组快捷切换",
-                tint = Color(0xCCFFFFFF),
+                tint = ChromeIcon,
                 modifier = Modifier
                     .size(26.dp)
                     .rotate(rot.toFloat()),
@@ -651,7 +711,7 @@ private fun PreviewArea(
                         modifier = Modifier
                             .rotate(rot.toFloat())
                             .clip(CircleShape)
-                            .background(if (selected) Color.White else Color(0x66000000))
+                            .background(if (selected) Color.White else ChromeBadge)
                             .clickable { vm.selectLens(index) }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
@@ -666,7 +726,7 @@ private fun PreviewArea(
                     .padding(12.dp)
                     .rotate(rot.toFloat())
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0x66000000))
+                    .background(ChromeBadge)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -674,7 +734,7 @@ private fun PreviewArea(
                     Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFFF5252)),
+                        .background(ChromeDanger),
                 )
                 Spacer(Modifier.width(6.dp))
                 Text("${ui.recordingSeconds}s", color = Color.White)
@@ -745,7 +805,7 @@ private fun AnnotateArea(
                     Text("+", color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(14.dp))
-                Text("点击选择要加水印的图片", color = Color(0xFF999999), fontSize = 13.sp)
+                Text("点击选择要加水印的图片", color = ChromeHint, fontSize = 13.sp)
             }
         } else {
             // 图片按原比例居中（等比缩放），水印浮层铺在图片实际显示区上（所见即所得）
@@ -786,7 +846,7 @@ private fun AnnotateArea(
                     .align(Alignment.TopCenter)
                     .padding(top = 10.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x66000000))
+                    .background(ChromeBadge)
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
@@ -814,7 +874,7 @@ private fun BottomBar(
         if (ui.bubble != null) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = Color(0xCC1D4E89),
+                color = ChromeBrand,
             ) {
                 Text(
                     "识别到二维码：${ui.bubble}",
@@ -838,7 +898,7 @@ private fun BottomBar(
             Row(
                 Modifier
                     .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0x33000000)),
+                    .background(ChromeSoft),
             ) {
                 IconButton(
                     onClick = { vm.toggleAnnotate() },
@@ -847,7 +907,7 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.Draw,
                         contentDescription = "给图片添加水印",
-                        tint = if (ui.annotating) Color.White else Color(0xFF888888),
+                        tint = if (ui.annotating) Color.White else ChromeDim,
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -858,7 +918,7 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.PhotoCamera,
                         contentDescription = "拍照模式",
-                        tint = if (!ui.annotating && !ui.videoMode) Color.White else Color(0xFF888888),
+                        tint = if (!ui.annotating && !ui.videoMode) Color.White else ChromeDim,
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -869,7 +929,7 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.Videocam,
                         contentDescription = "录像模式",
-                        tint = if (!ui.annotating && ui.videoMode) Color.White else Color(0xFF888888),
+                        tint = if (!ui.annotating && ui.videoMode) Color.White else ChromeDim,
                         modifier = Modifier.rotate(rot.toFloat()),
                     )
                 }
@@ -883,7 +943,7 @@ private fun BottomBar(
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0x66000000))
+                            .background(ChromeBadge)
                             .clickable { vm.toggleQualityMenu() }
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     )
@@ -929,7 +989,7 @@ private fun BottomBar(
                     .size(52.dp)
                     .rotate(rot.toFloat())
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF333333))
+                    .background(ChromeThumbBg)
                     .border(1.5.dp, Color.White, RoundedCornerShape(10.dp))
                     .clickable { onOpenGallery() },
                 contentAlignment = Alignment.Center,
@@ -946,7 +1006,7 @@ private fun BottomBar(
                     Icon(
                         Icons.Default.PhotoCamera,
                         contentDescription = "相册",
-                        tint = Color(0xFF999999),
+                        tint = ChromeHint,
                     )
                 }
             }
@@ -993,7 +1053,7 @@ private fun Shutter(
             .background(if (ui.recording) Color(0x33FF5252) else Color.Transparent)
             .border(
                 width = 5.dp,
-                color = if (ui.recording) Color(0xFFFF5252) else Color.White,
+                color = if (ui.recording) ChromeDanger else Color.White,
                 shape = CircleShape,
             )
             .pointerInput(ui.videoMode, ui.recording, ui.annotating) {
@@ -1055,7 +1115,7 @@ private fun PermissionGate(onOpenSettings: () -> Unit) {
         Icon(
             Icons.Default.PhotoCamera,
             contentDescription = null,
-            tint = Color(0xFF888888),
+            tint = ChromeDim,
             modifier = Modifier.size(56.dp),
         )
         Spacer(Modifier.height(16.dp))
@@ -1076,6 +1136,48 @@ private fun PermissionGate(onOpenSettings: () -> Unit) {
                 "去设置",
                 color = Color.White,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+            )
+        }
+    }
+}
+
+/** 外观切换：三段式分段控件（跟随系统/日间/夜间），选中段用主色浮起 */
+@Composable
+private fun ThemeModeSelector(
+    selected: ThemeMode,
+    onSelect: (ThemeMode) -> Unit,
+) {
+    val options = listOf(
+        ThemeMode.SYSTEM to "跟随系统",
+        ThemeMode.LIGHT to "日间",
+        ThemeMode.DARK to "夜间",
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        options.forEach { (mode, label) ->
+            val active = mode == selected
+            Text(
+                label,
+                fontSize = 13.sp,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                color = if (active) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { onSelect(mode) }
+                    .padding(vertical = 9.dp),
             )
         }
     }

@@ -37,6 +37,7 @@ class WatermarkRepository(private val context: Context) {
     private val projectsKey = stringPreferencesKey("projects_v1")
     private val shutterSoundKey = booleanPreferencesKey("shutter_sound")
     private val volumeShutterKey = booleanPreferencesKey("volume_shutter")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -60,6 +61,10 @@ class WatermarkRepository(private val context: Context) {
     private val _volumeShutter = MutableStateFlow(true)
     val volumeShutter: StateFlow<Boolean> = _volumeShutter.asStateFlow()
 
+    /** 外观主题：跟随系统 / 日间 / 夜间（默认跟随系统） */
+    private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
     /** 工程组：多份水印配置快速切换；current 的 state 始终等于 state 流 */
     private val _projects = MutableStateFlow(ProjectGroups())
     val projects: StateFlow<ProjectGroups> = _projects.asStateFlow()
@@ -80,6 +85,9 @@ class WatermarkRepository(private val context: Context) {
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
             _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
+            _themeMode.value = context.appDataStore.data.first()[themeModeKey]
+                ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
+                ?: ThemeMode.SYSTEM
             // 一次性迁移：计数默认关闭（2026-10-11）——已有状态里的计数也关一次，用户可再手动开
             if (context.appDataStore.data.first()[booleanPreferencesKey("count_default_off_migrated")] != true) {
                 _state.value = _state.value.copy(
@@ -257,6 +265,13 @@ class WatermarkRepository(private val context: Context) {
         _saveOriginal.value = value
         scope.launch {
             context.appDataStore.edit { it[saveOriginalKey] = value }
+        }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        scope.launch {
+            context.appDataStore.edit { it[themeModeKey] = mode.name }
         }
     }
 
