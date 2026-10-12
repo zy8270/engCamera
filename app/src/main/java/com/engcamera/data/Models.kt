@@ -44,8 +44,12 @@ data class WatermarkStyle(
     val bgOpacity: Int = 100,                 // 背景不透明度百分比（0-100）
     val recDot: Boolean = true,               // 记录点（经典模板标题条左侧的录制指示灯，默认开）
     val recDotColor: Long = 0xFFFFC107L,      // 记录点颜色（默认金色）
-    val recDotSize: Float = 1f,               // 记录点大小倍数（1=标准，可调）
+    val recDotSize: Float = 1.2f,             // 记录点大小倍数（120% 经用户拍板最美观，可调）
     val recGlow: Float = 0f,                  // 光晕大小（0=不画，1=记录点半径）
+    val recDotOffset: Float = 0.02f,          // 记录点额外左边距（相对水印块宽度比例，默认 2%）
+    val borderWidth: Float = 1f,              // 边框卡片：边框粗细倍数（1=标准线宽）
+    val gradientColor: Long = 0xFF000000L,    // 渐变底栏：渐变基色（顶部透明→底部此色）
+    val webScale: Float = 0.8f,               // 网页模板整体缩放（1=模板原始大小，默认 0.8 防超屏幕宽）
 )
 
 /** 水印整体状态（对应计划书 6.3） */

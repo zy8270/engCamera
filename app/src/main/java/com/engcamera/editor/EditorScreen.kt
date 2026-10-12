@@ -77,6 +77,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.engcamera.data.FieldType
@@ -200,10 +201,20 @@ fun EditorScreen(onBack: () -> Unit) {
                     val block = remember(state, effDynamic, widthPx, webTick) {
                         WatermarkRenderer.render(state, widthPx, effDynamic)
                     }
+                    // 网页位图按固定宽渲染，这里缩放到画面宽 × webScale 显示（与成片一致）
+                    var dw = block.width
+                    var dh = block.height
+                    if (isWeb && block.width > 1 && widthPx > 0) {
+                        val f = com.engcamera.watermark.WebTemplateRenderer.webDrawFraction(state) * widthPx / block.width
+                        dw = (block.width * f).roundToInt().coerceAtLeast(1)
+                        dh = (block.height * f).roundToInt().coerceAtLeast(1)
+                    }
                     Image(
                         bitmap = block.bitmap.asImageBitmap(),
                         contentDescription = "水印预览",
-                        modifier = Modifier.graphicsLayer { rotationZ = rotationDeg },
+                        modifier = Modifier
+                            .requiredSize(with(LocalDensity.current) { dw.toDp() }, with(LocalDensity.current) { dh.toDp() })
+                            .graphicsLayer { rotationZ = rotationDeg },
                     )
                     // 魔法棒：预览窗右下角（与整块预览同入口，按钮保留备用）
                     Box(

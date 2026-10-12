@@ -428,6 +428,7 @@ class WatermarkRepository(private val context: Context) {
                 html = trimmed,
                 fields = defs,
                 options = listOf(
+                    TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 1.5f),
                     TemplateOptionDef("bgOpacity", "面板不透明度", "slider", 10f, 100f),
                     TemplateOptionDef("accentColor", "强调色", "color"),
                 ),

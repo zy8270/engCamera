@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -67,10 +68,18 @@ fun WatermarkOverlay(
 
         // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
         // 若作为 key 会导致每帧重建位图，拖动卡顿）
-        val block = remember(state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, webTick) {
+        val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
+        val block = remember(state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, rotationDeg, webTick) {
             if (widthPx > 0) {
-                val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
-                WatermarkRenderer.render(state, scaleBasis, effDynamic)
+                // 渐变底栏拉满模式：块宽覆盖当前旋转方向上的画面整边（横屏=高边）
+                val fullBar = WatermarkRenderer.isFullWidthBar(state)
+                val override = if (fullBar) {
+                    val vertical = ((rotationDeg.roundToInt() % 180 + 180) % 180) == 90
+                    if (vertical) heightPx else widthPx
+                } else {
+                    null
+                }
+                WatermarkRenderer.render(state, scaleBasis, effDynamic, blockWidthOverride = override)
             } else {
                 null
             }
@@ -144,17 +153,27 @@ fun WatermarkOverlay(
                     )
                 }
             } else if (block != null) {
+            // 网页位图按固定宽渲染，这里缩放到画面宽 × webScale 显示（与成片一致）
+            var dw = block.width
+            var dh = block.height
+            if (isWeb && block.width > 1 && scaleBasis > 0) {
+                val f = WebTemplateRenderer.webDrawFraction(state) * scaleBasis / block.width
+                dw = (block.width * f).roundToInt().coerceAtLeast(1)
+                dh = (block.height * f).roundToInt().coerceAtLeast(1)
+            }
             val (left, top) = WatermarkRenderer.positionBlock(
                 widthPx, heightPx,
-                block.width, block.height,
+                dw, dh,
                 state.anchorX, state.anchorY,
                 rotationDeg,
+                edgeToEdge = WatermarkRenderer.isFullWidthBar(state),
             )
             Image(
                 bitmap = block.bitmap.asImageBitmap(),
                 contentDescription = "水印",
                 modifier = Modifier
                     .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
+                    .requiredSize(with(density) { dw.toDp() }, with(density) { dh.toDp() })
                     .graphicsLayer { rotationZ = rotationDeg }
                     // 单一手势源：位移超 slop 即拖动（本地增量按旋转角转回屏幕系，跟手方向不变），
                     // 未拖动抬手视为点击进入编辑器。避免 tap/drag 双检测器在旋转层互相干扰。

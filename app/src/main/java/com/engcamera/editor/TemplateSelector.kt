@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import com.engcamera.data.DynamicValues
 import com.engcamera.data.FieldType
 import com.engcamera.data.TemplateBackend
+import com.engcamera.data.TemplateOptionDef
 import com.engcamera.data.TemplatePresets
 import com.engcamera.data.WatermarkField
 import com.engcamera.data.WatermarkState
@@ -425,6 +426,8 @@ private fun styleColor(key: String, style: WatermarkStyle): Long = when (key) {
     "bodyBgColor" -> style.bodyBgColor
     "bodyTextColor" -> style.bodyTextColor
     "borderColor" -> style.borderColor
+    "recDotColor" -> style.recDotColor
+    "gradientColor" -> style.gradientColor
     else -> 0xFF000000L
 }
 
@@ -467,62 +470,96 @@ fun TemplateOptionsCard(
             }
             androidx.compose.animation.AnimatedVisibility(visible = expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                    // 记录点四个子选项（大小/左边距/光晕/颜色）不单独平铺，收进"记录点"组内嵌套渲染
+                    val recSubKeys = setOf("recDotSize", "recDotOffset", "recGlow", "recDotColor")
+                    var recGroupOpen by remember(template.id) { mutableStateOf(false) }
                     template.options.forEach { opt ->
-                        // 记录点关闭时联动隐藏其颜色项
-                        if (opt.key == "recDotColor" && !style.recDot) return@forEach
-                        when (opt.kind) {
-                            "switch" -> {
-                                val current = when (opt.key) {
-                                    "recDot" -> style.recDot
-                                    else -> false
-                                }
+                        when {
+                            opt.key in recSubKeys -> Unit
+                            opt.key == "recDot" -> {
                                 Row(
-                                    Modifier
-                                        .fillMaxWidth(),
+                                    Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(
-                                        opt.label,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                                    // 点标签/箭头展开收起子设置；开关独立在右侧只管开关
+                                    Row(
+                                        Modifier
+                                            .weight(1f)
+                                            .clickable { recGroupOpen = !recGroupOpen }
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            opt.label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Icon(
+                                            if (recGroupOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                            contentDescription = if (recGroupOpen) "收起记录点设置" else "展开记录点设置",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
                                     Switch(
-                                        checked = current,
+                                        checked = style.recDot,
                                         onCheckedChange = { onSwitch(opt.key, it) },
                                     )
                                 }
+                                androidx.compose.animation.AnimatedVisibility(visible = recGroupOpen) {
+                                    Column(Modifier.padding(start = 12.dp)) {
+                                        template.options.firstOrNull { it.key == "recDotSize" }
+                                            ?.let { SliderOptionRow(it, style, onScalar) }
+                                        template.options.firstOrNull { it.key == "recDotOffset" }
+                                            ?.let { SliderOptionRow(it, style, onScalar) }
+                                        template.options.firstOrNull { it.key == "recGlow" }
+                                            ?.let { SliderOptionRow(it, style, onScalar) }
+                                        template.options.firstOrNull { it.key == "recDotColor" }
+                                            ?.let { colorOpt ->
+                                                ColorOptionRow(
+                                                    label = colorOpt.label,
+                                                    current = styleColor(colorOpt.key, style),
+                                                    original = styleColor(colorOpt.key, template.style),
+                                                    isBackground = false,
+                                                    onColor = { onColor(colorOpt.key, it) },
+                                                )
+                                            }
+                                    }
+                                }
                             }
-                            "color" -> ColorOptionRow(
-                                label = opt.label,
-                                current = styleColor(opt.key, style),
-                                original = styleColor(opt.key, template.style),
-                                // 背景色预设点选默认 50% 半透明；文字色预设不透明（用户拍板 2026-10-12）
-                                isBackground = opt.key.endsWith("BgColor"),
-                                onColor = { onColor(opt.key, it) },
-                            )
-                            else -> {
-                                val current = when (opt.key) {
-                                    "bgOpacity" -> style.bgOpacity.toFloat()
-                                    "cornerRatio" -> style.cornerRatio
-                                    "maxWidthRatio" -> style.maxWidthRatio
-                                    else -> opt.min
+                            else -> when (opt.kind) {
+                                "switch" -> {
+                                    val current = when (opt.key) {
+                                        "recDot" -> style.recDot
+                                        else -> false
+                                    }
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            opt.label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Switch(
+                                            checked = current,
+                                            onCheckedChange = { onSwitch(opt.key, it) },
+                                        )
+                                    }
                                 }
-                                // 比例类选项按百分比显示
-                                val display = when (opt.key) {
-                                    "bgOpacity" -> "${current.roundToInt()}"
-                                    else -> "${(current * 100).roundToInt()}%"
-                                }
-                                Text(
-                                    "${opt.label} $display",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                "color" -> ColorOptionRow(
+                                    label = opt.label,
+                                    current = styleColor(opt.key, style),
+                                    original = styleColor(opt.key, template.style),
+                                    // 背景色预设点选默认 50% 半透明；文字色预设不透明（用户拍板 2026-10-12）
+                                    isBackground = opt.key.endsWith("BgColor"),
+                                    onColor = { onColor(opt.key, it) },
                                 )
-                                Slider(
-                                    value = current.coerceIn(opt.min, opt.max),
-                                    onValueChange = { onScalar(opt.key, it) },
-                                    valueRange = opt.min..opt.max,
-                                )
+                                else -> SliderOptionRow(opt, style, onScalar)
                             }
                         }
                         Spacer(Modifier.height(6.dp))
@@ -542,6 +579,42 @@ fun TemplateOptionsCard(
             )
         }
     }
+}
+
+/** 数值选项行：标签+百分比值 + 滑杆（值映射自 WatermarkStyle 对应字段） */
+@Composable
+private fun SliderOptionRow(
+    opt: TemplateOptionDef,
+    style: WatermarkStyle,
+    onScalar: (String, Float) -> Unit,
+) {
+    val current = when (opt.key) {
+        "bgOpacity" -> style.bgOpacity.toFloat()
+        "cornerRatio" -> style.cornerRatio
+        "maxWidthRatio" -> style.maxWidthRatio
+        "recDotSize" -> style.recDotSize
+        "recDotOffset" -> style.recDotOffset
+        "recGlow" -> style.recGlow
+        "borderWidth" -> style.borderWidth
+        "webScale" -> style.webScale
+        else -> opt.min
+    }
+    val display = when (opt.key) {
+        "bgOpacity" -> "${current.roundToInt()}"
+        // 倍率类（边框粗细/记录点大小/网页整体缩放）按 ×N 显示
+        "borderWidth", "recDotSize", "webScale" -> "×" + "%.1f".format(current)
+        else -> "${(current * 100).roundToInt()}%"
+    }
+    Text(
+        "${opt.label} $display",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Slider(
+        value = current.coerceIn(opt.min, opt.max),
+        onValueChange = { onScalar(opt.key, it) },
+        valueRange = opt.min..opt.max,
+    )
 }
 
 /** 颜色选项行：首格=模板原始颜色重置（背景填原始色+刷新图标）；预设圆圈（背景 50% 半透明/文字不透明）+ 彩虹圆圈（自由取色 RGBA） */

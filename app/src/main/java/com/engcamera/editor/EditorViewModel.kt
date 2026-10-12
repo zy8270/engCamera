@@ -58,10 +58,12 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         val st = when (key) {
             "accentColor" -> s.style.copy(accentColor = color)
             "titleBgColor" -> s.style.copy(titleBgColor = color)
+            "titleTextColor" -> s.style.copy(titleTextColor = color)
             "bodyBgColor" -> s.style.copy(bodyBgColor = color)
             "bodyTextColor" -> s.style.copy(bodyTextColor = color)
             "borderColor" -> s.style.copy(borderColor = color)
             "recDotColor" -> s.style.copy(recDotColor = color)
+            "gradientColor" -> s.style.copy(gradientColor = color)
             else -> s.style
         }
         s.copy(style = st)
@@ -81,9 +83,13 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         val st = when (key) {
             "bgOpacity" -> s.style.copy(bgOpacity = value.toInt().coerceIn(0, 100))
             "cornerRatio" -> s.style.copy(cornerRatio = value)
-            "maxWidthRatio" -> s.style.copy(maxWidthRatio = value.coerceIn(0.3f, 0.9f))
+            // 上限 1.0：渐变底栏拉满整张照片宽度（其他模板滑杆最大 0.9）
+            "maxWidthRatio" -> s.style.copy(maxWidthRatio = value.coerceIn(0.3f, 1f))
             "recDotSize" -> s.style.copy(recDotSize = value)
+            "recDotOffset" -> s.style.copy(recDotOffset = value)
             "recGlow" -> s.style.copy(recGlow = value)
+            "borderWidth" -> s.style.copy(borderWidth = value)
+            "webScale" -> s.style.copy(webScale = value)
             else -> s.style
         }
         s.copy(style = st)
