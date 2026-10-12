@@ -11,7 +11,10 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -54,8 +57,7 @@ object MediaSaver {
         treeUri: Uri? = null,
     ): Uri = withContext(Dispatchers.IO) {
         if (treeUri != null) {
-            // 用户自选目录（SAF）：SAF 写入无 DATE_TAKEN，相册按文件时间排序
-            return@withContext saveToTree(context, treeUri, "image/jpeg") { out ->
+            return@withContext saveToTree(context, treeUri, "image/jpeg", takenAtMs) { out ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
             }
         }
@@ -89,7 +91,7 @@ object MediaSaver {
         treeUri: Uri? = null,
     ): Uri = withContext(Dispatchers.IO) {
         if (treeUri != null) {
-            val doc = saveToTree(context, treeUri, "video/mp4") { out ->
+            val doc = saveToTree(context, treeUri, "video/mp4", takenAtMs) { out ->
                 src.inputStream().use { it.copyTo(out) }
             }
             src.delete()
@@ -124,6 +126,7 @@ object MediaSaver {
         context: Context,
         treeUri: Uri,
         mime: String,
+        takenAtMs: Long?,
         write: (java.io.OutputStream) -> Unit,
     ): Uri = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
@@ -134,8 +137,27 @@ object MediaSaver {
         val doc = DocumentsContract.createDocument(resolver, treeDoc, mime, timeStampName(mime.substringAfterLast('/')))
             ?: error("无法在所选目录创建文件")
         resolver.openOutputStream(doc)?.use { out -> write(out) } ?: error("无法写入所选目录")
-        MediaScannerConnection.scanFile(context, arrayOf(doc.toString()), arrayOf(mime), null)
-        doc
+        // 等媒体扫描完成拿到 MediaStore Uri（缩略图/相册立即可见）；3 秒超时回退 document uri
+        val mediaUri = withTimeoutOrNull(3000) {
+            suspendCancellableCoroutine { cont ->
+                MediaScannerConnection.scanFile(context, arrayOf(doc.toString()), arrayOf(mime)) { _, u ->
+                    if (cont.isActive) cont.resume(u)
+                }
+            }
+        }
+        val finalUri = mediaUri ?: doc
+        // 尽力补写拍摄时间（SAF 文件 owner 是系统组件，可能被拒，失败不影响保存）
+        if (takenAtMs != null) {
+            runCatching {
+                resolver.update(
+                    finalUri,
+                    ContentValues().apply { put(MediaStore.MediaColumns.DATE_TAKEN, takenAtMs) },
+                    null,
+                    null,
+                )
+            }
+        }
+        finalUri
     }
 
     /** 查询本 App 拍摄的照片+录像，按添加时间倒序 */
@@ -160,10 +182,12 @@ object MediaSaver {
             val selection: String?
             val args: Array<String>?
             if (ownOnly) {
+                // 自定义保存目录（SAF）的文件不在 DCIM/Camera：名字前缀 engCamera_ 即算本应用拍摄
                 if (Build.VERSION.SDK_INT >= 29) {
                     selection =
-                        "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"
-                    args = arrayOf(RELATIVE_DIR, "$FILE_PREFIX%")
+                        "(${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?)" +
+                            " OR ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"
+                    args = arrayOf(RELATIVE_DIR, "$FILE_PREFIX%", "$FILE_PREFIX%")
                 } else {
                     selection = "${MediaStore.MediaColumns.DATA} LIKE ?"
                     args = arrayOf("%${RELATIVE_DIR}$FILE_PREFIX%")

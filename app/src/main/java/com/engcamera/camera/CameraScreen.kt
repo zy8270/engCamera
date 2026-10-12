@@ -82,6 +82,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -1134,9 +1135,16 @@ private fun Shutter(
     modifier: Modifier = Modifier,
 ) {
     val quickRecording = remember { mutableStateOf(false) }
+    // 保存处理中：快门缩小表示"正在处理"，完成恢复（自定义目录保存有扫描等待，需要可见反馈）
+    val shutterScale by animateFloatAsState(
+        targetValue = if (ui.capturing) 0.82f else 1f,
+        animationSpec = tween(150),
+        label = "shutterScale",
+    )
     Box(
         modifier
             .size(78.dp)
+            .scale(shutterScale)
             .clip(CircleShape)
             .background(if (ui.recording) Color(0x33FF5252) else Color.Transparent)
             .border(
