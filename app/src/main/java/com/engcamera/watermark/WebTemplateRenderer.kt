@@ -31,6 +31,19 @@ import kotlin.math.roundToInt
 @SuppressLint("SetJavaScriptEnabled")
 object WebTemplateRenderer {
 
+    /**
+     * 网页位图固定渲染宽（px）：任何调用方（预览/成片/缩略图）共用同一份缓存，
+     * 绘制时按 webScale 等比缩放到目标尺寸——CSS 内容比例在所有场景一致。
+     */
+    private const val RENDER_WIDTH = 1440
+
+    /** 网页块绘制宽 = 画面宽度 × 该比例（整体缩放滑杆的基准系数，默认 webScale 0.8 → 40% 画面宽） */
+    private const val BASE_WIDTH_FRACTION = 0.5f
+
+    /** 网页模板的绘制缩放：块宽目标 = 目标画布宽 × 返回值 */
+    fun webDrawFraction(state: WatermarkState): Float =
+        BASE_WIDTH_FRACTION * state.style.webScale.coerceIn(0.3f, 2f)
+
     private val _tick = MutableStateFlow(0L)
 
     /** 渲染完成通知（自增 tick，预览层收集它触发重组取新缓存） */
@@ -63,20 +76,29 @@ object WebTemplateRenderer {
     private val queue = ArrayDeque<QueuedJob>()
     private var loading = false
 
+    /** 最近一次调用方的 context（弱引用防泄漏）：成片烧录线程补渲时复用（WebView 已建则不再需要 Activity） */
+    @Volatile
+    private var lastContextRef: java.lang.ref.WeakReference<Context>? = null
+
     fun cacheKey(
         state: WatermarkState,
         template: WatermarkTemplate,
         dynamic: DynamicValues,
         widthPx: Int,
     ): String {
+        // 位图固定宽渲染：忽略调用方宽度，预览/成片/缩略图共享同一份缓存
         val values = FieldType.entries.joinToString("|") {
             TemplateHtml.valueOf(it, it.name, state, dynamic)
         }
+        // 字段开关状态必须进键：开关变化即使文本值不变也要触发重渲（否则开关"不生效"）
+        val flags = state.fields.joinToString(",") { it.type.name + if (it.enabled) "1" else "0" }
         return ((template.html ?: "").hashCode().toString(16) +
             "|" + values.hashCode().toString(16) +
-            "|" + widthPx +
+            "|" + flags.hashCode().toString(16) +
+            "|" + RENDER_WIDTH +
             "|" + state.style.bgOpacity +
-            "|" + state.style.accentColor)
+            "|" + state.style.accentColor +
+            "|" + state.style.webScale)
     }
 
     /** 预览层专用：时间截断到分钟，避免预览每秒触发一次 WebView 重渲（成片烧录用真实时间，不受影响） */
@@ -96,6 +118,25 @@ object WebTemplateRenderer {
         return current(key)
     }
 
+    /**
+     * 烧录线程专用补渲：预览渲的是预览宽，成片按成片宽取缓存必然 miss——
+     * 在此用最近记录的 context 发起渲染并阻塞等待（WebView 渲染跑在主线程，烧录线程可安全等待）。
+     * 没有可用 context（预览从未渲过且 Activity 已不在）直接返回，由调用方走兜底。
+     */
+    fun warmBlocking(
+        key: String,
+        template: WatermarkTemplate,
+        state: WatermarkState,
+        dynamic: DynamicValues,
+        widthPx: Int,
+    ) {
+        if (current(key) != null) return
+        val ctx = lastContextRef?.get() ?: return
+        val latch = java.util.concurrent.CountDownLatch(1)
+        warmAsync(ctx, key, template, state, dynamic, widthPx) { latch.countDown() }
+        latch.await(6, TimeUnit.SECONDS)
+    }
+
     /** 入队渲染；同 key 已在飞/在队则挂等既有任务。onDone 在完成线程回调（可能 null=失败） */
     fun warmAsync(
         context: Context,
@@ -107,6 +148,7 @@ object WebTemplateRenderer {
         onDone: ((Bitmap?) -> Unit)? = null,
     ) {
         current(key)?.let { onDone?.invoke(it); return }
+        lastContextRef = java.lang.ref.WeakReference(context)
         val html = TemplateHtml.buildDocument(template, state, dynamic)
         if (html == null) {
             onDone?.invoke(null)
@@ -125,7 +167,7 @@ object WebTemplateRenderer {
         }
         synchronized(queue) {
             queue.removeAll { it.key == key }
-            queue.addLast(QueuedJob(context, key, html, widthPx, future))
+            queue.addLast(QueuedJob(context, key, html, RENDER_WIDTH, future))
             drainLocked(context)
         }
     }
