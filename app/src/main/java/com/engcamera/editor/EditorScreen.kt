@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -435,6 +436,22 @@ private fun EditFieldDialog(
     var isTitle by remember(field) { mutableStateOf(field.isTitle) }
     // 时间字段手动值二次确认：非空时间会定格后续所有拍照，防误触（预填值+随手点确定）
     var confirmTimeFreeze by remember(field) { mutableStateOf(false) }
+    // 刷新定位/天气后，输入框跟随最新自动值——仅对话框本地状态：
+    // 点"确定"才写入字段（进入自定义），点"取消"不留任何痕迹；一打字即停止跟随
+    var followLocation by remember(field) { mutableStateOf(false) }
+    var followWeather by remember(field) { mutableStateOf(false) }
+    LaunchedEffect(followLocation, autoLocation) {
+        if (followLocation) {
+            autoLocation.takeIf {
+                it.isNotBlank() && !it.startsWith("未获取") && it != "定位中…"
+            }?.let { value = it }
+        }
+    }
+    LaunchedEffect(followWeather, autoWeather) {
+        if (followWeather && autoWeather.isNotBlank()) {
+            value = autoWeather
+        }
+    }
     val isCount = field.type == FieldType.COUNT
     val isLocation = field.type == FieldType.LOCATION
     val isDateTime = field.type == FieldType.DATETIME
@@ -449,8 +466,10 @@ private fun EditFieldDialog(
                 OutlinedTextField(
                     value = value,
                     onValueChange = { v ->
-                        // 计数只允许纯数字
+                        // 计数只允许纯数字；手动输入即停止跟随刷新值
                         value = if (isCount) v.filter { it.isDigit() }.take(6) else v
+                        followLocation = false
+                        followWeather = false
                     },
                     label = {
                         Text(
@@ -475,7 +494,10 @@ private fun EditFieldDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(onClick = onRefreshWeather) {
+                    TextButton(onClick = {
+                        followWeather = true
+                        onRefreshWeather()
+                    }) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("刷新天气")
@@ -487,7 +509,10 @@ private fun EditFieldDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(onClick = onRefreshLocation) {
+                    TextButton(onClick = {
+                        followLocation = true
+                        onRefreshLocation()
+                    }) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("刷新定位")
