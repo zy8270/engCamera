@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -406,9 +407,9 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
     }
 }
 
-/** 统一预设色板：黑 白 蓝 黄 绿 红 紫（点选保留当前透明度）；彩虹圆圈进入自由取色（RGBA） */
+/** 统一预设色板：黑 白 蓝 黄 绿 红（点选：背景 50% 半透明/文字不透明）；首格为模板原始颜色重置；彩虹圆圈自由取色 */
 private val PRESET_COLORS = listOf(
-    0xFF000000L, 0xFFFFFFFFL, 0xFF1D4E89L, 0xFFFFB300L, 0xFF43A047L, 0xFFE53935L, 0xFF7E57C2L,
+    0xFF000000L, 0xFFFFFFFFL, 0xFF1D4E89L, 0xFFFFB300L, 0xFF43A047L, 0xFFE53935L,
 )
 
 private val RAINBOW = listOf(
@@ -468,6 +469,7 @@ fun TemplateOptionsCard(
                             "color" -> ColorOptionRow(
                                 label = opt.label,
                                 current = styleColor(opt.key, style),
+                                original = styleColor(opt.key, template.style),
                                 // 背景色预设点选默认 50% 半透明；文字色预设不透明（用户拍板 2026-10-12）
                                 isBackground = opt.key.endsWith("BgColor"),
                                 onColor = { onColor(opt.key, it) },
@@ -515,11 +517,12 @@ fun TemplateOptionsCard(
     }
 }
 
-/** 颜色选项行：预设圆圈（背景 50% 半透明/文字不透明）+ 彩虹圆圈（自由取色 RGBA） */
+/** 颜色选项行：首格=模板原始颜色重置（背景填原始色+刷新图标）；预设圆圈（背景 50% 半透明/文字不透明）+ 彩虹圆圈（自由取色 RGBA） */
 @Composable
 private fun ColorOptionRow(
     label: String,
     current: Long,
+    original: Long,
     isBackground: Boolean,
     onColor: (Long) -> Unit,
 ) {
@@ -535,6 +538,39 @@ private fun ColorOptionRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // 原始颜色圆圈：背景填模板原始色，叠加刷新图标，点击重置到原始颜色（含原始透明度）
+            val originalSelected = current == original
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(Color(original))
+                    .border(
+                        width = if (originalSelected) 2.dp else 1.dp,
+                        color = if (originalSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant
+                        },
+                        shape = CircleShape,
+                    )
+                    .clickable { onColor(original) },
+                contentAlignment = Alignment.Center,
+            ) {
+                // 图标颜色随原始色明暗自适应（浅色底黑图标/深色底白图标）
+                val c = Color(original)
+                val lum = 0.299f * c.red + 0.587f * c.green + 0.114f * c.blue
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "重置到模板原始颜色",
+                    tint = if (lum > 140f) {
+                        Color.Black.copy(alpha = 0.75f)
+                    } else {
+                        Color.White.copy(alpha = 0.9f)
+                    },
+                    modifier = Modifier.size(15.dp),
+                )
+            }
             PRESET_COLORS.forEach { c ->
                 val selected = (current and 0x00FFFFFF) == (c and 0x00FFFFFF)
                 Box(
@@ -559,7 +595,8 @@ private fun ColorOptionRow(
                         },
                 )
             }
-            val custom = PRESET_COLORS.none { (it and 0x00FFFFFF) == (current and 0x00FFFFFF) }
+            val custom = current != original &&
+                PRESET_COLORS.none { (it and 0x00FFFFFF) == (current and 0x00FFFFFF) }
             Box(
                 Modifier
                     .size(26.dp)
