@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -48,6 +49,7 @@ object WebTemplateRenderer {
     }
     private val cacheLock = Any()
     private val jobs = ConcurrentHashMap<String, CompletableFuture<Bitmap?>>()
+    private val debugDump = java.util.concurrent.atomic.AtomicBoolean(false)
 
     // 串行渲染队列（仅主线程读写）
     private class QueuedJob(
@@ -141,7 +143,8 @@ object WebTemplateRenderer {
             wv.webViewClient = object : android.webkit.WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String?) {
                     android.util.Log.d("WebTpl", "onPageFinished key=${job.key.take(12)}")
-                    view.postDelayed({ measureThenSnapshot(view, job, attempt = 0) }, 60)
+                    // 首绘光栅化需要额外时间（attach 后首个任务尤甚），留足等待
+                    view.postDelayed({ measureThenSnapshot(view, job, attempt = 0) }, 300)
                 }
             }
             android.util.Log.d("WebTpl", "load key=${job.key.take(12)} len=${job.html.length}")
@@ -190,30 +193,73 @@ object WebTemplateRenderer {
 
     private fun snapshotAt(view: WebView, job: QueuedJob, w: Int, h: Int, attempt: Int) {
         try {
-            view.measure(
-                android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
-                android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY),
-            )
-            view.layout(0, 0, w, h)
-            val full = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            view.draw(Canvas(full))
-            val bitmap = cropToContent(full)
-            android.util.Log.d("WebTpl", "snapshot ${bitmap.width}x${bitmap.height} key=${job.key.take(12)}")
-            synchronized(cacheLock) { cache[job.key] = bitmap }
-            _tick.value = _tick.value + 1
-            finishJob(job, bitmap)
+            val b1 = drawToBitmap(view, w, h)
+            mainHandler.postDelayed({
+                try {
+                    val b2 = drawToBitmap(view, w, h)
+                    // 光栅化收敛判定：间隔一帧的两次绘制逐像素一致才算稳定
+                    // （attach 后首个任务首绘常缺内容——背景有了文字/渐变未画）
+                    // 整页同色（如只有背景色、文字/渐变尚未画上）也视为未完成
+                    val stable = java.util.Arrays.equals(pixelsOf(b1), pixelsOf(b2)) &&
+                        !isUniform(b2)
+                    b1.recycle()
+                    if (!stable && attempt < 6) {
+                        b2.recycle()
+                        snapshotAt(view, job, w, h, attempt + 1)
+                        return@postDelayed
+                    }
+                    val bitmap = cropToContent(b2) ?: b2
+                    android.util.Log.d(
+                        "WebTpl",
+                        "snapshot ${bitmap.width}x${bitmap.height} key=${job.key.take(12)} rounds=$attempt stable=$stable",
+                    )
+                    synchronized(cacheLock) { cache[job.key] = bitmap }
+                    _tick.value = _tick.value + 1
+                    finishJob(job, bitmap)
+                } catch (t: Throwable) {
+                    android.util.Log.w("WebTpl", "snapshot2 failed attempt=$attempt", t)
+                    finishJob(job, null)
+                }
+            }, 250)
         } catch (t: Throwable) {
-            android.util.Log.w("WebTpl", "snapshot failed attempt=$attempt", t)
-            if (attempt < 2) {
-                mainHandler.postDelayed({ snapshotAt(view, job, w, h, attempt + 1) }, 120)
-            } else {
-                finishJob(job, null)
-            }
+            android.util.Log.w("WebTpl", "snapshot failed", t)
+            finishJob(job, null)
         }
     }
 
+    private fun drawToBitmap(view: WebView, w: Int, h: Int): Bitmap {
+        view.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, w, h)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(bmp))
+        return bmp
+    }
+
+
+    /** 采样检查位图是否整页同色（页面只有背景、内容未绘制） */
+    private fun isUniform(b: Bitmap): Boolean {
+        val px = pixelsOf(b)
+        if (px.isEmpty()) return true
+        val stride = max(1, px.size / 400)
+        val first = px[0]
+        for (i in px.indices step stride) {
+            if (px[i] != first) return false
+        }
+        return true
+    }
+
+    private fun pixelsOf(b: Bitmap): IntArray {
+        val px = IntArray(b.width * b.height)
+        b.getPixels(px, 0, b.width, 0, 0, b.width, b.height)
+        return px
+    }
+
     /** 裁掉透明边到内容紧致尺寸（水印块锚点按位图中心定位，透明边会带偏位置） */
-    private fun cropToContent(full: Bitmap): Bitmap {
+    /** 裁掉透明边到内容紧致尺寸；全透明或纯白占比过高（页面未光栅化完）返回 null 由调用方重试 */
+    private fun cropToContent(full: Bitmap): Bitmap? {
         val w = full.width
         val h = full.height
         val pixels = IntArray(w * h)
@@ -222,18 +268,24 @@ object WebTemplateRenderer {
         var maxX = -1
         var minY = h
         var maxY = -1
+        var white = 0
+        var total = 0
         for (y in 0 until h) {
             val row = y * w
             for (x in 0 until w) {
-                if (pixels[row + x] != 0) {
+                val p = pixels[row + x]
+                if (p != 0) {
+                    total++
                     if (x < minX) minX = x
                     if (x > maxX) maxX = x
                     if (y < minY) minY = y
                     if (y > maxY) maxY = y
+                    if (p == 0xFFFFFFFF.toInt()) white++
                 }
             }
         }
-        if (maxX < 0) return full // 全透明：原样返回（上层有齿轮兜底）
+        // 未光栅化的 tile 是纯白不透明：内容区里纯白占比过高视为页面还没画完
+        if (maxX < 0 || (total > 0 && white > total * 9 / 10)) return null
         val inset = 2
         val l = (minX - inset).coerceAtLeast(0)
         val t = (minY - inset).coerceAtLeast(0)
