@@ -144,14 +144,18 @@ object WatermarkRenderer {
             canvas.drawRect(0f, 0f, t.blockWidth.toFloat(), titleHeight + t.pad, bgPaint)
             // 记录点（录制指示灯）：标题条左端，金色光晕+实心圆（用户拍板 2026-10-12 默认模板自带）
             if (style.recDot) {
-                val dotR = canvasWidth * style.titleFontSizeRatio * 0.32f
+                val dotR = canvasWidth * style.titleFontSizeRatio * 0.16f * style.recDotSize
                 val dotY = (titleHeight + t.pad) / 2f
-                val dotX = t.pad + dotR * 1.2f
+                val dotX = t.pad + dotR * 1.4f
                 val rec = style.recDotColor.toInt()
-                val glow = (recColorGlow(rec)) 
-                val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = glow }
-                canvas.drawCircle(dotX, dotY, dotR * 1.9f, glowPaint)
                 val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = rec }
+                // 光晕（可调，0=不画）
+                if (style.recGlow > 0f) {
+                    val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = ((rec and 0x00FFFFFF) or (0x55 shl 24))
+                    }
+                    canvas.drawCircle(dotX, dotY, dotR * (1f + style.recGlow), glowPaint)
+                }
                 canvas.drawCircle(dotX, dotY, dotR, dotPaint)
             }
         }
