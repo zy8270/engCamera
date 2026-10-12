@@ -66,8 +66,8 @@ interface ProjectGroupHandler {
     fun deleteProjects(ids: Set<String>)
     fun renameProject(id: String, name: String)
 
-    /** 重置当前工程：模板/样式/宽度/字段值全部回默认（保留锚点与重力设置） */
-    fun resetCurrentProject()
+    /** 批量重置勾选的工程：模板/样式/宽度/字段值全部回默认（保留各自锚点与重力设置） */
+    fun resetProjects(ids: Set<String>)
 }
 
 /**
@@ -234,16 +234,16 @@ fun ProjectGroupSelector(
         }
 
         if (showResetConfirm) {
-            val currentName = groups.projects.firstOrNull { it.id == groups.current }?.name ?: "当前工程"
             AlertDialog(
                 onDismissRequest = { showResetConfirm = false },
-                title = { Text("重置当前工程") },
+                title = { Text("重置勾选的工程") },
                 text = {
-                    Text("是否重置当前工程水印为默认值？「$currentName」的模板、样式、宽度与全部字段值将恢复默认（水印位置保留）。")
+                    Text("是否重置勾选的 ${pendingDelete.size} 个工程的水印为默认值？它们的模板、样式、宽度与全部字段值将恢复默认（水印位置保留）。")
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        handler.resetCurrentProject()
+                        handler.resetProjects(pendingDelete)
+                        pendingDelete = emptySet()
                         showResetConfirm = false
                     }) { Text("确认重置") }
                 },

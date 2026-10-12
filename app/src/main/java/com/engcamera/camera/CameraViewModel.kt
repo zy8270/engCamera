@@ -233,7 +233,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     override fun renameProject(id: String, name: String) = container.repository.renameProject(id, name)
 
-    override fun resetCurrentProject() = container.repository.resetCurrentProject()
+    override fun resetProjects(ids: Set<String>) = container.repository.resetProjects(ids)
 
     // ---------- 设置抽屉 ----------
     val saveOriginal: StateFlow<Boolean> = container.repository.saveOriginal
