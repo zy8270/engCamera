@@ -31,6 +31,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -78,11 +81,6 @@ val SAMPLE_DYNAMIC = DynamicValues(
     time = "2026-10-12 16:30:00",
     location = "广东省广州市天河区示例路 88 号 (23.1291,113.2644)",
     weather = "晴 26℃",
-)
-
-private val PRESET_COLORS = listOf(
-    0xFF1D4E89L, 0xFF000000L, 0xFFFFFFFFL, 0xFFECEFF4L,
-    0xFFE53935L, 0xFFFFB300L, 0xFF43A047L, 0xFF7E57C2L,
 )
 
 /**
@@ -362,7 +360,26 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
     }
 }
 
-/** 模板选项编辑卡（编辑器字段列表下方）：颜色=预设色板，数值=滑杆 */
+/** 统一预设色板：蓝 黄 绿 红 紫（点选保留当前透明度）；彩虹圆圈进入自由取色（RGBA） */
+private val PRESET_COLORS = listOf(
+    0xFF1D4E89L, 0xFFFFB300L, 0xFF43A047L, 0xFFE53935L, 0xFF7E57C2L,
+)
+
+private val RAINBOW = listOf(
+    0xFFFF5252L, 0xFFFFD740L, 0xFF69F0AEL, 0xFF40C4FFL, 0xFF7C4DFFL, 0xFFFF4081L, 0xFFFF5252L,
+)
+
+private fun styleColor(key: String, style: WatermarkStyle): Long = when (key) {
+    "accentColor" -> style.accentColor
+    "titleBgColor" -> style.titleBgColor
+    "titleTextColor" -> style.titleTextColor
+    "bodyBgColor" -> style.bodyBgColor
+    "bodyTextColor" -> style.bodyTextColor
+    "borderColor" -> style.borderColor
+    else -> 0xFF000000L
+}
+
+/** 模板选项编辑卡（默认折叠，点头展开）：颜色=统一色板+彩虹自由取色，数值=滑杆 */
 @Composable
 fun TemplateOptionsCard(
     template: WatermarkTemplate,
@@ -370,78 +387,145 @@ fun TemplateOptionsCard(
     onColor: (String, Long) -> Unit,
     onScalar: (String, Float) -> Unit,
 ) {
+    var expanded by remember(template.id) { mutableStateOf(false) }
+    var pickingKey by remember { mutableStateOf<String?>(null) }
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(
-                "模板选项 · ${template.name}",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(8.dp))
-            template.options.forEach { opt ->
-                when (opt.kind) {
-                    "color" -> {
-                        Text(
-                            opt.label,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PRESET_COLORS.forEach { c ->
+        Column {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "模板选项 · ${template.name}",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "折叠" else "展开",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+                Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                    template.options.forEach { opt ->
+                        when (opt.kind) {
+                            "color" -> ColorOptionRow(
+                                label = opt.label,
+                                current = styleColor(opt.key, style),
+                                onColor = { onColor(opt.key, it) },
+                            )
+                            else -> {
                                 val current = when (opt.key) {
-                                    "accentColor" -> style.accentColor
-                                    "titleBgColor" -> style.titleBgColor
-                                    "bodyBgColor" -> style.bodyBgColor
-                                    "bodyTextColor" -> style.bodyTextColor
-                                    "borderColor" -> style.borderColor
-                                    else -> 0L
+                                    "bgOpacity" -> style.bgOpacity.toFloat()
+                                    "cornerRatio" -> style.cornerRatio
+                                    else -> opt.min
                                 }
-                                val selected = current == c
-                                Box(
-                                    Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(c.toLong()))
-                                        .border(
-                                            width = if (selected) 2.dp else 1.dp,
-                                            color = if (selected) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.outlineVariant
-                                            },
-                                            shape = CircleShape,
-                                        )
-                                        .clickable { onColor(opt.key, c) },
+                                Text(
+                                    "${opt.label} ${current.roundToInt()}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Slider(
+                                    value = current.coerceIn(opt.min, opt.max),
+                                    onValueChange = { onScalar(opt.key, it) },
+                                    valueRange = opt.min..opt.max,
                                 )
                             }
                         }
-                    }
-                    else -> {
-                        val current = when (opt.key) {
-                            "bgOpacity" -> style.bgOpacity.toFloat()
-                            "cornerRatio" -> style.cornerRatio
-                            else -> opt.min
-                        }
-                        Text(
-                            "${opt.label} ${current.roundToInt()}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Slider(
-                            value = current.coerceIn(opt.min, opt.max),
-                            onValueChange = { onScalar(opt.key, it) },
-                            valueRange = opt.min..opt.max,
-                        )
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
-                Spacer(Modifier.height(6.dp))
             }
+        }
+        pickingKey?.let { key ->
+            ColorPickerDialog(
+                title = "选择${template.options.firstOrNull { it.key == key }?.label ?: "颜色"}",
+                initial = styleColor(key, style),
+                onDismiss = { pickingKey = null },
+                onConfirm = { c ->
+                    onColor(key, c)
+                    pickingKey = null
+                },
+            )
+        }
+    }
+}
+
+/** 颜色选项行：五个预设圆圈（点选保留当前透明度）+ 彩虹圆圈（自由取色 RGBA） */
+@Composable
+private fun ColorOptionRow(label: String, current: Long, onColor: (Long) -> Unit) {
+    var showPicker by remember { mutableStateOf(false) }
+    Column {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PRESET_COLORS.forEach { c ->
+                val selected = (current and 0x00FFFFFF) == (c and 0x00FFFFFF)
+                Box(
+                    Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(Color(c))
+                        .border(
+                            width = if (selected) 2.dp else 1.dp,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant
+                            },
+                            shape = CircleShape,
+                        )
+                        .clickable {
+                            // 选预设保留当前透明度（如正文底 99 半透明切黄仍是半透明黄）
+                            onColor((c and 0x00FFFFFFL) or (current and 0xFF00000000L))
+                        },
+                )
+            }
+            val custom = PRESET_COLORS.none { (it and 0x00FFFFFF) == (current and 0x00FFFFFF) }
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(Brush.sweepGradient(RAINBOW.map { Color(it) }))
+                    .border(
+                        width = if (custom) 2.dp else 1.dp,
+                        color = if (custom) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant
+                        },
+                        shape = CircleShape,
+                    )
+                    .clickable { showPicker = true },
+            )
+        }
+        if (showPicker) {
+            ColorPickerDialog(
+                title = "选择$label",
+                initial = current,
+                onDismiss = { showPicker = false },
+                onConfirm = { c ->
+                    onColor(c)
+                    showPicker = false
+                },
+            )
         }
     }
 }
