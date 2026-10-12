@@ -211,6 +211,12 @@ class CameraEngine(
     private val _zoomRatio = MutableStateFlow(1f)
     val zoomRatio: StateFlow<Float> = _zoomRatio.asStateFlow()
 
+    /** 当前镜头支持的变焦范围（捏合夹取用） */
+    private val _zoomMin = MutableStateFlow(1f)
+    val zoomMin: StateFlow<Float> = _zoomMin.asStateFlow()
+    private val _zoomMax = MutableStateFlow(1f)
+    val zoomMax: StateFlow<Float> = _zoomMax.asStateFlow()
+
     private var zoomObserver: Observer<ZoomState>? = null
     private var zoomObservedInfo: CameraInfo? = null
 
@@ -226,7 +232,11 @@ class CameraEngine(
         val info = camera?.cameraInfo ?: return
         if (info == zoomObservedInfo) return
         zoomObservedInfo?.let { old -> zoomObserver?.let { old.zoomState.removeObserver(it) } }
-        val obs = Observer { zs: ZoomState -> _zoomRatio.value = zs.zoomRatio }
+        val obs = Observer { zs: ZoomState ->
+            _zoomRatio.value = zs.zoomRatio
+            _zoomMin.value = zs.minZoomRatio
+            _zoomMax.value = zs.maxZoomRatio
+        }
         zoomObserver = obs
         zoomObservedInfo = info
         info.zoomState.observe(lifecycleOwner, obs)

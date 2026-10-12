@@ -66,8 +66,10 @@ data class CameraUiState(
     val videoQualityIndex: Int = 0,
     /** 画质选择菜单展开 */
     val showQualityMenu: Boolean = false,
-    /** 电子变焦倍数（zoomState 回流） */
+    /** 电子变焦倍数（zoomState 回流）与当前镜头支持范围 */
     val zoomRatio: Float = 1f,
+    val zoomMin: Float = 1f,
+    val zoomMax: Float = 8f,
     /** 添加水印模式（给相册已有图片加水印）：待处理队列（uri + 宽高比）与当前索引 */
     val annotating: Boolean = false,
     val annotateQueue: List<AnnotateItem> = emptyList(),
@@ -201,6 +203,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         zoomCollectJob = viewModelScope.launch {
             e.zoomRatio.collect { z -> _ui.update { it.copy(zoomRatio = z) } }
         }
+        zoomCollectJob = viewModelScope.launch {
+            e.zoomMin.collect { m -> _ui.update { it.copy(zoomMin = m) } }
+        }
+        zoomCollectJob = viewModelScope.launch {
+            e.zoomMax.collect { m -> _ui.update { it.copy(zoomMax = m) } }
+        }
         _ui.update { s ->
             s.copy(
                 lensLabels = e.backLenses.map { it.label },
@@ -227,14 +235,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         _ui.update { it.copy(showQualityMenu = !it.showQualityMenu) }
     }
 
-    /** 双指捏合电子变焦：factor 为本次手势的增量倍数（引擎内部夹取范围） */
+    /** 双指捏合电子变焦：factor 为本次手势增量，目标值夹取到镜头支持范围（数字不再低于 1×） */
     fun onPinchZoom(factor: Float) {
-        val target = _ui.value.zoomRatio * factor
+        val target = (_ui.value.zoomRatio * factor)
+            .coerceIn(_ui.value.zoomMin, _ui.value.zoomMax)
         engine?.setZoomRatio(target)
         _ui.update { it.copy(zoomRatio = target) }
     }
 
-    /** 变焦徽标点击：1× 与 2× 之间快速切换 */
+    /** 变焦徽标点击：1× 与 2× 之间快速切换（同样夹取范围） */
     fun toggleZoom() {
         val target = if (_ui.value.zoomRatio > 1.5f) 1f else 2f
         engine?.setZoomRatio(target)
