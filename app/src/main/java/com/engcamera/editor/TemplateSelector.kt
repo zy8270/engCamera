@@ -422,6 +422,8 @@ fun TemplateOptionsCard(
                             "color" -> ColorOptionRow(
                                 label = opt.label,
                                 current = styleColor(opt.key, style),
+                                // 背景色预设点选默认 50% 半透明；文字色预设不透明（用户拍板 2026-10-12）
+                                isBackground = opt.key.endsWith("BgColor"),
                                 onColor = { onColor(opt.key, it) },
                             )
                             else -> {
@@ -461,9 +463,14 @@ fun TemplateOptionsCard(
     }
 }
 
-/** 颜色选项行：五个预设圆圈（点选保留当前透明度）+ 彩虹圆圈（自由取色 RGBA） */
+/** 颜色选项行：预设圆圈（背景 50% 半透明/文字不透明）+ 彩虹圆圈（自由取色 RGBA） */
 @Composable
-private fun ColorOptionRow(label: String, current: Long, onColor: (Long) -> Unit) {
+private fun ColorOptionRow(
+    label: String,
+    current: Long,
+    isBackground: Boolean,
+    onColor: (Long) -> Unit,
+) {
     var showPicker by remember { mutableStateOf(false) }
     Column {
         Text(
@@ -493,9 +500,10 @@ private fun ColorOptionRow(label: String, current: Long, onColor: (Long) -> Unit
                             shape = CircleShape,
                         )
                         .clickable {
-                            // 预设按原色应用（不保留当前透明度）——保留透明度会形成
-                            // "透明度为 0 后点任何预设都不见效"的陷阱；半透明请走彩虹圈调透明度
-                            onColor(c)
+                            // 预设按原色应用：背景色固定 50% 半透明、文字色不透明（可预期的透明度，
+                            // 避免 v96 保留透明度导致"透明度 0 时预设隐形"的陷阱）
+                            val alpha = if (isBackground) 0x80L shl 24 else 0xFFL shl 24
+                            onColor((c and 0x00FFFFFFL) or alpha)
                         },
                 )
             }
