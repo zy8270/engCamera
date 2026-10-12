@@ -57,32 +57,41 @@ fun WatermarkOverlay(
         val context = androidx.compose.ui.platform.LocalContext.current
         // 网页模板渲染完成会 bump tick，触发重组取新缓存位图
         val webTick by WebTemplateRenderer.tick.collectAsState()
+        // 网页模板预览用"时间截断到分钟"的动态值（缓存键稳定，不每秒重渲 WebView）；
+        // 成片烧录走真实时间，不受影响
+        val isWeb = com.engcamera.data.WatermarkTemplates.find(state.templateId)
+            ?.backend == com.engcamera.data.TemplateBackend.WEB
+        val effDynamic = remember(dynamic, isWeb) {
+            if (isWeb) WebTemplateRenderer.previewDynamic(dynamic) else dynamic
+        }
 
         // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
         // 若作为 key 会导致每帧重建位图，拖动卡顿）
-        val block = remember(state.fields, state.style, dynamic, widthPx, heightPx, scaleByShortSide, webTick) {
+        val block = remember(state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, webTick) {
             if (widthPx > 0) {
                 val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
-                WatermarkRenderer.render(state, scaleBasis, dynamic)
+                WatermarkRenderer.render(state, scaleBasis, effDynamic)
             } else {
                 null
             }
         }
 
         // 网页模板：缓存未命中时触发后台渲染（完成经 tick 回来重组）
-        LaunchedEffect(state.fields, state.style, dynamic, widthPx, heightPx) {
+        LaunchedEffect(state.fields, state.style, effDynamic, widthPx, heightPx) {
             if (widthPx > 0) {
-                val key = WatermarkRenderer.webCacheKey(state, dynamic, widthPx)
+                val key = WatermarkRenderer.webCacheKey(state, effDynamic, widthPx)
                 if (key != null && WebTemplateRenderer.current(key) == null) {
                     com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
-                        WebTemplateRenderer.warmAsync(context, key, tpl, state, dynamic, widthPx)
+                        WebTemplateRenderer.warmAsync(context, key, tpl, state, effDynamic, widthPx)
                     }
                 }
             }
         }
 
         if (widthPx > 0 && heightPx > 0) {
-            if (state.fields.none { it.enabled }) {
+            // 齿轮占位两用：全字段关闭，或网页模板尚未渲染出图（可拖动=改锚点，点击=进编辑器）
+            val blockReady = block != null && block.width > 1
+            if (state.fields.none { it.enabled } || !blockReady) {
                 // 全部字段关闭：齿轮占位图标替代水印块（仅预览不烧录），
                 // 位置=水印锚点（重新启用字段后水印出现在这里），点击进编辑器、可拖动
                 val iconPx = with(density) { 52.dp.toPx() }.roundToInt()
