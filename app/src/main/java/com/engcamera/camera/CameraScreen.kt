@@ -648,7 +648,7 @@ private fun SettingsDrawer(
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                 }.getOrDefault(0L)
                 Text(
-                    "Rnzhy 2026.10.12 $versionCode engCamera MIT",
+                    "Rnzhy 2026.10.13 $versionCode engCamera MIT",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
