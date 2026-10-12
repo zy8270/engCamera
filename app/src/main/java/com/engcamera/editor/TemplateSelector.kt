@@ -493,8 +493,9 @@ private fun ColorOptionRow(label: String, current: Long, onColor: (Long) -> Unit
                             shape = CircleShape,
                         )
                         .clickable {
-                            // 选预设保留当前透明度（如正文底 99 半透明切黄仍是半透明黄）
-                            onColor((c and 0x00FFFFFFL) or (current and 0xFF00000000L))
+                            // 预设按原色应用（不保留当前透明度）——保留透明度会形成
+                            // "透明度为 0 后点任何预设都不见效"的陷阱；半透明请走彩虹圈调透明度
+                            onColor(c)
                         },
                 )
             }

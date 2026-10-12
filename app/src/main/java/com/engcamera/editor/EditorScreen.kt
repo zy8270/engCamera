@@ -230,6 +230,19 @@ fun EditorScreen(onBack: () -> Unit) {
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
             ) {
+                // 模板选项置顶（当前模板暴露的可调样式）
+                val currentTemplate = com.engcamera.data.WatermarkTemplates.find(state.templateId)
+                if (currentTemplate != null && currentTemplate.options.isNotEmpty()) {
+                    item {
+                        TemplateOptionsCard(
+                            template = currentTemplate,
+                            style = state.style,
+                            onColor = vm::setTemplateColor,
+                            onScalar = vm::setTemplateScalar,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
                 itemsIndexed(state.fields, key = { _, f -> f.id }) { _, field ->
                     val isDragging = draggingId == field.id
                     // pointerInput 的 key 稳定（不随重组重启），闭包里直接捕获的状态会停留在
@@ -283,35 +296,21 @@ fun EditorScreen(onBack: () -> Unit) {
                     )
                 }
 
-                // 模板选项（当前模板暴露的可调样式）
-                val currentTemplate = com.engcamera.data.WatermarkTemplates.find(state.templateId)
-                if (currentTemplate != null && currentTemplate.options.isNotEmpty()) {
-                    item {
-                        TemplateOptionsCard(
-                            template = currentTemplate,
-                            style = state.style,
-                            onColor = vm::setTemplateColor,
-                            onScalar = vm::setTemplateScalar,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    }
+            item {
+                Button(
+                    onClick = { showAddDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("添加字段")
                 }
+            }
 
-                item {
-                    Button(
-                        onClick = { showAddDialog = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("添加字段")
-                    }
-                }
-
-                // 底部占位：字段多时可多滑一段，避免右下角两枚悬浮按钮盖住最后一行的删除按钮
-                item { Spacer(Modifier.height(132.dp)) }
+            // 底部占位：字段多时可多滑一段，避免右下角两枚悬浮按钮盖住最后一行的删除按钮
+            item { Spacer(Modifier.height(132.dp)) }
 
 
 
