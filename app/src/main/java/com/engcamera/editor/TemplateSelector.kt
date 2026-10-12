@@ -360,9 +360,9 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
     }
 }
 
-/** 统一预设色板：蓝 黄 绿 红 紫（点选保留当前透明度）；彩虹圆圈进入自由取色（RGBA） */
+/** 统一预设色板：黑 白 蓝 黄 绿 红 紫（点选保留当前透明度）；彩虹圆圈进入自由取色（RGBA） */
 private val PRESET_COLORS = listOf(
-    0xFF1D4E89L, 0xFFFFB300L, 0xFF43A047L, 0xFFE53935L, 0xFF7E57C2L,
+    0xFF000000L, 0xFFFFFFFFL, 0xFF1D4E89L, 0xFFFFB300L, 0xFF43A047L, 0xFFE53935L, 0xFF7E57C2L,
 )
 
 private val RAINBOW = listOf(
