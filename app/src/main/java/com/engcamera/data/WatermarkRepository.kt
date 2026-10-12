@@ -390,16 +390,34 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
-    /** 重置当前工程：模板/样式/宽度/字段值全部回默认（保留锚点、旋转角与重力设置） */
-    fun resetCurrentProject() {
-        val cur = _state.value
-        update {
-            WatermarkState(
-                anchorX = cur.anchorX,
-                anchorY = cur.anchorY,
-                rotationDeg = cur.rotationDeg,
-                followGravity = cur.followGravity,
+    /** 批量重置勾选的工程：模板/样式/宽度/字段值全部回默认（保留各自锚点、旋转角与重力设置） */
+    fun resetProjects(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        fun defaults(old: WatermarkState) = WatermarkState(
+            anchorX = old.anchorX,
+            anchorY = old.anchorY,
+            rotationDeg = old.rotationDeg,
+            followGravity = old.followGravity,
+        )
+        val currentId = _projects.value.current
+        // 勾选项里有当前工程：走 update()（同步内存 state + 工程槽位 + 持久化）
+        if (currentId in ids) {
+            update { defaults(it) }
+        }
+        // 其余勾选工程：直接重置 _projects 里的槽位
+        val remaining = ids - currentId
+        if (remaining.isNotEmpty()) {
+            _projects.value = _projects.value.copy(
+                projects = _projects.value.projects.map {
+                    if (it.id in remaining) it.copy(state = defaults(it.state)) else it
+                },
             )
+        }
+        scope.launch {
+            context.appDataStore.edit {
+                it[stateKey] = json.encodeToString(_state.value)
+                it[projectsKey] = json.encodeToString(_projects.value)
+            }
         }
     }
 
