@@ -61,6 +61,16 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
             "bodyBgColor" -> s.style.copy(bodyBgColor = color)
             "bodyTextColor" -> s.style.copy(bodyTextColor = color)
             "borderColor" -> s.style.copy(borderColor = color)
+            "recDotColor" -> s.style.copy(recDotColor = color)
+            else -> s.style
+        }
+        s.copy(style = st)
+    }
+
+    /** 模板选项：开关类（记录点等） */
+    fun setTemplateSwitch(key: String, on: Boolean) = repo.update { s ->
+        val st = when (key) {
+            "recDot" -> s.style.copy(recDot = on)
             else -> s.style
         }
         s.copy(style = st)

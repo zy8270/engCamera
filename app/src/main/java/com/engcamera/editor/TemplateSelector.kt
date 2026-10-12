@@ -41,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -434,6 +435,7 @@ fun TemplateOptionsCard(
     style: WatermarkStyle,
     onColor: (String, Long) -> Unit,
     onScalar: (String, Float) -> Unit,
+    onSwitch: (String, Boolean) -> Unit,
 ) {
     var expanded by remember(template.id) { mutableStateOf(false) }
     var pickingKey by remember { mutableStateOf<String?>(null) }
@@ -466,7 +468,31 @@ fun TemplateOptionsCard(
             androidx.compose.animation.AnimatedVisibility(visible = expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                     template.options.forEach { opt ->
+                        // 记录点关闭时联动隐藏其颜色项
+                        if (opt.key == "recDotColor" && !style.recDot) return@forEach
                         when (opt.kind) {
+                            "switch" -> {
+                                val current = when (opt.key) {
+                                    "recDot" -> style.recDot
+                                    else -> false
+                                }
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        opt.label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Switch(
+                                        checked = current,
+                                        onCheckedChange = { onSwitch(opt.key, it) },
+                                    )
+                                }
+                            }
                             "color" -> ColorOptionRow(
                                 label = opt.label,
                                 current = styleColor(opt.key, style),

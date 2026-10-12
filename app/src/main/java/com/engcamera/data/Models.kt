@@ -42,6 +42,8 @@ data class WatermarkStyle(
     val accentColor: Long = 0xFF1D4E89,       // 主题强调色（线条/竖条/角标）
     val borderColor: Long = 0xFFFFFFFF,       // 边框颜色（边框卡片等）
     val bgOpacity: Int = 100,                 // 背景不透明度百分比（0-100）
+    val recDot: Boolean = true,               // 记录点（经典模板标题条左侧的录制指示灯，默认开）
+    val recDotColor: Long = 0xFFFFC107L,      // 记录点颜色（默认金色）
 )
 
 /** 水印整体状态（对应计划书 6.3） */
