@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -111,6 +110,7 @@ import com.engcamera.ui.theme.ChromeBrand
 import com.engcamera.ui.theme.ChromeDanger
 import com.engcamera.ui.theme.ChromeIcon
 import com.engcamera.ui.theme.ChromeNeutral
+import com.engcamera.ui.ProjectGroupGlyph
 import com.engcamera.ui.theme.ChromeScrim
 import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkOverlay
@@ -728,13 +728,11 @@ private fun PreviewArea(
                 .clickable { onOpenProjectGroups() },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                Icons.Default.SwapHoriz,
-                contentDescription = "工程组快捷切换",
-                tint = ChromeIcon,
-                modifier = Modifier
+            ProjectGroupGlyph(
+                Modifier
                     .size(26.dp)
                     .rotate(rot.toFloat()),
+                color = ChromeIcon,
             )
         }
         // 后置焦段选择（右上角，位置固定）

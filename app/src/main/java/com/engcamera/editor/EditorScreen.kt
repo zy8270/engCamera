@@ -360,27 +360,13 @@ fun EditorScreen(onBack: () -> Unit) {
     )
 }
 
-/** 工程组图标：三条横线，最后一条带三角形（表示一组配置的集合/切换） */
+/** 工程组图标：三条横线，最后一条带三角形；颜色跟随 onPrimary（编辑器 FAB 用） */
 @Composable
 private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
-    // 跟随 onPrimary：日间主色深蓝→白线条，夜间主色浅蓝→深色线条
-    val lineColor = MaterialTheme.colorScheme.onPrimary
-    androidx.compose.foundation.Canvas(modifier.size(width = 20.dp, height = 16.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 2.2f
-        drawLine(lineColor, Offset(0f, h * 0.15f), Offset(w * 0.85f, h * 0.15f), stroke)
-        drawLine(lineColor, Offset(0f, h * 0.45f), Offset(w * 0.85f, h * 0.45f), stroke)
-        val y = h * 0.78f
-        drawLine(lineColor, Offset(0f, y), Offset(w * 0.55f, y), stroke)
-        val tri = androidx.compose.ui.graphics.Path().apply {
-            moveTo(w * 0.62f, y - h * 0.16f)
-            lineTo(w * 0.62f, y + h * 0.16f)
-            lineTo(w * 0.82f, y)
-            close()
-        }
-        drawPath(tri, lineColor)
-    }
+    com.engcamera.ui.ProjectGroupGlyph(
+        modifier.size(width = 20.dp, height = 16.dp),
+        color = MaterialTheme.colorScheme.onPrimary,
+    )
 }
 
 @Composable
