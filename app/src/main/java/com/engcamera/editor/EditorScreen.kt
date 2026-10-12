@@ -118,43 +118,23 @@ fun EditorScreen(onBack: () -> Unit) {
 
     Scaffold(
         floatingActionButton = {
-            // 右下角两枚入口：魔法棒（水印模板）叠在工程组上方
-            Column(
-                horizontalAlignment = Alignment.End,
-                modifier = Modifier.padding(end = 16.dp, bottom = 16.dp),
+            // 工程组入口：屏幕右下角悬浮按钮（带阴影）
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primary,
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .padding(end = 16.dp, bottom = 16.dp)
+                    .shadow(8.dp, RoundedCornerShape(14.dp)),
+                onClick = { showProjectGroups = true },
             ) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
-                    shadowElevation = 8.dp,
-                    onClick = { showTemplates = true },
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        Icons.Default.AutoFixHigh,
-                        contentDescription = "水印模板",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(13.dp)
-                            .size(24.dp),
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                // 工程组入口：屏幕右下角悬浮按钮（带阴影）
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    shadowElevation = 8.dp,
-                    modifier = Modifier.shadow(8.dp, RoundedCornerShape(14.dp)),
-                    onClick = { showProjectGroups = true },
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ProjectGroupIcon()
-                        Spacer(Modifier.width(8.dp))
-                        Text("工程组", color = MaterialTheme.colorScheme.onPrimary)
-                    }
+                    ProjectGroupIcon()
+                    Spacer(Modifier.width(8.dp))
+                    Text("工程组", color = MaterialTheme.colorScheme.onPrimary)
                 }
             }
         },
@@ -187,8 +167,11 @@ fun EditorScreen(onBack: () -> Unit) {
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            // 顶部实时预览区
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+            // 顶部实时预览区：点整块预览 = 打开水印模板选择器；右下角魔法棒同入口（保留备用）
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.clickable { showTemplates = true },
+            ) {
                 BoxWithConstraints(
                     Modifier
                         .fillMaxWidth()
@@ -222,6 +205,24 @@ fun EditorScreen(onBack: () -> Unit) {
                         contentDescription = "水印预览",
                         modifier = Modifier.graphicsLayer { rotationZ = rotationDeg },
                     )
+                    // 魔法棒：预览窗右下角（与整块预览同入口，按钮保留备用）
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(com.engcamera.ui.theme.ChromeNeutral)
+                            .clickable { showTemplates = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.AutoFixHigh,
+                            contentDescription = "水印模板",
+                            tint = com.engcamera.ui.theme.ChromeIcon,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                 }
             }
             HorizontalDivider()
