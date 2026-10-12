@@ -62,9 +62,11 @@ object TemplatePresets {
         WatermarkTemplate(
             id = "classic",
             name = "经典工程蓝",
-            style = style("CLASSIC"),
+            style = style("CLASSIC") { copy(recDot = true, recDotColor = 0xFFFFC107L) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("recDot", "记录点", "switch"),
+                TemplateOptionDef("recDotColor", "记录点颜色", "color"),
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("titleBgColor", "标题底色", "color"),
                 TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
@@ -131,17 +133,6 @@ object TemplatePresets {
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("accentColor", "竖条颜色", "color"),
                 TemplateOptionDef("bgOpacity", "卡片不透明度", "slider", 40f, 100f),
-            ),
-        ),
-        WatermarkTemplate(
-            id = "recorder",
-            name = "记录仪",
-            style = style("RECORDER") { copy(bodyBgColor = 0xCC000000, accentColor = 0xFFFF3B30) },
-            fields = stdFields,
-            options = listOf(
-                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
-                TemplateOptionDef("accentColor", "记录点颜色", "color"),
-                TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 20f, 100f),
             ),
         ),
         // ---------- 网页（WebView 渲染） ----------

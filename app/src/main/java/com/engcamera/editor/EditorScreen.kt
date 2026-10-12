@@ -240,6 +240,7 @@ fun EditorScreen(onBack: () -> Unit) {
                             style = state.style,
                             onColor = vm::setTemplateColor,
                             onScalar = vm::setTemplateScalar,
+                            onSwitch = vm::setTemplateSwitch,
                         )
                         Spacer(Modifier.height(8.dp))
                     }

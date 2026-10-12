@@ -142,6 +142,18 @@ object WatermarkRenderer {
         if (titleHeight > 0) {
             bgPaint.color = style.titleBgColor.toInt()
             canvas.drawRect(0f, 0f, t.blockWidth.toFloat(), titleHeight + t.pad, bgPaint)
+            // 记录点（录制指示灯）：标题条左端，金色光晕+实心圆（用户拍板 2026-10-12 默认模板自带）
+            if (style.recDot) {
+                val dotR = canvasWidth * style.titleFontSizeRatio * 0.32f
+                val dotY = (titleHeight + t.pad) / 2f
+                val dotX = t.pad + dotR * 1.2f
+                val rec = style.recDotColor.toInt()
+                val glow = (recColorGlow(rec)) 
+                val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = glow }
+                canvas.drawCircle(dotX, dotY, dotR * 1.9f, glowPaint)
+                val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = rec }
+                canvas.drawCircle(dotX, dotY, dotR, dotPaint)
+            }
         }
         if (bodyHeight > 0) {
             bgPaint.color = style.bodyBgColor.toInt()
@@ -452,6 +464,10 @@ object WatermarkRenderer {
         // 网页模板的位图归 WebTemplateRenderer 缓存所有，不能回收
         if (!isWeb || renderState !== state) block.bitmap.recycle()
     }
+
+
+/** 记录点光晕色：同 RGB、35% 透明 */
+private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
 
     /** 字段当前显示文本：位置/时间标签有值（手动编辑）则优先生效，空则用拍照瞬间动态值。 */
     private fun displayText(f: WatermarkField, dynamic: DynamicValues): String = when (f.type) {
