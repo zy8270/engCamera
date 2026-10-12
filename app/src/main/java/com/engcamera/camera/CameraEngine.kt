@@ -6,8 +6,10 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.media.CamcorderProfile
+import android.media.MediaRecorder
 import android.util.Log
 import android.util.Rational
+import android.util.Size
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -37,6 +39,7 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 相机引擎：预览/拍照/录像/扫码常绑 + ViewPort 统一比例，
@@ -83,7 +86,10 @@ class CameraEngine(
             field = value
         }
 
-    /** 可选画质列表：按当前镜头真实能力生成（档位来自 CameraX，规格来自 CamcorderProfile），全失败退静态四档 */
+    /**
+     * 可选画质列表：按当前镜头真实能力生成（档位来自 CameraX，尺寸来自编码器支持列表，
+     * 再按 ViewPort 裁切算出成片实际尺寸），全失败退静态四档。
+     */
     fun getSupportedVideoQualities(): List<VideoQuality> {
         val info = selectedLensCameraInfo()
         val supported = info?.let {
@@ -93,21 +99,53 @@ class CameraEngine(
         val legacyId = info
             ?.let { runCatching { Camera2CameraInfo.from(it).cameraId }.getOrNull() }
             ?.toIntOrNull() ?: 0
+        // 编码器真实支持的输入尺寸（传感器横向系）；CameraX 各档按流高度就近选档
+        val encoderSizes = info?.let {
+            runCatching {
+                Camera2CameraInfo.from(it)
+                    .getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(MediaRecorder::class.java)
+                    ?.toList()
+            }.getOrNull()
+        } ?: emptyList()
         val list = mutableListOf<VideoQuality>()
         for (tier in qualityTiers) {
             if (supported != null && tier.cameraX !in supported) continue
-            val profile = if (CamcorderProfile.hasProfile(legacyId, tier.profileQuality)) {
-                runCatching { CamcorderProfile.get(legacyId, tier.profileQuality) }.getOrNull()
-            } else {
-                null
-            }
+            // 流尺寸：编码器同高最大 → 高度±16 兜底（如 1088）→ CamcorderProfile 申报值 → 标准目标值
+            val stream = encoderSizes.filter { it.height == tier.streamHeight }.maxByOrNull { it.width * it.height }
+                ?: encoderSizes.filter { abs(it.height - tier.streamHeight) <= 16 }.maxByOrNull { it.width * it.height }
+                ?: profileSpec(legacyId, tier.profileQuality)?.first
+                ?: Size(tier.fallbackW, tier.fallbackH)
+            val fps = profileSpec(legacyId, tier.profileQuality)?.second
+            // ViewPort 把所有流裁到预览比例（3:4 竖屏 = 传感器系 4:3），菜单必须标裁后成片尺寸
+            // （真机实测：SD 档 720×480 录出 640×480，即裁切所致）
+            val out = cropToViewport(stream)
             list += VideoQuality(
-                label = profile?.let { "${it.videoFrameWidth}×${it.videoFrameHeight}" } ?: tier.nominalLabel,
-                spec = tier.nominalSpec + (profile?.let { " · ${it.videoFrameRate}fps" } ?: ""),
+                label = "${out.width}×${out.height}",
+                spec = tier.specName + (fps?.let { " · ${it}fps" } ?: ""),
                 quality = tier.id,
             )
         }
         return list.ifEmpty { defaultQualities() }
+    }
+
+    /** CamcorderProfile 设备申报规格 → (尺寸, 帧率)；不可得返回 null */
+    private fun profileSpec(legacyId: Int, quality: Int): Pair<Size, Int>? {
+        if (!CamcorderProfile.hasProfile(legacyId, quality)) return null
+        val p = runCatching { CamcorderProfile.get(legacyId, quality) }.getOrNull() ?: return null
+        return Size(p.videoFrameWidth, p.videoFrameHeight) to p.videoFrameRate
+    }
+
+    /** 裁到传感器系 4:3（预览恒 3:4 竖屏）内的成片尺寸；宽高各取裁后偶数值 */
+    private fun cropToViewport(size: Size): Size {
+        val target = 4f / 3f
+        val w = size.width
+        val h = size.height
+        return if (w.toFloat() / h > target) {
+            Size((h * target).roundToInt().coerceAtMost(w), h)
+        } else {
+            Size(w, (w / target).roundToInt().coerceAtMost(h))
+        }
     }
 
     private fun defaultQualities(): List<VideoQuality> = listOf(
@@ -117,20 +155,22 @@ class CameraEngine(
         VideoQuality("720×480", "480p", 2),
     )
 
-    /** 画质档位定义：内部 id ↔ CameraX Quality ↔ CamcorderProfile 常量 + 标准目标规格（设备数据缺失时兜底显示） */
+    /** 画质档位定义：内部 id ↔ CameraX Quality ↔ CamcorderProfile 常量 + 流高度（编码器选档基准）+ 兜底尺寸 */
     private class QualityTier(
         val id: Int,
         val cameraX: Quality,
         val profileQuality: Int,
-        val nominalLabel: String,
-        val nominalSpec: String,
+        val streamHeight: Int,
+        val fallbackW: Int,
+        val fallbackH: Int,
+        val specName: String,
     )
 
     private val qualityTiers = listOf(
-        QualityTier(4, Quality.UHD, CamcorderProfile.QUALITY_2160P, "3840×2160", "2160p"),
-        QualityTier(3, Quality.FHD, CamcorderProfile.QUALITY_1080P, "1920×1080", "1080p"),
-        QualityTier(1, Quality.HD, CamcorderProfile.QUALITY_720P, "1280×720", "720p"),
-        QualityTier(2, Quality.SD, CamcorderProfile.QUALITY_480P, "720×480", "480p"),
+        QualityTier(4, Quality.UHD, CamcorderProfile.QUALITY_2160P, 2160, 3840, 2160, "2160p"),
+        QualityTier(3, Quality.FHD, CamcorderProfile.QUALITY_1080P, 1080, 1920, 1080, "1080p"),
+        QualityTier(1, Quality.HD, CamcorderProfile.QUALITY_720P, 720, 1280, 720, "720p"),
+        QualityTier(2, Quality.SD, CamcorderProfile.QUALITY_480P, 480, 720, 480, "480p"),
     )
 
     /** 当前镜头的 CameraInfo（随前后摄/焦段切换）；拿不到返回 null */
