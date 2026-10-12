@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -99,32 +100,30 @@ fun TemplateSelector(
     val templates = remember(userTpls) { TemplatePresets.all + userTpls }
     var deleteTarget by remember { mutableStateOf<WatermarkTemplate?>(null) }
 
+    var showImport by remember { mutableStateOf(false) }
+    var importText by remember { mutableStateOf("") }
+
+    fun importSucceeded(name: String?) {
+        android.widget.Toast.makeText(
+            context,
+            if (name != null) "已导入：$name" else "导入失败：无法识别的模板文本",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+        if (name != null) {
+            showImport = false
+            importText = ""
+        }
+    }
+
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val text = runCatching {
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
             }.getOrNull()
             val name = text?.let {
-                vm.importTemplate(it, uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: "导入模板")
+                vm.importTemplateText(it, uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: "导入模板")
             }
-            android.widget.Toast.makeText(
-                context,
-                if (name != null) "已导入：$name" else "导入失败：未找到 {{字段}} 占位符",
-                android.widget.Toast.LENGTH_SHORT,
-            ).show()
-        }
-    }
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/html")) { uri ->
-        val data = if (uri != null) vm.exportTemplateHtml() else null
-        if (uri != null && data != null) {
-            runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(data.second.toByteArray(Charsets.UTF_8))
-                }
-                android.widget.Toast.makeText(context, "已导出：${data.first}", android.widget.Toast.LENGTH_SHORT).show()
-            }.onFailure {
-                android.widget.Toast.makeText(context, "导出失败", android.widget.Toast.LENGTH_SHORT).show()
-            }
+            importSucceeded(name)
         }
     }
 
@@ -176,15 +175,20 @@ fun TemplateSelector(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        TextButton(onClick = { showImport = true }) { Text("导入") }
                         TextButton(onClick = {
-                            importLauncher.launch(arrayOf("text/*", "application/*"))
-                        }) { Text("导入") }
-                        TextButton(onClick = {
-                            val data = vm.exportTemplateHtml()
+                            val data = vm.exportTemplateText()
                             if (data == null) {
-                                android.widget.Toast.makeText(context, "内置原生模板暂不支持导出", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, "当前没有可导出的模板", android.widget.Toast.LENGTH_SHORT).show()
                             } else {
-                                exportLauncher.launch(data.first)
+                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                    as android.content.ClipboardManager
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("engCamera模板", data.second))
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "已复制到剪贴板（${data.first}），发给他人粘贴导入即可",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
                             }
                         }) { Text("导出") }
                         IconButton(onClick = onDismiss) {
@@ -214,6 +218,45 @@ fun TemplateSelector(
                     }
                 }
             }
+        }
+
+        if (showImport) {
+            AlertDialog(
+                onDismissRequest = { showImport = false },
+                title = { Text("导入模板") },
+                text = {
+                    Column {
+                        Text(
+                            "粘贴模板文本（JSON 或网页 HTML），也可从文件选择。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = importText,
+                            onValueChange = { importText = it },
+                            placeholder = { Text("粘贴到这里") },
+                            minLines = 3,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        TextButton(onClick = {
+                            importLauncher.launch(arrayOf("text/*", "application/*"))
+                        }) { Text("从文件选择…") }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = importText.isNotBlank(),
+                        onClick = {
+                            val name = vm.importTemplateText(importText, "导入模板")
+                            importSucceeded(name)
+                        },
+                    ) { Text("导入") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showImport = false }) { Text("取消") }
+                },
+            )
         }
 
         if (deleteTarget != null) {

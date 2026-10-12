@@ -162,11 +162,13 @@ fun WatermarkOverlay(
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             down.consume()
+                            android.util.Log.d("WmTap", "gesture down")
                             var isDrag = false
                             while (true) {
                                 val event = awaitPointerEvent()
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (!change.pressed) {
+                                    android.util.Log.d("WmTap", "up isDrag=$isDrag onTap=${onTap !== null}")
                                     if (!isDrag) onTap()
                                     break
                                 }

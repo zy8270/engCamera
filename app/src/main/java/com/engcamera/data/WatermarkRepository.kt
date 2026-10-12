@@ -318,36 +318,67 @@ class WatermarkRepository(private val context: Context) {
     }
 
     /**
-     * 导入网页模板（HTML 片段契约见 TemplateHtml）。
-     * @return 成功返回模板名，失败返回 null
+     * 导出当前模板为文本（剪贴板/文件共用）：原生=JSON（含布局/样式/字段/选项全部数据），
+     * 网页=HTML 源。返回 (建议文件名, 文本)；无当前模板返回 null。
      */
-    fun importTemplate(html: String, fallbackName: String): String? {
-        val parsed = com.engcamera.watermark.TemplateHtml.parseImport(html, fallbackName) ?: return null
-        val (name, defs) = parsed
-        val tpl = WatermarkTemplate(
-            id = "u_${System.currentTimeMillis()}",
-            name = name,
-            backend = TemplateBackend.WEB,
-            html = html,
-            fields = defs,
-            options = listOf(
-                TemplateOptionDef("bgOpacity", "面板不透明度", "slider", 10f, 100f),
-                TemplateOptionDef("accentColor", "强调色", "color"),
-            ),
-            builtIn = false,
-        )
+    fun exportTemplateText(): Pair<String, String>? {
+        val tpl = WatermarkTemplates.find(_state.value.templateId) ?: return null
+        val text = when (tpl.backend) {
+            TemplateBackend.NATIVE -> json.encodeToString(tpl)
+            TemplateBackend.WEB -> tpl.html ?: return null
+        }
+        val ext = if (tpl.backend == TemplateBackend.NATIVE) "json" else "html"
+        android.util.Log.d("TplExport", "export ${tpl.name} (${text.length} chars)")
+        return "${tpl.name}.$ext" to text
+    }
+
+    private fun addUserTemplate(tpl: WatermarkTemplate) {
         _userTemplates.value = _userTemplates.value + tpl
         scope.launch {
             context.appDataStore.edit { it[templatesKey] = json.encodeToString(_userTemplates.value) }
         }
-        return name
     }
 
-    /** 导出当前模板的 HTML 源（仅网页模板可导出；返回 null 表示不可导出） */
-    fun exportTemplateHtml(): Pair<String, String>? {
-        val tpl = WatermarkTemplates.find(_state.value.templateId) ?: return null
-        val html = tpl.html ?: return null
-        return "${tpl.name}.html" to html
+    /**
+     * 导入模板文本，自动识别两种格式：
+     * - JSON（原生模板，exportTemplateText 导出的）
+     * - 网页 HTML（占位符契约见 TemplateHtml）
+     * @return 成功返回模板名，失败返回 null
+     */
+    fun importTemplateText(text: String, fallbackName: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        // 原生 JSON 模板（解析失败回落到 HTML 分支——纯占位符文本也以 "{" 开头）
+        if (trimmed.startsWith("{")) {
+            val tpl = runCatching { json.decodeFromString<WatermarkTemplate>(trimmed) }.getOrNull()
+            if (tpl != null && tpl.fields.isNotEmpty()) {
+                val copy = tpl.copy(
+                    id = "u_${System.currentTimeMillis()}",
+                    builtIn = false,
+                    name = tpl.name.ifBlank { fallbackName },
+                )
+                addUserTemplate(copy)
+                return copy.name
+            }
+        }
+        // 网页 HTML 模板
+        val parsed = com.engcamera.watermark.TemplateHtml.parseImport(trimmed, fallbackName) ?: return null
+        val (name, defs) = parsed
+        addUserTemplate(
+            WatermarkTemplate(
+                id = "u_${System.currentTimeMillis()}",
+                name = name,
+                backend = TemplateBackend.WEB,
+                html = trimmed,
+                fields = defs,
+                options = listOf(
+                    TemplateOptionDef("bgOpacity", "面板不透明度", "slider", 10f, 100f),
+                    TemplateOptionDef("accentColor", "强调色", "color"),
+                ),
+                builtIn = false,
+            ),
+        )
+        return name
     }
 
     /** 删除用户导入的模板；当前工程正在用它则先切回经典 */

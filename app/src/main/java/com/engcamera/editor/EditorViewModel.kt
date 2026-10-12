@@ -44,10 +44,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
 
     fun applyTemplate(id: String) = repo.applyTemplate(id)
 
-    fun importTemplate(html: String, fallbackName: String): String? =
-        repo.importTemplate(html, fallbackName)
+    fun importTemplateText(text: String, fallbackName: String): String? =
+        repo.importTemplateText(text, fallbackName)
 
-    fun exportTemplateHtml(): Pair<String, String>? = repo.exportTemplateHtml()
+    fun exportTemplateText(): Pair<String, String>? = repo.exportTemplateText()
 
     fun deleteUserTemplate(id: String) = repo.deleteUserTemplate(id)
 
