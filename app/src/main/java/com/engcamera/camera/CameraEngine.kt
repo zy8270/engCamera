@@ -18,6 +18,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.CameraInfo
+import androidx.camera.core.ZoomState
 import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
 import androidx.camera.core.ViewPort
@@ -35,6 +36,10 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.Observer
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -200,6 +205,33 @@ class CameraEngine(
         else -> androidx.camera.video.Quality.HD
     }
 
+    // ---------- 电子变焦 ----------
+
+    /** 当前变焦倍数（zoomState 回流，预览徽标显示用） */
+    private val _zoomRatio = MutableStateFlow(1f)
+    val zoomRatio: StateFlow<Float> = _zoomRatio.asStateFlow()
+
+    private var zoomObserver: Observer<ZoomState>? = null
+    private var zoomObservedInfo: CameraInfo? = null
+
+    /** 设置电子变焦倍数（自动夹取到当前镜头支持范围） */
+    fun setZoomRatio(ratio: Float) {
+        val cam = camera ?: return
+        val zs = cam.cameraInfo.zoomState.value ?: return
+        cam.cameraControl.setZoomRatio(ratio.coerceIn(zs.minZoomRatio, zs.maxZoomRatio))
+    }
+
+    /** 绑定成功后挂 zoomState 监听（换镜头/重绑时切换到新相机实例，旧监听移除） */
+    private fun observeZoom() {
+        val info = camera?.cameraInfo ?: return
+        if (info == zoomObservedInfo) return
+        zoomObservedInfo?.let { old -> zoomObserver?.let { old.zoomState.removeObserver(it) } }
+        val obs = Observer { zs: ZoomState -> _zoomRatio.value = zs.zoomRatio }
+        zoomObserver = obs
+        zoomObservedInfo = info
+        info.zoomState.observe(lifecycleOwner, obs)
+    }
+
     val backLenses = mutableListOf<BackLens>()
 
     /** null 表示使用 CameraX 默认后摄 */
@@ -354,6 +386,7 @@ class CameraEngine(
         imageCapture = capture
         videoCapture = video
         camera = attempt(withVideo = true, withAnalysis = true, withViewport = true)
+        observeZoom()
             ?: attempt(withVideo = true, withAnalysis = false, withViewport = true)
             ?: attempt(withVideo = false, withAnalysis = true, withViewport = true)
             ?: attempt(withVideo = false, withAnalysis = true, withViewport = false)
@@ -437,6 +470,7 @@ class CameraEngine(
     }
 
     fun release() {
+        zoomObservedInfo?.let { old -> zoomObserver?.let { old.zoomState.removeObserver(it) } }
         unbind()
         analysisExecutor?.shutdown()
         analysisExecutor = null

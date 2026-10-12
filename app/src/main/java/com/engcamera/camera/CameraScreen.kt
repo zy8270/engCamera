@@ -16,6 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -92,6 +96,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.math.roundToInt
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -621,6 +626,20 @@ private fun PreviewArea(
                 detectTapGestures { pos ->
                     if (vm.focusAt(pos.x, pos.y)) focusPoint = pos
                 }
+            }
+            // 双指捏合电子变焦（Initial pass 拦截：捏合优先于水印拖动/对焦点击）
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    do {
+                        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                        val zoom = event.calculateZoom()
+                        if (zoom != 1f) {
+                            vm.onPinchZoom(zoom)
+                            event.changes.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
             },
     ) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
@@ -698,6 +717,23 @@ private fun PreviewArea(
                 Spacer(Modifier.width(6.dp))
                 Text("${ui.recordingSeconds}s", color = Color.White)
             }
+        }
+        // 电子变焦倍数徽标：点击在 1×/2× 间快速切换
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 64.dp, end = 8.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0x66000000))
+                .clickable { vm.toggleZoom() }
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+            Text(
+                String.format(Locale.US, "%.1f×", ui.zoomRatio),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
