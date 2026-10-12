@@ -5,6 +5,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -12,6 +17,8 @@ import com.engcamera.camera.CameraScreen
 import com.engcamera.editor.EditorScreen
 import com.engcamera.gallery.GalleryScreen
 import com.engcamera.ui.theme.EngCameraTheme
+import com.engcamera.ui.theme.LocalAppDarkTheme
+import com.engcamera.ui.theme.resolveDarkTheme
 
 object Routes {
     const val CAMERA = "camera"
@@ -85,7 +92,19 @@ class MainActivity : ComponentActivity() {
         }
         val container = (application as EngCameraApp).container
         setContent {
-            EngCameraTheme {
+            // 外观主题：跟随系统 / 日间 / 夜间（设置抽屉切换，DataStore 持久化）
+            val themeMode by container.repository.themeMode.collectAsState()
+            val darkTheme = resolveDarkTheme(themeMode, isSystemInDarkTheme())
+            // 系统栏图标对比度跟随主题（透明底上日间深图标/夜间浅图标）；
+            // 相机页自行强制浅色图标（取景器恒深色），离开时由相册/编辑器按主题恢复
+            LaunchedEffect(darkTheme) {
+                val statusStyle =
+                    if (darkTheme) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                    else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = statusStyle, navigationBarStyle = statusStyle)
+            }
+            CompositionLocalProvider(LocalAppDarkTheme provides darkTheme) {
+                EngCameraTheme(themeMode = themeMode) {
                 // 组合心跳：组合存活期间每秒跳一次（delay 挂在组合作用域，组合冻结/销毁即停）
                 androidx.compose.runtime.LaunchedEffect(Unit) {
                     recreateAttempts = 0
@@ -121,6 +140,7 @@ class MainActivity : ComponentActivity() {
                     composable(Routes.EDITOR) {
                         EditorScreen(onBack = { debouncedPop() })
                     }
+                }
                 }
             }
         }

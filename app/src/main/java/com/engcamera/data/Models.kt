@@ -2,6 +2,9 @@ package com.engcamera.data
 
 import kotlinx.serialization.Serializable
 
+/** 应用主题模式：跟随系统 / 日间 / 夜间（设置抽屉切换，DataStore 持久化） */
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
 /** 水印字段类型 */
 @Serializable
 enum class FieldType {

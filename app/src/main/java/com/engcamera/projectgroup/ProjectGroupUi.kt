@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.engcamera.data.ProjectGroupEntry
 import com.engcamera.data.ProjectGroups
+import com.engcamera.ui.theme.ChromeScrim
 import kotlinx.coroutines.flow.StateFlow
 
 /** 工程组操作接口：编辑器与相机页共用同一套管理能力 */
@@ -88,7 +89,7 @@ fun ProjectGroupSelector(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0x88000000))
+                    .background(ChromeScrim)
                     .pointerInput(Unit) { detectTapGestures { onDismiss() } },
             )
         }
@@ -106,7 +107,7 @@ fun ProjectGroupSelector(
                     .fillMaxWidth(0.94f)
                     .fillMaxHeight(0.5f)
                     .shadow(10.dp, RoundedCornerShape(20.dp))
-                    .background(Color(0xFF1E1E22), RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(20.dp))
                     .padding(12.dp),
             ) {
                 // 头部：工程组 | 删除工程 | 新建工程
@@ -118,12 +119,16 @@ fun ProjectGroupSelector(
                         "工程组",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
                         "删除工程",
-                        color = if (pendingDelete.isEmpty()) Color(0xFF666666) else Color(0xFFFF6E6E),
+                        color = if (pendingDelete.isEmpty()) {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .clickable(enabled = pendingDelete.isNotEmpty()) {
@@ -146,7 +151,7 @@ fun ProjectGroupSelector(
                 Text(
                     "点工程名切换；勾选后可批量删除",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFCAC4D0),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(6.dp))
 
@@ -179,7 +184,11 @@ fun ProjectGroupSelector(
                             ) {
                                 Text(
                                     entry.name + if (active) "（当前）" else "",
-                                    color = if (active) MaterialTheme.colorScheme.primary else Color.White,
+                                    color = if (active) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
                                     fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                                 )
                             }
@@ -190,7 +199,7 @@ fun ProjectGroupSelector(
                                 Icon(
                                     Icons.Default.Edit,
                                     contentDescription = "重命名" + entry.name,
-                                    tint = Color(0xFFCAC4D0),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }

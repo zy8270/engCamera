@@ -1,5 +1,8 @@
 package com.engcamera.editor
 
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -65,6 +69,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -74,6 +79,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.engcamera.data.FieldType
 import com.engcamera.data.WatermarkField
+import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkRenderer
 import kotlin.math.roundToInt
 
@@ -82,6 +88,16 @@ import kotlin.math.roundToInt
 @Composable
 fun EditorScreen(onBack: () -> Unit) {
     val vm: EditorViewModel = viewModel()
+    val context = LocalContext.current
+    // 系统栏图标对比度按当前主题（相机页强制浅色图标，回到本页恢复）
+    val dark = LocalAppDarkTheme.current
+    DisposableEffect(dark) {
+        val style =
+            if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        (context as? ComponentActivity)?.enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+        onDispose { }
+    }
     val state by vm.state.collectAsState()
     val dynamic by vm.dynamic.collectAsState()
     val rotationDeg by vm.rotationDeg.collectAsState()
@@ -115,7 +131,7 @@ fun EditorScreen(onBack: () -> Unit) {
                 ) {
                     ProjectGroupIcon()
                     Spacer(Modifier.width(8.dp))
-                    Text("工程组", color = Color.White)
+                    Text("工程组", color = MaterialTheme.colorScheme.onPrimary)
                 }
             }
         },
@@ -287,21 +303,23 @@ fun EditorScreen(onBack: () -> Unit) {
 /** 工程组图标：三条横线，最后一条带三角形（表示一组配置的集合/切换） */
 @Composable
 private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
+    // 跟随 onPrimary：日间主色深蓝→白线条，夜间主色浅蓝→深色线条
+    val lineColor = MaterialTheme.colorScheme.onPrimary
     androidx.compose.foundation.Canvas(modifier.size(width = 20.dp, height = 16.dp)) {
         val w = size.width
         val h = size.height
         val stroke = 2.2f
-        drawLine(Color.White, Offset(0f, h * 0.15f), Offset(w * 0.85f, h * 0.15f), stroke)
-        drawLine(Color.White, Offset(0f, h * 0.45f), Offset(w * 0.85f, h * 0.45f), stroke)
+        drawLine(lineColor, Offset(0f, h * 0.15f), Offset(w * 0.85f, h * 0.15f), stroke)
+        drawLine(lineColor, Offset(0f, h * 0.45f), Offset(w * 0.85f, h * 0.45f), stroke)
         val y = h * 0.78f
-        drawLine(Color.White, Offset(0f, y), Offset(w * 0.55f, y), stroke)
+        drawLine(lineColor, Offset(0f, y), Offset(w * 0.55f, y), stroke)
         val tri = androidx.compose.ui.graphics.Path().apply {
             moveTo(w * 0.62f, y - h * 0.16f)
             lineTo(w * 0.62f, y + h * 0.16f)
             lineTo(w * 0.82f, y)
             close()
         }
-        drawPath(tri, Color.White)
+        drawPath(tri, lineColor)
     }
 }
 
@@ -540,7 +558,7 @@ private fun EditFieldDialog(
                                         translationY = fraction * (trackPx - thumbPx)
                                     }
                                     .clip(RoundedCornerShape(2.dp))
-                                    .background(Color(0x66FFFFFF)),
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f)),
                             )
                         }
                     }
