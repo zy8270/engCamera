@@ -346,7 +346,8 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
         val context = LocalContext.current
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.roundToInt().coerceAtLeast(1)
         val fakeState = remember(template) {
-            WatermarkState(
+            // 全量快照模板（导入的）：直接用快照状态（含字段值），缩略图=导出时的样子
+            template.snapshot ?: WatermarkState(
                 templateId = template.id,
                 fields = template.fields.map {
                     WatermarkField(
