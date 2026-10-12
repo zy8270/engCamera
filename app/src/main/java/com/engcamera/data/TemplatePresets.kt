@@ -66,6 +66,8 @@ object TemplatePresets {
             fields = stdFields,
             options = listOf(
                 TemplateOptionDef("recDot", "记录点", "switch"),
+                TemplateOptionDef("recDotSize", "记录点大小", "slider", 0.5f, 2f),
+                TemplateOptionDef("recGlow", "光晕大小", "slider", 0f, 1.5f),
                 TemplateOptionDef("recDotColor", "记录点颜色", "color"),
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("titleBgColor", "标题底色", "color"),
