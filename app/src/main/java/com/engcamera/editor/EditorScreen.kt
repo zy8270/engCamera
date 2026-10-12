@@ -197,20 +197,25 @@ fun EditorScreen(onBack: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.roundToInt()
-                    // 网页模板：渲染完成 tick 触发重组取新缓存
+                    // 网页模板：渲染完成 tick 触发重组取新缓存；预览用分钟级时间（不每秒重渲 WebView）
                     val webTick by com.engcamera.watermark.WebTemplateRenderer.tick.collectAsState()
-                    LaunchedEffect(state.fields, state.style, dynamic, widthPx) {
-                        val key = com.engcamera.watermark.WatermarkRenderer.webCacheKey(state, dynamic, widthPx)
+                    val isWeb = com.engcamera.data.WatermarkTemplates.find(state.templateId)
+                        ?.backend == com.engcamera.data.TemplateBackend.WEB
+                    val effDynamic = remember(dynamic, isWeb) {
+                        if (isWeb) com.engcamera.watermark.WebTemplateRenderer.previewDynamic(dynamic) else dynamic
+                    }
+                    LaunchedEffect(state.fields, state.style, effDynamic, widthPx) {
+                        val key = com.engcamera.watermark.WatermarkRenderer.webCacheKey(state, effDynamic, widthPx)
                         if (key != null && com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
                             com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
                                 com.engcamera.watermark.WebTemplateRenderer.warmAsync(
-                                    context, key, tpl, state, dynamic, widthPx,
+                                    context, key, tpl, state, effDynamic, widthPx,
                                 )
                             }
                         }
                     }
-                    val block = remember(state, dynamic, widthPx, webTick) {
-                        WatermarkRenderer.render(state, widthPx, dynamic)
+                    val block = remember(state, effDynamic, widthPx, webTick) {
+                        WatermarkRenderer.render(state, widthPx, effDynamic)
                     }
                     Image(
                         bitmap = block.bitmap.asImageBitmap(),
