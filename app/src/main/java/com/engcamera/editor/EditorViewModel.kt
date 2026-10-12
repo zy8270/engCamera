@@ -46,9 +46,6 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         if (s.first().followGravity) 0f else s.first().rotationDeg
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0f)
 
-    /** 刷新定位后等待同步标记 */
-    private var pendingLocationSync = false
-
     init {
         viewModelScope.launch {
             val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
@@ -69,48 +66,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         }
         viewModelScope.launch {
             locationText.collect { text ->
-                // 定位文字变化时立即更新 dynamic（不等下一秒 tick），预览实时同步
+                // 定位文字变化时立即更新 dynamic（不等下一秒 tick），预览实时同步。
+                // 注意：不写字段值——字段只有用户在编辑对话框点"确定"才提交（取消不得产生"自定义"）
                 _dynamic.value = _dynamic.value.copy(location = text)
-                if (pendingLocationSync && text.isNotBlank() &&
-                    text != "定位中…" && !text.startsWith("未获取")
-                ) {
-                    pendingLocationSync = false
-                    syncToLocationField(text)
-                }
             }
         }
     }
 
-    /**
-     * 刷新定位：立即请求当前位置；拿到结果后自动同步到【位置】标签
-     * （有则更新其值，无则创建该标签）。
-     */
-    fun refreshLocation() {
-        pendingLocationSync = true
-        container.locationSource.refreshNow()
-    }
-
-    private fun syncToLocationField(text: String) {
-        repo.update { s ->
-            val existing = s.fields.firstOrNull { it.type == FieldType.LOCATION }
-            if (existing != null) {
-                s.copy(
-                    fields = s.fields.map {
-                        if (it.type == FieldType.LOCATION) it.copy(value = text) else it
-                    },
-                )
-            } else {
-                s.copy(
-                    fields = s.fields + WatermarkField(
-                        id = "f_loc_${System.currentTimeMillis()}",
-                        type = FieldType.LOCATION,
-                        label = "位置",
-                        value = text,
-                    ),
-                )
-            }
-        }
-    }
+    /** 刷新定位：仅刷新定位数据源（自动值随流更新），不写入字段；提交由对话框"确定"负责 */
+    fun refreshLocation() = container.locationSource.refreshNow()
 
     fun setEnabled(id: String, enabled: Boolean) = repo.update { s ->
         s.copy(fields = s.fields.map { if (it.id == id) it.copy(enabled = enabled) else it })
