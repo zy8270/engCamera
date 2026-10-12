@@ -65,6 +65,7 @@ object TemplatePresets {
             style = style("CLASSIC"),
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("titleBgColor", "标题底色", "color"),
                 TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
                 TemplateOptionDef("bodyBgColor", "正文底色", "color"),
@@ -77,6 +78,7 @@ object TemplatePresets {
             style = style("MINIMAL") { copy(bodyBgColor = 0x00000000, titleBgColor = 0x00000000) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("accentColor", "强调色", "color"),
                 TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
             ),
@@ -87,6 +89,7 @@ object TemplatePresets {
             style = style("BORDER_CARD") { copy(bodyBgColor = 0x66000000) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("borderColor", "边框颜色", "color"),
                 TemplateOptionDef("accentColor", "标题颜色", "color"),
                 TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
@@ -98,6 +101,7 @@ object TemplatePresets {
             style = style("SINGLE_LINE") { copy(bodyBgColor = 0x88000000) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
                 TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
             ),
@@ -108,6 +112,7 @@ object TemplatePresets {
             style = style("GRADIENT") { copy(titleBgColor = 0x00000000, bodyBgColor = 0xFF000000) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("bgOpacity", "渐变深度", "slider", 20f, 100f),
             ),
         ),
@@ -123,6 +128,7 @@ object TemplatePresets {
             },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("accentColor", "竖条颜色", "color"),
                 TemplateOptionDef("bgOpacity", "卡片不透明度", "slider", 40f, 100f),
             ),
@@ -133,6 +139,7 @@ object TemplatePresets {
             style = style("RECORDER") { copy(bodyBgColor = 0xCC000000, accentColor = 0xFFFF3B30) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("accentColor", "记录点颜色", "color"),
                 TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 20f, 100f),
             ),

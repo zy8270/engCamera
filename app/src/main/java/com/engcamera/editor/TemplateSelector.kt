@@ -476,10 +476,16 @@ fun TemplateOptionsCard(
                                 val current = when (opt.key) {
                                     "bgOpacity" -> style.bgOpacity.toFloat()
                                     "cornerRatio" -> style.cornerRatio
+                                    "maxWidthRatio" -> style.maxWidthRatio
                                     else -> opt.min
                                 }
+                                // 比例类选项按百分比显示
+                                val display = when (opt.key) {
+                                    "bgOpacity" -> "${current.roundToInt()}"
+                                    else -> "${(current * 100).roundToInt()}%"
+                                }
                                 Text(
-                                    "${opt.label} ${current.roundToInt()}",
+                                    "${opt.label} $display",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

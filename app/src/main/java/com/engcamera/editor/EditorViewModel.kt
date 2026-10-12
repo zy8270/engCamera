@@ -71,6 +71,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         val st = when (key) {
             "bgOpacity" -> s.style.copy(bgOpacity = value.toInt().coerceIn(0, 100))
             "cornerRatio" -> s.style.copy(cornerRatio = value)
+            "maxWidthRatio" -> s.style.copy(maxWidthRatio = value.coerceIn(0.3f, 0.9f))
             else -> s.style
         }
         s.copy(style = st)
