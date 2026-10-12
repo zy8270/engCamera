@@ -558,13 +558,15 @@ private fun ColorOptionRow(
                     .clickable { onColor(original) },
                 contentAlignment = Alignment.Center,
             ) {
-                // 图标颜色随原始色明暗自适应（浅色底黑图标/深色底白图标）
+                // 图标颜色随原始色明暗自适应（Compose 分量是 0..1 浮点：
+                // 有效明度按浅色卡片底混合半透明色后判级，浅色底黑图标/深色底白图标）
                 val c = Color(original)
-                val lum = 0.299f * c.red + 0.587f * c.green + 0.114f * c.blue
+                val effLum = (0.299f * c.red + 0.587f * c.green + 0.114f * c.blue) * c.alpha +
+                    0.94f * (1f - c.alpha)
                 Icon(
                     Icons.Default.Refresh,
                     contentDescription = "重置到模板原始颜色",
-                    tint = if (lum > 140f) {
+                    tint = if (effLum > 0.6f) {
                         Color.Black.copy(alpha = 0.75f)
                     } else {
                         Color.White.copy(alpha = 0.9f)
