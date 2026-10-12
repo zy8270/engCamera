@@ -741,7 +741,7 @@ private fun PreviewArea(
             Row(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .padding(8.dp),
+                    .padding(top = 56.dp, end = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 ui.lensLabels.forEachIndexed { index, label ->
@@ -782,11 +782,11 @@ private fun PreviewArea(
                 Text("${ui.recordingSeconds}s", color = Color.White)
             }
         }
-        // 电子变焦倍数徽标：点击在 1×/2× 间快速切换
+        // 电子变焦倍数徽标：点击在 1×/2× 间快速切换（右上角；镜头胶囊下移让位）
         Box(
             Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 64.dp, end = 8.dp)
+                .padding(top = 8.dp, end = 8.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0x66000000))
                 .clickable { vm.toggleZoom() }
