@@ -159,6 +159,8 @@ data class WatermarkTemplate(
     val style: WatermarkStyle = WatermarkStyle(),
     val options: List<TemplateOptionDef> = emptyList(),
     val builtIn: Boolean = true,
+    /** 全量状态快照（带数据导出的模板）：非空时应用模板=整份状态原样还原（含字段值） */
+    val snapshot: WatermarkState? = null,
 )
 
 /** 工程组条目：一个工程 = 一份完整水印状态（字段/样式/位置） */
@@ -176,4 +178,19 @@ data class ProjectGroups(
     val projects: List<ProjectGroupEntry> = listOf(
         ProjectGroupEntry("default", "默认工程", WatermarkState()),
     ),
+)
+
+
+/**
+ * 模板导出格式 v2（全量）：模板定义 + 当前完整状态（字段值/样式/锚点）。
+ * "导出是什么样的，在另一台设备导入就是什么样的"。
+ */
+@Serializable
+data class TemplateExport(
+    val format: Int = 2,
+    val name: String,
+    val backend: TemplateBackend = TemplateBackend.NATIVE,
+    val html: String? = null,
+    val options: List<TemplateOptionDef> = emptyList(),
+    val state: WatermarkState,
 )

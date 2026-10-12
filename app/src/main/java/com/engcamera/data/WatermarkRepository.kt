@@ -307,6 +307,11 @@ class WatermarkRepository(private val context: Context) {
     /** 应用模板：布局与字段配置随模板走，字段值按类型保留（工程名/备注/计数等不丢），锚点与宽度不动 */
     fun applyTemplate(id: String) {
         val tpl = WatermarkTemplates.find(id) ?: return
+        // 全量快照模板（用户导入/带数据导出）：整份状态原样还原（含字段值/样式/位置）
+        if (tpl.snapshot != null) {
+            update { tpl.snapshot.copy(templateId = tpl.id) }
+            return
+        }
         val cur = _state.value
         val newFields = tpl.fields.map { def ->
             val existing = cur.fields.firstOrNull { it.type == def.type }
@@ -335,13 +340,18 @@ class WatermarkRepository(private val context: Context) {
      */
     fun exportTemplateText(): Pair<String, String>? {
         val tpl = WatermarkTemplates.find(_state.value.templateId) ?: return null
-        val text = when (tpl.backend) {
-            TemplateBackend.NATIVE -> json.encodeToString(tpl)
-            TemplateBackend.WEB -> tpl.html ?: return null
-        }
-        val ext = if (tpl.backend == TemplateBackend.NATIVE) "json" else "html"
+        // 全量导出：模板定义 + 当前完整状态（字段值/颜色样式/宽度/锚点），
+        // 另一台设备导入后还原为导出时的样子
+        val export = TemplateExport(
+            name = tpl.name,
+            backend = tpl.backend,
+            html = tpl.html,
+            options = tpl.options,
+            state = _state.value,
+        )
+        val text = json.encodeToString(export)
         android.util.Log.d("TplExport", "export ${tpl.name} (${text.length} chars)")
-        return "${tpl.name}.$ext" to text
+        return "${tpl.name}.json" to text
     }
 
     private fun addUserTemplate(tpl: WatermarkTemplate) {
@@ -360,17 +370,51 @@ class WatermarkRepository(private val context: Context) {
     fun importTemplateText(text: String, fallbackName: String): String? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
-        // 原生 JSON 模板（解析失败回落到 HTML 分支——纯占位符文本也以 "{" 开头）
+        // ① 全量导出（v102+：TemplateExport JSON，含字段值/样式/位置）
         if (trimmed.startsWith("{")) {
+            val export = runCatching { json.decodeFromString(TemplateExport.serializer(), trimmed) }
+                .getOrNull()
+            if (export != null && export.state.fields.isNotEmpty()) {
+                val id = "u_${System.currentTimeMillis()}"
+                addUserTemplate(
+                    WatermarkTemplate(
+                        id = id,
+                        name = export.name.ifBlank { fallbackName },
+                        backend = export.backend,
+                        html = export.html,
+                        options = export.options,
+                        snapshot = export.state.copy(templateId = id),
+                        builtIn = false,
+                    ),
+                )
+                return export.name.ifBlank { fallbackName }
+            }
+            // ② 旧版单模板 JSON（v103）：作为快照模板导入
             val tpl = runCatching { json.decodeFromString<WatermarkTemplate>(trimmed) }.getOrNull()
             if (tpl != null && tpl.fields.isNotEmpty()) {
-                val copy = tpl.copy(
-                    id = "u_${System.currentTimeMillis()}",
-                    builtIn = false,
-                    name = tpl.name.ifBlank { fallbackName },
+                val id = "u_${System.currentTimeMillis()}"
+                addUserTemplate(
+                    tpl.copy(
+                        id = id,
+                        builtIn = false,
+                        snapshot = tpl.snapshot ?: WatermarkState(
+                            templateId = id,
+                            fields = tpl.fields.map {
+                                WatermarkField(
+                                    id = "f_${it.type.name.lowercase()}",
+                                    type = it.type,
+                                    label = it.label,
+                                    value = "",
+                                    enabled = it.enabled,
+                                    isTitle = it.isTitle,
+                                    deletable = it.deletable,
+                                )
+                            },
+                            style = tpl.style,
+                        ),
+                    ),
                 )
-                addUserTemplate(copy)
-                return copy.name
+                return tpl.name.ifBlank { fallbackName }
             }
         }
         // 网页 HTML 模板
