@@ -1,6 +1,7 @@
 package com.engcamera.data
 
 import android.content.Context
+import android.net.Uri
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -40,6 +41,8 @@ class WatermarkRepository(private val context: Context) {
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val templatesKey = stringPreferencesKey("templates_v1") // 用户导入的水印模板
     private val deletableMigratedKey = booleanPreferencesKey("deletable_migrated_v1")
+    private val saveTreeUriKey = stringPreferencesKey("save_tree_uri")
+    private val saveTreeNameKey = stringPreferencesKey("save_tree_name")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -66,6 +69,10 @@ class WatermarkRepository(private val context: Context) {
     /** 外观主题：跟随系统 / 日间 / 夜间（默认跟随系统） */
     private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    /** 自定义文件保存目录（SAF tree）：null = 默认 DCIM/Camera */
+    private val _saveTree = MutableStateFlow<Pair<Uri, String>?>(null)
+    val saveTree: StateFlow<Pair<Uri, String>?> = _saveTree.asStateFlow()
 
     /** 用户导入的水印模板（内置模板见 TemplatePresets） */
     private val _userTemplates = MutableStateFlow<List<WatermarkTemplate>>(emptyList())
@@ -94,6 +101,11 @@ class WatermarkRepository(private val context: Context) {
             _themeMode.value = context.appDataStore.data.first()[themeModeKey]
                 ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
                 ?: ThemeMode.SYSTEM
+            val savedTreeUri = context.appDataStore.data.first()[saveTreeUriKey]
+            if (savedTreeUri != null) {
+                _saveTree.value = android.net.Uri.parse(savedTreeUri) to
+                    (context.appDataStore.data.first()[saveTreeNameKey] ?: "所选目录")
+            }
             // 一次性迁移：计数默认关闭（2026-10-11）——已有状态里的计数也关一次，用户可再手动开
             if (context.appDataStore.data.first()[booleanPreferencesKey("count_default_off_migrated")] != true) {
                 _state.value = _state.value.copy(
@@ -439,6 +451,22 @@ class WatermarkRepository(private val context: Context) {
         _themeMode.value = mode
         scope.launch {
             context.appDataStore.edit { it[themeModeKey] = mode.name }
+        }
+    }
+
+    /** 设置自定义文件保存目录（SAF tree）；uri=null 恢复默认 DCIM/Camera */
+    fun setSaveTree(uri: Uri?, name: String?) {
+        _saveTree.value = if (uri != null) uri to (name ?: "所选目录") else null
+        scope.launch {
+            context.appDataStore.edit {
+                if (uri != null) {
+                    it[saveTreeUriKey] = uri.toString()
+                    it[saveTreeNameKey] = name ?: "所选目录"
+                } else {
+                    it.remove(saveTreeUriKey)
+                    it.remove(saveTreeNameKey)
+                }
+            }
         }
     }
 

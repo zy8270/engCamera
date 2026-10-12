@@ -241,6 +241,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         _ui.update { it.copy(zoomRatio = target) }
     }
 
+    /** 自定义文件保存目录（null = 默认 DCIM/Camera） */
+    val saveTree: StateFlow<Pair<Uri, String>?> = container.repository.saveTree
+
+    fun setSaveTree(uri: Uri?, name: String?) = container.repository.setSaveTree(uri, name)
+
+    /** 保存调用统一走这里取自定义目录 */
+    private suspend fun saveTreeUri(): Uri? = container.repository.saveTree.value?.first
+
     /** 点击对焦测光（预览区像素坐标），返回是否已下发 */
     fun focusAt(x: Float, y: Float): Boolean = engine?.focusMeter(x, y) ?: false
 
@@ -394,7 +402,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             effective, dynamic.value, effective.rotationDeg, 0,
         )
         upright.recycle()
-        MediaSaver.saveBitmap(context, out)
+        MediaSaver.saveBitmap(context, out, treeUri = saveTreeUri())
         out.recycle()
     }
 
@@ -586,7 +594,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）
         val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
         if (noWatermark) {
-            MediaSaver.saveBitmap(context, upright, System.currentTimeMillis())
+            MediaSaver.saveBitmap(context, upright, System.currentTimeMillis(), treeUri = saveTreeUri())
             upright.recycle()
             tempFile.delete()
             return
@@ -606,9 +614,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // ② 水印版 DATE_TAKEN 晚 1 秒（MIUI 未覆盖时间时按时间排也是水印在前）
         val takenAt = System.currentTimeMillis()
         if (container.repository.saveOriginal.value) {
-            runCatching { MediaSaver.saveBitmap(context, upright, takenAt) }
+            runCatching { MediaSaver.saveBitmap(context, upright, takenAt, treeUri = saveTreeUri()) }
         }
-        MediaSaver.saveBitmap(context, out, takenAt + 1000)
+        MediaSaver.saveBitmap(context, out, takenAt + 1000, treeUri = saveTreeUri())
         out.recycle()
         upright.recycle()
         tempFile.delete()
@@ -715,10 +723,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 var originalSaved = false
                 if (container.repository.saveOriginal.value) {
                     originalSaved = runCatching {
-                        MediaSaver.saveVideoFile(context, source, takenAt)
+                        MediaSaver.saveVideoFile(context, source, takenAt, treeUri = saveTreeUri())
                     }.isSuccess
                 }
-                saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt + 1000) }.getOrNull()
+                saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt + 1000, treeUri = saveTreeUri()) }.getOrNull()
                 watermarked = saved != null
                 if (saved == null && originalSaved) {
                     _ui.update { it.copy(toast = "水印视频保存失败，已保留原片") }
@@ -729,7 +737,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             }
         }
         if (saved == null) {
-            saved = runCatching { MediaSaver.saveVideoFile(context, source) }.getOrNull()
+            saved = runCatching { MediaSaver.saveVideoFile(context, source, treeUri = saveTreeUri()) }.getOrNull()
         }
 
         if (saved != null) {

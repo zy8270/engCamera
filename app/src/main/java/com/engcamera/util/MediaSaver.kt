@@ -4,8 +4,10 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
@@ -45,7 +47,18 @@ object MediaSaver {
     }
 
     /** 保存水印成片 JPEG，返回 Uri。takenAtMs 显式写入 DATE_TAKEN（不写则由系统猜，双张保存时排序不稳定） */
-    suspend fun saveBitmap(context: Context, bitmap: Bitmap, takenAtMs: Long? = null): Uri = withContext(Dispatchers.IO) {
+    suspend fun saveBitmap(
+        context: Context,
+        bitmap: Bitmap,
+        takenAtMs: Long? = null,
+        treeUri: Uri? = null,
+    ): Uri = withContext(Dispatchers.IO) {
+        if (treeUri != null) {
+            // 用户自选目录（SAF）：SAF 写入无 DATE_TAKEN，相册按文件时间排序
+            return@withContext saveToTree(context, treeUri, "image/jpeg") { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            }
+        }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("jpg"))
@@ -69,7 +82,19 @@ object MediaSaver {
     }
 
     /** 把缓存中的录像文件转存进 MediaStore，返回 Uri。takenAtMs 同 saveBitmap */
-    suspend fun saveVideoFile(context: Context, src: File, takenAtMs: Long? = null): Uri = withContext(Dispatchers.IO) {
+    suspend fun saveVideoFile(
+        context: Context,
+        src: File,
+        takenAtMs: Long? = null,
+        treeUri: Uri? = null,
+    ): Uri = withContext(Dispatchers.IO) {
+        if (treeUri != null) {
+            val doc = saveToTree(context, treeUri, "video/mp4") { out ->
+                src.inputStream().use { it.copyTo(out) }
+            }
+            src.delete()
+            return@withContext doc
+        }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("mp4"))
@@ -91,6 +116,26 @@ object MediaSaver {
         }
         src.delete()
         uri
+    }
+
+
+    /** 写入用户自选目录（SAF tree），返回 document Uri 并触发媒体扫描；失败抛异常由调用方兜底 */
+    private suspend fun saveToTree(
+        context: Context,
+        treeUri: Uri,
+        mime: String,
+        write: (java.io.OutputStream) -> Unit,
+    ): Uri = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val treeDoc = DocumentsContract.buildDocumentUriUsingTree(
+            treeUri,
+            DocumentsContract.getTreeDocumentId(treeUri),
+        )
+        val doc = DocumentsContract.createDocument(resolver, treeDoc, mime, timeStampName(mime.substringAfterLast('/')))
+            ?: error("无法在所选目录创建文件")
+        resolver.openOutputStream(doc)?.use { out -> write(out) } ?: error("无法写入所选目录")
+        MediaScannerConnection.scanFile(context, arrayOf(doc.toString()), arrayOf(mime), null)
+        doc
     }
 
     /** 查询本 App 拍摄的照片+录像，按添加时间倒序 */

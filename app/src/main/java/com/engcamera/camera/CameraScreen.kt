@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
@@ -58,6 +59,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -403,6 +405,46 @@ private fun SettingsDrawer(
     val volumeShutter by vm.volumeShutter.collectAsState()
     val watermark by vm.watermark.collectAsState()
     val themeMode by vm.themeMode.collectAsState()
+    val saveTree by vm.saveTree.collectAsState()
+    val showSavePathDialog = remember { mutableStateOf(false) }
+    val saveTreeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            val path = android.provider.DocumentsContract.getTreeDocumentId(uri).substringAfter(':', "所选目录")
+            vm.setSaveTree(uri, path)
+            android.widget.Toast.makeText(context, "保存路径已设为 $path", android.widget.Toast.LENGTH_SHORT).show()
+            showSavePathDialog.value = false
+        }
+    }
+
+    if (showSavePathDialog.value) {
+        AlertDialog(
+            onDismissRequest = { showSavePathDialog.value = false },
+            title = { Text("文件保存路径") },
+            text = {
+                Text(
+                    "当前：" + (saveTree?.second ?: "DCIM/Camera（默认）") +
+                        "\n\n选择文件夹后，照片和录像将保存到所选目录（系统将请求您授权访问该文件夹）。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { saveTreeLauncher.launch(null) }) { Text("选择文件夹") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    vm.setSaveTree(null, null)
+                    showSavePathDialog.value = false
+                    android.widget.Toast.makeText(context, "已恢复默认 DCIM/Camera", android.widget.Toast.LENGTH_SHORT).show()
+                }) { Text("恢复默认") }
+            },
+        )
+    }
+
     Box(Modifier.fillMaxSize()) {
         // 遮罩独立渐变（不随抽屉位移），由明到暗淡入
         AnimatedVisibility(
@@ -571,6 +613,28 @@ private fun SettingsDrawer(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { showSavePathDialog.value = true }
+                        .padding(vertical = 6.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "文件保存路径",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            saveTree?.second ?: "DCIM/Camera（默认）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
 
                     Spacer(Modifier.height(16.dp))
