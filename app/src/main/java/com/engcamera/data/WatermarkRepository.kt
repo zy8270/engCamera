@@ -359,6 +359,19 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
+    /** 重置当前工程：模板/样式/宽度/字段值全部回默认（保留锚点、旋转角与重力设置） */
+    fun resetCurrentProject() {
+        val cur = _state.value
+        update {
+            WatermarkState(
+                anchorX = cur.anchorX,
+                anchorY = cur.anchorY,
+                rotationDeg = cur.rotationDeg,
+                followGravity = cur.followGravity,
+            )
+        }
+    }
+
     fun setShutterSound(value: Boolean) {
         _shutterSound.value = value
         scope.launch {

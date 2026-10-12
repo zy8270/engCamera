@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
@@ -64,6 +65,9 @@ interface ProjectGroupHandler {
     fun createProject(name: String): String
     fun deleteProjects(ids: Set<String>)
     fun renameProject(id: String, name: String)
+
+    /** 重置当前工程：模板/样式/宽度/字段值全部回默认（保留锚点与重力设置） */
+    fun resetCurrentProject()
 }
 
 /**
@@ -79,6 +83,7 @@ fun ProjectGroupSelector(
     val groups by handler.projects.collectAsState()
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
+    var showResetConfirm by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<ProjectGroupEntry?>(null) }
 
@@ -131,6 +136,19 @@ fun ProjectGroupSelector(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                        // 重置当前工程：进入管理模式（勾选任意工程）后出现，确认弹窗防误触
+                        if (pendingDelete.isNotEmpty()) {
+                            TextButton(onClick = { showResetConfirm = true }) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("重置")
+                            }
+                            Spacer(Modifier.width(4.dp))
                         }
                         // 新建：tonal 胶囊按钮
                         Surface(
@@ -213,6 +231,26 @@ fun ProjectGroupSelector(
                     }
                 }
             }
+        }
+
+        if (showResetConfirm) {
+            val currentName = groups.projects.firstOrNull { it.id == groups.current }?.name ?: "当前工程"
+            AlertDialog(
+                onDismissRequest = { showResetConfirm = false },
+                title = { Text("重置当前工程") },
+                text = {
+                    Text("是否重置当前工程水印为默认值？「$currentName」的模板、样式、宽度与全部字段值将恢复默认（水印位置保留）。")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        handler.resetCurrentProject()
+                        showResetConfirm = false
+                    }) { Text("确认重置") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
+                },
+            )
         }
 
         if (showRename && renameTarget != null) {
