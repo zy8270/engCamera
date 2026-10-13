@@ -74,6 +74,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     fun setTemplateSwitch(key: String, on: Boolean) = repo.update { s ->
         val st = when (key) {
             "recDot" -> s.style.copy(recDot = on)
+            "weatherEmoji" -> s.style.copy(weatherEmoji = on)
             else -> s.style
         }
         s.copy(style = st)
