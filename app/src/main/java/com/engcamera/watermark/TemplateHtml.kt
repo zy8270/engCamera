@@ -5,6 +5,7 @@ import com.engcamera.data.FieldType
 import com.engcamera.data.WatermarkField
 import com.engcamera.data.WatermarkState
 import com.engcamera.data.WatermarkTemplate
+import com.engcamera.data.weatherEmojiPrefix
 
 /**
  * 网页模板 HTML 工具：占位符替换、样式注入、导入解析、导出组装。
@@ -25,18 +26,22 @@ object TemplateHtml {
     private const val EXTRA_MARKER = "<div data-extra></div>"
 
     /** 单字段当前显示文本（与 WatermarkRenderer.displayText 同规则，不回退标签） */
-    private fun fieldValue(f: WatermarkField, dynamic: DynamicValues): String = when (f.type) {
-        FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
-        FieldType.LOCATION -> f.value.ifBlank { dynamic.location.ifBlank { "未获取定位" } }
-        FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
-        FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
-        else -> f.value
+    private fun fieldValue(f: WatermarkField, dynamic: DynamicValues, emoji: Boolean): String {
+        val text = when (f.type) {
+            FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
+            FieldType.LOCATION -> f.value.ifBlank { dynamic.location.ifBlank { "未获取定位" } }
+            FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
+            FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
+            else -> f.value
+        }
+        // 天气 emoji 开关：文本值随开关变化，cacheKey 的 values 部分自动失效触发重渲
+        return if (f.type == FieldType.WEATHER && emoji) weatherEmojiPrefix(text) + text else text
     }
 
     /** 字段当前文本（取该类型第一个"启用"的字段；关闭的字段显示标签兜底） */
     fun valueOf(type: FieldType, label: String, state: WatermarkState, dynamic: DynamicValues): String {
         val f = state.fields.firstOrNull { it.type == type && it.enabled } ?: return label
-        return fieldValue(f, dynamic).ifBlank { label }
+        return fieldValue(f, dynamic, state.style.weatherEmoji).ifBlank { label }
     }
 
     fun escape(s: String): String = s
@@ -98,7 +103,7 @@ object TemplateHtml {
         }
         if (extra.isEmpty()) return body.replace(EXTRA_MARKER, "")
         val rows = extra.joinToString("") { f ->
-            val text = escape(fieldValue(f, dynamic))
+            val text = escape(fieldValue(f, dynamic, state.style.weatherEmoji))
             if (f.label.isBlank()) "<div>$text</div>" else "<div>${escape(f.label)}：$text</div>"
         }
         return if (body.contains(EXTRA_MARKER)) body.replace(EXTRA_MARKER, rows) else body + rows

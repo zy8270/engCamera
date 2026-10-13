@@ -50,7 +50,25 @@ data class WatermarkStyle(
     val borderWidth: Float = 1f,              // 边框卡片：边框粗细倍数（1=标准线宽）
     val gradientColor: Long = 0xFF000000L,    // 渐变底栏：渐变基色（顶部透明→底部此色）
     val webScale: Float = 0.8f,               // 网页模板整体缩放（1=模板原始大小，默认 0.8 防超屏幕宽）
+    val weatherEmoji: Boolean = true,         // 天气文本首位扁平 emoji（如 ☀️ 晴 26℃），默认开
 )
+
+/**
+ * 天气文本 → 扁平 emoji 前缀（系统 Noto Color Emoji 即扁平风格）。
+ * 按词匹配，先具体后宽泛（雷阵雨先于雨、阵雨/毛毛雨先于雨、多云先于晴）；
+ * 没匹配上（含"未获取天气"）不加。手动编辑的天气值同样生效。
+ */
+fun weatherEmojiPrefix(text: String): String = when {
+    "雷" in text -> "⛈️ "
+    "雪" in text || "雹" in text -> "🌨️ "
+    "阵雨" in text || "毛毛雨" in text -> "🌦️ "
+    "雨" in text -> "🌧️ "
+    "雾" in text || "霾" in text || "沙" in text || "尘" in text -> "🌫️ "
+    "多云" in text -> "⛅ "
+    "阴" in text -> "☁️ "
+    "晴" in text -> "☀️ "
+    else -> ""
+}
 
 /** 水印整体状态（对应计划书 6.3） */
 @Serializable

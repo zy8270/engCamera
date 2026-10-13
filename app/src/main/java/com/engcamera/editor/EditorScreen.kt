@@ -349,6 +349,8 @@ fun EditorScreen(onBack: () -> Unit) {
             autoLocation = autoLocation,
             autoWeather = weatherText,
             currentTime = dynamic.time,
+            weatherEmojiOn = state.style.weatherEmoji,
+            onWeatherEmojiChange = { vm.setTemplateSwitch("weatherEmoji", it) },
             onRefreshLocation = { vm.refreshLocation() },
             onRefreshWeather = { vm.refreshWeather() },
             onDismiss = { editingField = null },
@@ -502,6 +504,8 @@ private fun EditFieldDialog(
     autoLocation: String,
     autoWeather: String,
     currentTime: String,
+    weatherEmojiOn: Boolean,
+    onWeatherEmojiChange: (Boolean) -> Unit,
     onRefreshLocation: () -> Unit,
     onRefreshWeather: () -> Unit,
     onDismiss: () -> Unit,
@@ -579,6 +583,23 @@ private fun EditFieldDialog(
                     },
                 )
                 if (isWeather) {
+                    // 天气 emoji 开关：挂在天气字段编辑内（用户拍板 2026-10-13，不进模板选项卡），即时生效
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "天气 Emoji（如 ☀️ 晴 26℃）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(
+                            checked = weatherEmojiOn,
+                            onCheckedChange = onWeatherEmojiChange,
+                        )
+                    }
                     Text(
                         "自动天气：${if (autoWeather.isBlank()) "未获取" else autoWeather}",
                         style = MaterialTheme.typography.bodySmall,

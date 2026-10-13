@@ -569,7 +569,8 @@ fun TemplateOptionsCard(
                                 else -> SliderOptionRow(opt, style, onScalar)
                             }
                         }
-                        Spacer(Modifier.height(6.dp))
+                        // 记录点子选项收进组内不渲染，间隔也不留（否则记录点下方空出一截）
+                        if (opt.key !in recSubKeys) Spacer(Modifier.height(6.dp))
                     }
                 }
             }

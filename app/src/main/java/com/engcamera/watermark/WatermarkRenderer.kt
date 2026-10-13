@@ -16,7 +16,9 @@ import com.engcamera.data.FieldType
 import com.engcamera.data.TemplateBackend
 import com.engcamera.data.WatermarkField
 import com.engcamera.data.WatermarkState
+import com.engcamera.data.WatermarkStyle
 import com.engcamera.data.WatermarkTemplates
+import com.engcamera.data.weatherEmojiPrefix
 import kotlin.math.roundToInt
 
 /** 水印边界安全边距比例（画面宽度的约 1.5%，至少 4px） */
@@ -126,9 +128,9 @@ object WatermarkRenderer {
         val textWidth = (blockWidth - pad * 2).toInt().coerceAtLeast(1)
         val enabled = state.fields.filter { it.enabled }
         val title = enabled.firstOrNull { it.isTitle }
-            ?.let { newLayout(displayText(it, dynamic), titlePaint, textWidth, if (titleCenter) Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_NORMAL) }
+            ?.let { newLayout(displayText(it, dynamic, style), titlePaint, textWidth, if (titleCenter) Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_NORMAL) }
         val rows = enabled.filter { !it.isTitle }.map { f ->
-            val text = if (f.label.isBlank()) displayText(f, dynamic) else "${f.label}：${displayText(f, dynamic)}"
+            val text = if (f.label.isBlank()) displayText(f, dynamic, style) else "${f.label}：${displayText(f, dynamic, style)}"
             newLayout(text, bodyPaint, textWidth)
         }
         return Texts(title, rows, titlePaint, bodyPaint, pad, blockWidth, corner)
@@ -291,7 +293,7 @@ object WatermarkRenderer {
         val enabled = state.fields.filter { it.enabled }
         if (enabled.isEmpty()) return emptyBlock()
         val text = enabled.joinToString("  ·  ") { f ->
-            val v = displayText(f, dynamic)
+            val v = displayText(f, dynamic, style)
             if (f.label.isBlank()) v else "${f.label} $v"
         }
         val textWidth = (blockWidth - width * style.paddingRatio * 2).toInt().coerceAtLeast(1)
@@ -550,12 +552,20 @@ object WatermarkRenderer {
 private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
 
     /** 字段当前显示文本：位置/时间标签有值（手动编辑）则优先生效，空则用拍照瞬间动态值。 */
-    private fun displayText(f: WatermarkField, dynamic: DynamicValues): String = when (f.type) {
-        FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
-        FieldType.LOCATION -> f.value.ifBlank { dynamic.location.ifBlank { "未获取定位" } }
-        FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
-        FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
-        else -> f.value
+    private fun displayText(f: WatermarkField, dynamic: DynamicValues, style: WatermarkStyle): String {
+        val text = when (f.type) {
+            FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
+            FieldType.LOCATION -> f.value.ifBlank { dynamic.location.ifBlank { "未获取定位" } }
+            FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
+            FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
+            else -> f.value
+        }
+        // 天气 emoji 开关：命中天气词时在文本首位加扁平 emoji（原生/网页模板同规则）
+        return if (f.type == FieldType.WEATHER && style.weatherEmoji) {
+            weatherEmojiPrefix(text) + text
+        } else {
+            text
+        }
     }
 
     private fun newLayout(
