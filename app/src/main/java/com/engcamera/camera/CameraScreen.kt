@@ -12,9 +12,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -72,17 +74,24 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -351,12 +360,11 @@ fun CameraScreen(
                         ui = ui,
                         rot = rot,
                         onOpenEditor = onOpenEditor,
-                        onOpenProjectGroups = { showProjectGroups = true },
                     )
                 }
 
                 // 底部控制条紧贴预览下方，不推到屏幕底部
-                BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery)
+                BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery, { showProjectGroups = true })
             }
 
             // 音量键→快门（设置开启时 Activity 转发；仅相机页组合期间注册）
@@ -402,6 +410,7 @@ private fun SettingsDrawer(
 ) {
     val context = LocalContext.current
     val saveOriginal by vm.saveOriginal.collectAsState()
+    val createTitleFromName by vm.createTitleFromName.collectAsState()
     val shutterSound by vm.shutterSound.collectAsState()
     val volumeShutter by vm.volumeShutter.collectAsState()
     val watermark by vm.watermark.collectAsState()
@@ -615,6 +624,30 @@ private fun SettingsDrawer(
                 }
                 Spacer(Modifier.height(16.dp))
 
+                Spacer(Modifier.height(16.dp))
+
+                // 新建工程标题联动（用户拍板 2026-10-13：放文件保存路径上方，默认开）
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "新建工程标题联动",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "新建工程组时，输入的工程名自动填入该工程水印的标题",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = createTitleFromName, onCheckedChange = { vm.setCreateTitleFromName(it) })
+                }
+                Spacer(Modifier.height(16.dp))
+
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -648,7 +681,7 @@ private fun SettingsDrawer(
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                 }.getOrDefault(0L)
                 Text(
-                    "Rnzhy 2026.10.13 $versionCode engCamera MIT",
+                    "Rnzhy 2026.10.14 $versionCode engCamera MIT",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -680,7 +713,6 @@ private fun PreviewArea(
     ui: CameraUiState,
     rot: Int,
     onOpenEditor: () -> Unit,
-    onOpenProjectGroups: () -> Unit = {},
 ) {
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     Box(
@@ -717,46 +749,79 @@ private fun PreviewArea(
             modifier = Modifier.fillMaxSize(),
         )
         focusPoint?.let { pos -> FocusIndicator(pos) }
-        // 工程组快捷入口：预览右下角常驻，半透明灰底双箭头；图案随重力旋转、位置固定
-        Box(
-            Modifier
-                .align(Alignment.BottomEnd)
-                .padding(10.dp)
-                .size(44.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(ChromeNeutral)
-                .clickable { onOpenProjectGroups() },
-            contentAlignment = Alignment.Center,
-        ) {
-            ProjectGroupGlyph(
-                Modifier
-                    .size(26.dp)
-                    .rotate(rot.toFloat()),
-                color = ChromeIcon,
-            )
-        }
-        // 后置焦段选择（右上角，位置固定）
+        // 后置焦段（右上角）：单击轮询下一档；长按向下展开半透明面板列出全部焦段供点选
+        // （不同设备焦段数不同；面板展开时点面板外关闭，用户拍板 2026-10-13）
         if (!ui.frontCamera && ui.lensLabels.size > 1) {
-            Row(
+            var lensMenuOpen by remember { mutableStateOf(false) }
+            if (lensMenuOpen) {
+                // 全屏透明拦截层：点面板外任意处收起面板
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { lensMenuOpen = false },
+                )
+            }
+            Box(
                 Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 56.dp, end = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                ui.lensLabels.forEachIndexed { index, label ->
-                    val selected = index == ui.lensIndex
-                    Text(
-                        text = label,
-                        color = if (selected) Color.Black else Color.White,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .rotate(rot.toFloat())
-                            .clip(CircleShape)
-                            .background(if (selected) Color.White else ChromeBadge)
-                            .clickable { vm.selectLens(index) }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+                // 纵向半透明焦段面板（按钮正下方展开；不随重力旋转，数字横排好读）
+                AnimatedVisibility(
+                    visible = lensMenuOpen,
+                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 38.dp),
+                ) {
+                    Column(
+                        Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xB3141416))
+                            .padding(4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        ui.lensLabels.forEachIndexed { index, label ->
+                            val selected = index == ui.lensIndex
+                            Text(
+                                text = label,
+                                color = if (selected) Color.Black else Color.White,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .padding(vertical = 1.dp)
+                                    .clip(CircleShape)
+                                    .background(if (selected) Color.White else Color.Transparent)
+                                    .clickable {
+                                        vm.selectLens(index)
+                                        lensMenuOpen = false
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
                 }
+                // 当前焦段胶囊：单击轮询下一档，长按展开/收起面板（▾ 提示可展开）
+                Text(
+                    text = ui.lensLabels.getOrElse(ui.lensIndex) { "1×" } + " ▾",
+                    color = Color.Black,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .rotate(rot.toFloat())
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .combinedClickable(
+                            onClick = { vm.selectLens((ui.lensIndex + 1) % ui.lensLabels.size) },
+                            onLongClick = {
+                                android.util.Log.d("LensControl", "long press, open=${lensMenuOpen}")
+                                lensMenuOpen = !lensMenuOpen
+                            },
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
             }
         }
         // 录像中角标（左上角，位置固定）
@@ -921,7 +986,47 @@ private fun AnnotateArea(
     }
 }
 
-/** 竖屏底部控制条：上行 = 模式切换+画质选择；下行 = 缩略图+快门+前后摄 */
+/** 画质入口图标：方格胶片（圆角外框+四角齿孔）中央叠 HD 字样，单色线条风格对齐 material 图标 */
+@Composable
+private fun QualityGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val sw = size.minDimension * 0.085f
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(sw / 2, sw / 2),
+                size = Size(size.width - sw, size.height - sw),
+                cornerRadius = CornerRadius(size.minDimension * 0.18f, size.minDimension * 0.18f),
+                style = Stroke(sw),
+            )
+            // 四角齿孔（胶片隐喻）
+            val hole = size.minDimension * 0.11f
+            val m = size.minDimension * 0.13f
+            listOf(
+                Offset(m, m),
+                Offset(size.width - m - hole, m),
+                Offset(m, size.height - m - hole),
+                Offset(size.width - m - hole, size.height - m - hole),
+            ).forEach {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = it,
+                    size = Size(hole, hole),
+                    cornerRadius = CornerRadius(hole * 0.3f, hole * 0.3f),
+                )
+            }
+        }
+        Text(
+            "HD",
+            color = tint,
+            fontSize = 7.sp,
+            lineHeight = 7.sp,
+            fontWeight = FontWeight.Black,
+        )
+    }
+}
+
+/** 竖屏底部控制条：上行 = 工程组+模式切换+画质选择；下行 = 缩略图+快门+前后摄 */
 @Composable
 private fun BottomBar(
     rot: Int,
@@ -929,6 +1034,7 @@ private fun BottomBar(
     vm: CameraViewModel,
     startRecordingWithPermission: (Boolean) -> Unit,
     onOpenGallery: () -> Unit,
+    onOpenProjectGroups: () -> Unit,
 ) {
     Column(
         Modifier
@@ -956,90 +1062,123 @@ private fun BottomBar(
             Spacer(Modifier.height(8.dp))
         }
 
-        // ===== 上行：编辑（笔）+ 模式切换 + 画质选择（同一水平线） =====
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        // ===== 上行：工程组 | 模式切换胶囊（恒居中）| 画质选择（靠右，位于前后摄切换按钮上方） =====
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
         ) {
+            // 工程组快捷入口（左）：保留经典三横线带三角图案（祖宗之法），容器风格与模式切换统一
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onOpenProjectGroups() }
+                    .padding(8.dp),
+            ) {
+                com.engcamera.ui.ProjectGroupGlyph(
+                    Modifier
+                        .size(22.dp)
+                        .rotate(rot.toFloat()),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活 onSurfaceVariant、激活主色
             Row(
-                Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                Modifier.align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(
-                    onClick = { vm.toggleAnnotate() },
-                    enabled = !ui.recording,
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
                 ) {
-                    Icon(
-                        Icons.Default.Draw,
-                        contentDescription = "给图片添加水印",
-                        tint = if (ui.annotating) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.rotate(rot.toFloat()),
-                    )
-                }
-                IconButton(
-                    onClick = { vm.setVideoMode(false) },
-                    enabled = !ui.recording,
-                ) {
-                    Icon(
-                        Icons.Default.PhotoCamera,
-                        contentDescription = "拍照模式",
-                        tint = if (!ui.annotating && !ui.videoMode) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.rotate(rot.toFloat()),
-                    )
-                }
-                IconButton(
-                    onClick = { vm.setVideoMode(true) },
-                    enabled = !ui.recording,
-                ) {
-                    Icon(
-                        Icons.Default.Videocam,
-                        contentDescription = "录像模式",
-                        tint = if (!ui.annotating && ui.videoMode) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.rotate(rot.toFloat()),
-                    )
+                    IconButton(
+                        onClick = { vm.toggleAnnotate() },
+                        enabled = !ui.recording,
+                    ) {
+                        Icon(
+                            Icons.Default.Draw,
+                            contentDescription = "给图片添加水印",
+                            tint = if (ui.annotating) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.rotate(rot.toFloat()),
+                        )
+                    }
+                    IconButton(
+                        onClick = { vm.setVideoMode(false) },
+                        enabled = !ui.recording,
+                    ) {
+                        Icon(
+                            Icons.Default.PhotoCamera,
+                            contentDescription = "拍照模式",
+                            tint = if (!ui.annotating && !ui.videoMode) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.rotate(rot.toFloat()),
+                        )
+                    }
+                    IconButton(
+                        onClick = { vm.setVideoMode(true) },
+                        enabled = !ui.recording,
+                    ) {
+                        Icon(
+                            Icons.Default.Videocam,
+                            contentDescription = "录像模式",
+                            tint = if (!ui.annotating && ui.videoMode) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.rotate(rot.toFloat()),
+                        )
+                    }
                 }
             }
-            // 画质选择（仅录像模式显示）
-            if (!ui.annotating && ui.videoMode && ui.videoQualities.isNotEmpty()) {
-                Box {
-                    Text(
-                        text = ui.videoQualities.getOrNull(ui.videoQualityIndex)?.label ?: "画质",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
+            // 画质选择（靠右；录像/照片档位互斥显示，仅一档时无可选不显示）。入口=胶片+HD 图标
+            data class QOption(val label: String, val spec: String)
+            val qualityList = if (ui.videoMode) {
+                ui.videoQualities.map { QOption(it.label, it.spec) }
+            } else {
+                ui.photoQualities.map { QOption(it.label, it.spec) }
+            }
+            val qualityIndex = if (ui.videoMode) ui.videoQualityIndex else ui.photoQualityIndex
+            if (!ui.annotating && qualityList.size > 1) {
+                Box(Modifier.align(Alignment.CenterEnd)) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(10.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .clickable { vm.toggleQualityMenu() }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
+                            .padding(8.dp),
+                    ) {
+                        QualityGlyph(
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .rotate(rot.toFloat()),
+                        )
+                    }
                     // 展开的画质列表（向下弹出）
                     androidx.compose.material3.DropdownMenu(
                         expanded = ui.showQualityMenu,
                         onDismissRequest = { vm.toggleQualityMenu() },
                     ) {
-                        ui.videoQualities.forEachIndexed { idx, q ->
+                        qualityList.forEachIndexed { idx, q ->
                             androidx.compose.material3.DropdownMenuItem(
                                 text = {
-                                    // 实际分辨率 + 录制规格（0.6.0 弃用"高清/超清"模糊描述）
+                                    // 实际分辨率 + 规格（照片=像素量级与比例；视频=录制规格/帧率）
                                     Column {
                                         Text(
                                             q.label,
                                             fontWeight = FontWeight.Medium,
-                                            color = if (idx == ui.videoQualityIndex) {
+                                            color = if (idx == qualityIndex) {
                                                 MaterialTheme.colorScheme.primary
                                             } else {
                                                 MaterialTheme.colorScheme.onSurface
@@ -1052,7 +1191,9 @@ private fun BottomBar(
                                         )
                                     }
                                 },
-                                onClick = { vm.selectVideoQuality(idx) },
+                                onClick = {
+                                    if (ui.videoMode) vm.selectVideoQuality(idx) else vm.selectPhotoQuality(idx)
+                                },
                             )
                         }
                     }

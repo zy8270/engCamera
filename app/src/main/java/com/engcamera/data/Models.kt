@@ -27,7 +27,7 @@ data class WatermarkField(
 /** 水印样式（对应计划书 6.2，颜色为 ARGB Long） */
 @Serializable
 data class WatermarkStyle(
-    val titleBgColor: Long = 0xFF1D4E89,      // 不透明深蓝
+    val titleBgColor: Long = 0xCC1D4E89,      // 半透明深蓝（用户拍板 2026-10-13，原 0xFF1D4E89 不透明）
     val titleTextColor: Long = 0xFFFFFFFF,    // 白色
     val bodyBgColor: Long = 0x99000000,       // 半透明黑（待确认 1 方案 A）
     val bodyTextColor: Long = 0xFFFFFFFF,     // 白色
@@ -97,7 +97,7 @@ data class DynamicValues(
     val weather: String = "",
 )
 
-/** 默认字段（对应计划书 6.1 + 用户补充：计数） */
+/** 默认字段（对应计划书 6.1 + 用户补充：计数；顺序用户拍板 2026-10-13：标题/时间/位置/天气/计数/备注） */
 fun defaultFields(): List<WatermarkField> = listOf(
     WatermarkField(
         id = "f_project",
@@ -106,12 +106,6 @@ fun defaultFields(): List<WatermarkField> = listOf(
         value = "XX 工程施工记录",
         isTitle = true,
         deletable = false,
-    ),
-    WatermarkField(
-        id = "f_note",
-        type = FieldType.NOTE,
-        label = "备注",
-        value = "三层梁板钢筋绑扎完成",
     ),
     WatermarkField(
         id = "f_time",
@@ -141,6 +135,12 @@ fun defaultFields(): List<WatermarkField> = listOf(
         value = "1",
         enabled = false, // 计数默认关闭（用户确认 2026-10-11）
         deletable = false,
+    ),
+    WatermarkField(
+        id = "f_note",
+        type = FieldType.NOTE,
+        label = "备注",
+        value = "三层梁板钢筋绑扎完成",
     ),
 )
 

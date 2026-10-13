@@ -200,7 +200,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
 
     override fun selectProject(id: String) = repo.selectProject(id)
 
-    override fun createProject(name: String) = repo.createProject(name)
+    override fun createProject(name: String, nameEdited: Boolean) = repo.createProject(name, nameEdited)
 
     override fun deleteProjects(ids: Set<String>) = repo.deleteProjects(ids)
 

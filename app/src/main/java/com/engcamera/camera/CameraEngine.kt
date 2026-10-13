@@ -24,6 +24,7 @@ import androidx.camera.core.Preview
 import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
@@ -90,6 +91,13 @@ class CameraEngine(
         set(value) {
             field = value
         }
+
+    /** 照片画质选项：label=实际成片尺寸（传感器系 4:3），spec=像素量级；width/height 供分辨率策略 */
+    data class PhotoQuality(val label: String, val spec: String, val width: Int, val height: Int)
+
+    /** 当前选中的照片画质；null = 不限制（引擎挑 4:3 最大） */
+    @Volatile
+    var photoQuality: PhotoQuality? = null
 
     /**
      * 可选画质列表：按当前镜头真实能力生成（档位来自 CameraX，尺寸来自编码器支持列表，
@@ -159,6 +167,40 @@ class CameraEngine(
         VideoQuality("1280×720", "720p", 1),
         VideoQuality("720×480", "480p", 2),
     )
+
+    /**
+     * 可选照片画质：按当前镜头真实能力生成——JPEG 输出尺寸里取 4:3 系（拍照固定 4:3，
+     * 旋转后即预览 3:4），按像素降序取代表档：相邻两档短边比 ≥1.4（约 2 倍像素），
+     * 至多 4 档；短边 <480 的玩具尺寸不收。
+     */
+    fun getSupportedPhotoQualities(): List<PhotoQuality> {
+        val info = selectedLensCameraInfo() ?: return emptyList()
+        val sizes = runCatching {
+            Camera2CameraInfo.from(info)
+                .getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(android.graphics.ImageFormat.JPEG)
+                ?.toList()
+        }.getOrNull() ?: emptyList()
+        val ratio43 = sizes
+            .filter { abs(it.width.toFloat() / it.height - 4f / 3f) < 0.02f && it.height >= 480 }
+            .sortedByDescending { it.width.toLong() * it.height }
+        val picked = mutableListOf<Size>()
+        for (s in ratio43) {
+            if (picked.isEmpty() || s.height < picked.last().height * 0.7f) picked += s
+            if (picked.size >= 4) break
+        }
+        val list = picked.map { s ->
+            val mp = s.width.toLong() * s.height / 1_000_000.0
+            PhotoQuality(
+                label = "${s.width}×${s.height}",
+                spec = "约 %.1fMP · 4:3".format(mp),
+                width = s.width,
+                height = s.height,
+            )
+        }
+        Log.d(TAG, "photo qualities: jpegSizes=${sizes.size}, 43=${ratio43.size}, tiers=${list.map { it.label }}")
+        return list
+    }
 
     /** 画质档位定义：内部 id ↔ CameraX Quality ↔ CamcorderProfile 常量 + 流高度（编码器选档基准）+ 兜底尺寸 */
     private class QualityTier(
@@ -232,7 +274,12 @@ class CameraEngine(
         val info = camera?.cameraInfo ?: return
         if (info == zoomObservedInfo) return
         zoomObservedInfo?.let { old -> zoomObserver?.let { old.zoomState.removeObserver(it) } }
+        var zoomLogged = false
         val obs = Observer { zs: ZoomState ->
+            if (!zoomLogged) {
+                zoomLogged = true
+                Log.d(TAG, "zoom range=${zs.minZoomRatio}..${zs.maxZoomRatio}")
+            }
             _zoomRatio.value = zs.zoomRatio
             _zoomMin.value = zs.minZoomRatio
             _zoomMax.value = zs.maxZoomRatio
@@ -269,6 +316,27 @@ class CameraEngine(
         backLenses.clear()
         try {
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            // 诊断：全量相机清单（逻辑相机聚合多物理头时系统只暴露一颗后置）
+            runCatching {
+                Log.d(
+                    TAG,
+                    "allCameras=" + cm.cameraIdList.map { id ->
+                        val chars = cm.getCameraCharacteristics(id)
+                        val f = chars.get(CameraCharacteristics.LENS_FACING)
+                        // API 30+：逻辑相机包含的物理头 id（超广角是否聚合进来的关键证据）
+                        val phys = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                            chars.physicalCameraIds.joinToString(",")
+                        } else {
+                            "?"
+                        }
+                        "$id:" + when (f) {
+                            CameraMetadata.LENS_FACING_BACK -> "BACK"
+                            CameraMetadata.LENS_FACING_FRONT -> "FRONT"
+                            else -> "EXT"
+                        } + "(phys=$phys)"
+                    },
+                )
+            }
             data class Raw(val id: String, val focal: Float)
             val raws = cm.cameraIdList.mapNotNull { id ->
                 val chars = cm.getCameraCharacteristics(id)
@@ -298,7 +366,9 @@ class CameraEngine(
                 backLenses += BackLens(raw.id, label)
             }
             selectedLensId = raws[bestIdx].id
-        } catch (_: Throwable) {
+            Log.d(TAG, "enumerateBackLenses: ${backLenses.map { "${it.label}(id=${it.cameraId})" }}, best=$bestIdx")
+        } catch (t: Throwable) {
+            Log.w(TAG, "enumerateBackLenses failed", t)
             // 枚举失败：不显示焦段按钮，走默认后摄
         }
     }
@@ -337,7 +407,7 @@ class CameraEngine(
         val p = provider ?: return
         val vw = previewView.width
         val vh = previewView.height
-        val bindKey = "$frontCamera|$selectedLensId|${videoQuality.label}|$vw|$vh"
+        val bindKey = "$frontCamera|$selectedLensId|${videoQuality.label}|${photoQuality?.label}|$vw|$vh"
         if (bindKey == lastBindKey && camera != null) return
         lastBindKey = bindKey
         meteringFactory = previewView.meteringPointFactory
@@ -345,8 +415,22 @@ class CameraEngine(
         val preview = Preview.Builder().setResolutionSelector(resolution4x3()).build()
         preview.setSurfaceProvider(previewView.surfaceProvider)
 
+        // 照片画质档：选档时用分辨率策略就近匹配（仍限 4:3），默认不限制挑最大
+        val photoSelector = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+            .apply {
+                photoQuality?.let {
+                    setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(it.width, it.height),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                        ),
+                    )
+                }
+            }
+            .build()
         val capture = ImageCapture.Builder()
-            .setResolutionSelector(resolution4x3())
+            .setResolutionSelector(photoSelector)
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .build()
         capture.targetRotation = targetRotation

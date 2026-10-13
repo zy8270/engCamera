@@ -72,8 +72,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -551,6 +554,16 @@ private fun EditFieldDialog(
     val isDateTime = field.type == FieldType.DATETIME
     val isWeather = field.type == FieldType.WEATHER
 
+    // 打开对话框即聚焦"内容"输入框并调起输入法（用户拍板 2026-10-13）：
+    // requestFocus 之外必须把对话框窗口 softInputMode 设为 ALWAYS_VISIBLE，否则部分系统不弹键盘
+    val valueFocus = remember { FocusRequester() }
+    val dialogView = LocalView.current
+    LaunchedEffect(field) {
+        valueFocus.requestFocus()
+        (dialogView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+            ?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("编辑字段") },
@@ -565,6 +578,7 @@ private fun EditFieldDialog(
                         followLocation = false
                         followWeather = false
                     },
+                    modifier = Modifier.focusRequester(valueFocus),
                     label = {
                         Text(
                             when {
