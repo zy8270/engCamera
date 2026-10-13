@@ -62,7 +62,9 @@ import kotlinx.coroutines.flow.StateFlow
 interface ProjectGroupHandler {
     val projects: StateFlow<ProjectGroups>
     fun selectProject(id: String)
-    fun createProject(name: String): String
+
+    /** nameEdited=用户改过预填名（配合"新建工程标题联动"开关，工程名写入新工程标题） */
+    fun createProject(name: String, nameEdited: Boolean = false): String
     fun deleteProjects(ids: Set<String>)
     fun renameProject(id: String, name: String)
 
@@ -279,7 +281,8 @@ fun ProjectGroupSelector(
         }
 
         if (showCreate) {
-            var name by remember { mutableStateOf("工程" + (groups.projects.size + 1)) }
+            val initialName = "工程" + (groups.projects.size + 1)
+            var name by remember { mutableStateOf(initialName) }
             AlertDialog(
                 onDismissRequest = { showCreate = false },
                 title = { Text("新建工程") },
@@ -297,7 +300,9 @@ fun ProjectGroupSelector(
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        val id = handler.createProject(name)
+                        // 用户改过预填名才算"输入了名称"（配合标题联动开关写入新工程标题）
+                        val edited = name.trim() != initialName
+                        val id = handler.createProject(name, edited)
                         handler.selectProject(id) // 创建后自动切换到新工程
                         showCreate = false
                         onDismiss()

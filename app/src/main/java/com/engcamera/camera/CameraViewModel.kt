@@ -64,6 +64,9 @@ data class CameraUiState(
     /** 可选画质列表与当前选中 */
     val videoQualities: List<CameraEngine.VideoQuality> = emptyList(),
     val videoQualityIndex: Int = 0,
+    /** 可选照片画质与当前选中（拍照模式显示） */
+    val photoQualities: List<CameraEngine.PhotoQuality> = emptyList(),
+    val photoQualityIndex: Int = 0,
     /** 画质选择菜单展开 */
     val showQualityMenu: Boolean = false,
     /** 电子变焦倍数（zoomState 回流）与当前镜头支持范围 */
@@ -198,6 +201,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val currentIdx = qualities.indexOfFirst { it.quality == e.videoQuality.quality }.coerceAtLeast(0)
         // 切镜头后所选画质可能不被新镜头支持（如前摄无 4K）：落到该镜头支持的最高档
         e.videoQuality = qualities[currentIdx]
+        // 照片画质：按新镜头重算；之前选中的档位在新列表中存在则保持，否则落最高档
+        val photoQs = e.getSupportedPhotoQualities()
+        val photoIdx = photoQs.indexOfFirst { it.label == e.photoQuality?.label }
+            .let { if (it < 0) 0 else it }
+        e.photoQuality = photoQs.getOrNull(photoIdx)
         // 电子变焦：收集 zoomState 回流（重绑换相机实例时重挂收集）
         zoomCollectJob?.cancel()
         zoomCollectJob = viewModelScope.launch {
@@ -216,6 +224,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 frontCamera = e.frontCamera,
                 videoQualities = qualities,
                 videoQualityIndex = currentIdx,
+                photoQualities = photoQs,
+                photoQualityIndex = photoIdx,
             )
         }
         setFlashMode(_ui.value.flashIndex)
@@ -231,12 +241,37 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         rebind?.invoke()
     }
 
+    /** 选择照片画质并重绑（ImageCapture 按分辨率策略就近匹配） */
+    fun selectPhotoQuality(index: Int) {
+        val e = engine ?: return
+        val qualities = _ui.value.photoQualities
+        if (index !in qualities.indices) return
+        e.photoQuality = qualities[index]
+        _ui.update { it.copy(photoQualityIndex = index, showQualityMenu = false) }
+        rebind?.invoke()
+    }
+
     fun toggleQualityMenu() {
         _ui.update { it.copy(showQualityMenu = !it.showQualityMenu) }
     }
 
-    /** 双指捏合电子变焦：factor 为本次手势增量，目标值夹取到镜头支持范围（数字不再低于 1×） */
+    /** 上次"缩小跨镜头"时刻：一次捏合手势会连发多帧增量，去抖 600ms 防止连跳多级镜头 */
+    private var lastWiderSwitchAt = 0L
+
+    /** 双指捏合电子变焦：factor 为本次手势增量，目标值夹取到镜头支持范围（数字不再低于 1×）。
+     *  已在当前镜头最广端仍继续缩小：自动切到更广一级镜头（如 1×→0.6× 超广角，用户拍板 2026-10-13）；
+     *  放大方向不跨镜头（长焦切换点易抖动，用户未要求）。 */
     fun onPinchZoom(factor: Float) {
+        val e = engine
+        if (e != null && factor < 1f && _ui.value.zoomRatio <= _ui.value.zoomMin + 0.01f && !e.frontCamera) {
+            val idx = e.backLenses.indexOfFirst { it.cameraId == e.selectedLensId }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (idx > 0 && now - lastWiderSwitchAt > 600) {
+                lastWiderSwitchAt = now
+                selectLens(idx - 1)
+                return
+            }
+        }
         val target = (_ui.value.zoomRatio * factor)
             .coerceIn(_ui.value.zoomMin, _ui.value.zoomMax)
         engine?.setZoomRatio(target)
@@ -266,7 +301,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     override fun selectProject(id: String) = container.repository.selectProject(id)
 
-    override fun createProject(name: String) = container.repository.createProject(name)
+    override fun createProject(name: String, nameEdited: Boolean) = container.repository.createProject(name, nameEdited)
 
     override fun deleteProjects(ids: Set<String>) = container.repository.deleteProjects(ids)
 
@@ -276,6 +311,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     // ---------- 设置抽屉 ----------
     val saveOriginal: StateFlow<Boolean> = container.repository.saveOriginal
+
+    /** 新建工程标题联动：新建工程组输入的工程名自动写入该工程水印标题（默认开） */
+    val createTitleFromName: StateFlow<Boolean> = container.repository.createTitleFromName
+
+    fun setCreateTitleFromName(value: Boolean) = container.repository.setCreateTitleFromName(value)
 
     private var shutterPlayer: MediaActionSound? = null
 

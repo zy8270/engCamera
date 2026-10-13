@@ -41,6 +41,7 @@ class WatermarkRepository(private val context: Context) {
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val templatesKey = stringPreferencesKey("templates_v1") // 用户导入的水印模板
     private val deletableMigratedKey = booleanPreferencesKey("deletable_migrated_v1")
+    private val createTitleFromNameKey = booleanPreferencesKey("create_title_from_name")
     private val saveTreeUriKey = stringPreferencesKey("save_tree_uri")
     private val saveTreeNameKey = stringPreferencesKey("save_tree_name")
 
@@ -57,6 +58,10 @@ class WatermarkRepository(private val context: Context) {
     /** 保存原图原视频：开启后拍照/录像同时保存无水印原片与水印成片（默认关） */
     private val _saveOriginal = MutableStateFlow(false)
     val saveOriginal: StateFlow<Boolean> = _saveOriginal.asStateFlow()
+
+    /** 新建工程标题联动：新建工程组输入的工程名自动写入该工程水印标题（默认开） */
+    private val _createTitleFromName = MutableStateFlow(true)
+    val createTitleFromName: StateFlow<Boolean> = _createTitleFromName.asStateFlow()
 
     /** 快门声音：拍照时播放系统快门音（默认关，兼容部分地区法律） */
     private val _shutterSound = MutableStateFlow(false)
@@ -87,7 +92,11 @@ class WatermarkRepository(private val context: Context) {
             val stored = context.appDataStore.data.first()[stateKey]
             if (stored != null) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
-                    .onSuccess { _state.value = ensureCountField(ensureWeatherField(migrateWidth(it))) }
+                    .onSuccess {
+                        _state.value = ensureCountField(
+                            ensureWeatherField(migrateWidth(migrateFieldOrder(migrateTitleBg(it)))),
+                        )
+                    }
             }
             context.appDataStore.data.first()[historyKey]?.let { raw ->
                 runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }
@@ -96,6 +105,7 @@ class WatermarkRepository(private val context: Context) {
             val cols = context.appDataStore.data.first()[columnsKey] ?: 4
             _galleryColumns.value = cols.coerceIn(3, 5)
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
+            _createTitleFromName.value = context.appDataStore.data.first()[createTitleFromNameKey] ?: true
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
             _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
             _themeMode.value = context.appDataStore.data.first()[themeModeKey]
@@ -128,6 +138,9 @@ class WatermarkRepository(private val context: Context) {
                         current = "default",
                         projects = listOf(ProjectGroupEntry("default", "默认工程", _state.value)),
                     )
+                }
+                .let { g ->
+                    g.copy(projects = g.projects.map { p -> p.copy(state = migrateFieldOrder(migrateTitleBg(p.state))) })
                 }
             // 用户导入模板
             context.appDataStore.data.first()[templatesKey]?.let { raw ->
@@ -166,6 +179,27 @@ class WatermarkRepository(private val context: Context) {
         } else {
             s
         }
+
+    /** 存量数据迁移：默认标题底色 0xFF1D4E89 → 半透明 0xCC1D4E89（用户拍板 2026-10-13）。
+     *  仅恰好等于旧默认值时替换，用户自定义过的颜色不动；替换后特征消失，幂等。 */
+    private fun migrateTitleBg(s: WatermarkState): WatermarkState =
+        if (s.style.titleBgColor == 0xFF1D4E89L) {
+            s.copy(style = s.style.copy(titleBgColor = 0xCC1D4E89L))
+        } else {
+            s
+        }
+
+    /** 存量数据迁移：旧默认字段顺序（v0.6.2 前：备注在时间前）重排为新默认（标题/时间/位置/天气/计数/备注）。
+     *  仅当字段 id 序列恰好等于旧默认六件套时触发——用户手动调过顺序或加过自定义字段的不动；重排后特征消失，天然幂等。 */
+    private fun migrateFieldOrder(s: WatermarkState): WatermarkState {
+        val oldOrder = listOf("f_project", "f_note", "f_time", "f_location", "f_weather", "f_count")
+        if (s.fields.map { it.id } != oldOrder) return s
+        val byId = s.fields.associateBy { it.id }
+        return s.copy(
+            fields = listOf("f_project", "f_time", "f_location", "f_weather", "f_count", "f_note")
+                .map { byId.getValue(it) },
+        )
+    }
 
     /** 存量数据补齐天气字段（固定项不可删除，只可关闭） */
     private fun ensureWeatherField(s: WatermarkState): WatermarkState =
@@ -243,12 +277,23 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
-    /** 新建工程：复制当前工程的水印（新工地通常与旧工地相近，改名微调即用） */
-    fun createProject(name: String): String {
+    /** 新建工程：复制当前工程的水印（新工地通常与旧工地相近，改名微调即用）。
+     *  nameEdited=用户改过预填名：且"新建工程标题联动"开时，工程名写入新工程水印的标题字段。 */
+    fun createProject(name: String, nameEdited: Boolean = false): String {
         val id = "p_${System.currentTimeMillis()}"
         val finalName = name.ifBlank { "工程${_projects.value.projects.size + 1}" }
+        val base = _state.value
+        val newState = if (nameEdited && _createTitleFromName.value && finalName.isNotBlank()) {
+            base.copy(
+                fields = base.fields.map {
+                    if (it.type == FieldType.PROJECT_NAME && it.isTitle) it.copy(value = finalName.trim()) else it
+                },
+            )
+        } else {
+            base
+        }
         _projects.value = _projects.value.let { g ->
-            g.copy(projects = g.projects + ProjectGroupEntry(id, finalName, _state.value))
+            g.copy(projects = g.projects + ProjectGroupEntry(id, finalName, newState))
         }
         scope.launch {
             context.appDataStore.edit { it[projectsKey] = json.encodeToString(_projects.value) }
@@ -296,6 +341,14 @@ class WatermarkRepository(private val context: Context) {
         _volumeShutter.value = value
         scope.launch {
             context.appDataStore.edit { it[volumeShutterKey] = value }
+        }
+    }
+
+    /** 新建工程标题联动开关 */
+    fun setCreateTitleFromName(value: Boolean) {
+        _createTitleFromName.value = value
+        scope.launch {
+            context.appDataStore.edit { it[createTitleFromNameKey] = value }
         }
     }
 
