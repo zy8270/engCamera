@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.os.Handler
 import android.os.Looper
@@ -71,10 +72,40 @@ object WebTemplateRenderer {
         val html: String,
         val widthPx: Int,
         val future: CompletableFuture<Bitmap?>,
+        val diskThumbId: String? = null,
     )
 
     private val queue = ArrayDeque<QueuedJob>()
     private var loading = false
+
+    // ---------- 缩略图磁盘缓存（模板选择器秒开） ----------
+    // 内存 LRU 只在进程内：重启必空、被预览/成片键挤掉也空，选择器打开时网页卡要排队重渲=一片空白。
+    // 渲染成功即把缩略图落盘（每模板一个 PNG）；下次打开先读盘秒显，后台刷新完成后自动换新。
+
+    /** 网页模板缩略图磁盘文件（按模板 id 哈希命名，渲染成功即覆盖写） */
+    fun thumbFile(context: Context, templateId: String): java.io.File =
+        java.io.File(java.io.File(context.filesDir, "webtpl_thumb"), "t_" + Integer.toHexString(templateId.hashCode()) + ".png")
+
+    /** 读磁盘缩略图；无文件或解码失败返回 null（首次使用，走占位+现渲） */
+    fun loadThumb(context: Context, templateId: String): Bitmap? = runCatching {
+        val f = thumbFile(context, templateId)
+        if (!f.exists()) null else BitmapFactory.decodeFile(f.absolutePath)
+    }.getOrNull()
+
+    private fun saveThumbAsync(context: Context, templateId: String, src: Bitmap) {
+        if (src.width <= 1 || src.height <= 1) return
+        val w = 720
+        val h = (src.height.toLong() * w / src.width).toInt().coerceAtLeast(1)
+        Thread {
+            runCatching {
+                val scaled = Bitmap.createScaledBitmap(src, w, h, true)
+                val f = thumbFile(context, templateId)
+                f.parentFile?.mkdirs()
+                f.outputStream().use { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                if (scaled != src) scaled.recycle()
+            }
+        }.start()
+    }
 
     /** 最近一次调用方的 context（弱引用防泄漏）：成片烧录线程补渲时复用（WebView 已建则不再需要 Activity） */
     @Volatile
@@ -92,13 +123,14 @@ object WebTemplateRenderer {
         }
         // 字段开关状态必须进键：开关变化即使文本值不变也要触发重渲（否则开关"不生效"）
         val flags = state.fields.joinToString(",") { it.type.name + if (it.enabled) "1" else "0" }
+        // webScale 绝不能进键：位图固定 1440 宽渲染、HTML 不含 webScale，它只是绘制期缩放系数——
+        // 进键会让"整体缩放"滑杆每动一格就触发一次完整 WebView 重渲，串行队列被过期任务淹没（v124 修复）
         return ((template.html ?: "").hashCode().toString(16) +
             "|" + values.hashCode().toString(16) +
             "|" + flags.hashCode().toString(16) +
             "|" + RENDER_WIDTH +
             "|" + state.style.bgOpacity +
-            "|" + state.style.accentColor +
-            "|" + state.style.webScale)
+            "|" + state.style.accentColor)
     }
 
     /** 预览层专用：时间截断到分钟，避免预览每秒触发一次 WebView 重渲（成片烧录用真实时间，不受影响） */
@@ -137,7 +169,9 @@ object WebTemplateRenderer {
         latch.await(6, TimeUnit.SECONDS)
     }
 
-    /** 入队渲染；同 key 已在飞/在队则挂等既有任务。onDone 在完成线程回调（可能 null=失败） */
+    /** 入队渲染；同 key 已在飞/在队则挂等既有任务。onDone 在完成线程回调（可能 null=失败）。
+     *  diskThumbId 非空时（模板选择器缩略图），渲染成功会把缩略图落盘供下次秒开。
+     *  注意 onDone 必须是最后一个参数（warmBlocking 用尾随 lambda 调用）。 */
     fun warmAsync(
         context: Context,
         key: String,
@@ -145,6 +179,7 @@ object WebTemplateRenderer {
         state: WatermarkState,
         dynamic: DynamicValues,
         widthPx: Int,
+        diskThumbId: String? = null,
         onDone: ((Bitmap?) -> Unit)? = null,
     ) {
         current(key)?.let { onDone?.invoke(it); return }
@@ -167,7 +202,7 @@ object WebTemplateRenderer {
         }
         synchronized(queue) {
             queue.removeAll { it.key == key }
-            queue.addLast(QueuedJob(context, key, html, RENDER_WIDTH, future))
+            queue.addLast(QueuedJob(context, key, html, RENDER_WIDTH, future, diskThumbId))
             drainLocked(context)
         }
     }
@@ -256,6 +291,7 @@ object WebTemplateRenderer {
                         "snapshot ${bitmap.width}x${bitmap.height} key=${job.key.take(12)} rounds=$attempt stable=$stable",
                     )
                     synchronized(cacheLock) { cache[job.key] = bitmap }
+                    job.diskThumbId?.let { id -> saveThumbAsync(job.context, id, bitmap) }
                     _tick.value = _tick.value + 1
                     finishJob(job, bitmap)
                 } catch (t: Throwable) {

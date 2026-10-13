@@ -2,15 +2,15 @@
   <img src="screenshots/icon.png" width="120" alt="engCamera 图标" />
 </p>
 
-<h1 align="center">engCamera · 水印相机 · engineering Camera</h1>
+<h1 align="center">engCamera · 工程水印相机 · engineering Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.0/engCamera-v0.6.0.apk">⬇️ 下载安卓版 Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.1/engCamera-v0.6.1.apk">⬇️ 下载安卓版 Release</a>
 </p>
 
 一个自用向的 Android 工程水印相机：拍照 / 录像前实时预览水印，成片直接把水印**烧录**进文件；也可以给相册里已有的图片批量补加水印；多工地用**工程组**一键切换整套水印。无广告、无登录、无云同步。
 
-> 当前版本：v0.6.0（修订记录见 [交付说明](交付说明.md)）
+> 当前版本：v0.6.1（修订记录见 [交付说明](交付说明.md)）
 
 ## 界面预览
 

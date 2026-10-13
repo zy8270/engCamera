@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -15,14 +17,10 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,24 +35,21 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,33 +57,38 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.runtime.DisposableEffect
 import coil.compose.AsyncImage
 import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.util.MediaSaver
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 相册页（计划书 3.3）：
  * - 只显示 DCIM/Camera 下 engCamera_ 前缀的照片与录像，时间倒序
  * - 双指捏合 3-5 列，松手落定并记忆
- * - 长按进入多选，点击切换，按住滑动连续选中
+ * - 长按进入多选，滑动涂抹连续选择/取消，边缘自动滚动
  * - 批量删除走系统确认（Android 11+），单张跳系统查看器
  */
 @Composable
@@ -101,8 +101,8 @@ fun GalleryScreen(
     val state by vm.state.collectAsState()
     val context = LocalContext.current
     val density = LocalDensity.current
+    val viewConfiguration = LocalViewConfiguration.current
 
-    // 系统栏图标对比度按当前主题（相机页强制浅色图标，进入本页恢复）
     val darkTheme = LocalAppDarkTheme.current
     DisposableEffect(darkTheme) {
         val style =
@@ -112,7 +112,6 @@ fun GalleryScreen(
         onDispose { }
     }
 
-    // 存储读取权限（用户确认：相册浏览手机全部照片/视频）
     fun readPermissions(): Array<String> =
         if (Build.VERSION.SDK_INT >= 33) {
             arrayOf(
@@ -139,8 +138,6 @@ fun GalleryScreen(
         if (readGranted) vm.refresh()
     }
 
-    // 从系统相册/查看器返回时重拉文件列表（在那里可能删除过照片），
-    // 页面未重建 LaunchedEffect(Unit) 不会再触发
     val galleryLifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
     DisposableEffect(galleryLifecycle) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -152,7 +149,6 @@ fun GalleryScreen(
         onDispose { galleryLifecycle.lifecycle.removeObserver(observer) }
     }
 
-    // Toast 提示
     state.toast?.let { toast ->
         LaunchedEffect(toast) {
             android.widget.Toast.makeText(context, toast, android.widget.Toast.LENGTH_SHORT).show()
@@ -193,12 +189,13 @@ fun GalleryScreen(
         }
     }
 
-    BackHandler(enabled = state.selectionMode) { vm.clearSelection() }    // 捏合缩放状态：张开（zoom>1）→ 缩略图变大 → 列数减少；捏合（zoom<1）→ 列数增多，最多 5 列
+    BackHandler(enabled = state.mode == SelectionMode.MULTI_SELECT) { vm.clearSelection() }
+
     var viewportWidth by remember { mutableIntStateOf(0) }
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
     var pinchZoom by remember { mutableFloatStateOf(1f) }
+
     val baseMinSizePx = if (viewportWidth > 0) viewportWidth.toFloat() / columns else 110f * density.density
-    // 首次组合时 viewportWidth 尚未测量（为 0），必须跳过钳制，
-    // 否则单元格被压成 1px，LazyGrid 会按全屏数量铺格子导致卡死
     val minSizePx = if (viewportWidth > 0) {
         (baseMinSizePx * pinchZoom)
             .coerceIn(viewportWidth / 5.4f, viewportWidth / 2.6f)
@@ -207,26 +204,76 @@ fun GalleryScreen(
         baseMinSizePx.coerceAtLeast(1f)
     }
     val minSizeDp = with(density) { minSizePx.toDp() }
+
     val gridState = rememberLazyGridState()
     val entries = state.items
+    // pointerInput 的 PointerInputScope 是受限挂起作用域，不能直接 launch 或
+    // 调用 gridState.scrollBy；这里取一个外部 CoroutineScope 供手势里使用。
+    val gestureScope = rememberCoroutineScope()
 
-    fun findEntryUnder(x: Float, y: Float): MediaSaver.MediaEntry? {
-        val info = gridState.layoutInfo.visibleItemsInfo.firstOrNull {
-            x >= it.offset.x && x <= it.offset.x + it.size.width &&
-                y >= it.offset.y && y <= it.offset.y + it.size.height
-        } ?: return null
-        return entries.getOrNull(info.index)
+    // 圆圈热区：MediaCell 右上角 align(TopEnd).padding(4dp).size(24dp)。
+    // 用 36dp 触摸目标居中于圆圈，方便手指点中。
+    val checkPadPx = with(density) { 4.dp.toPx() }
+    val checkSizePx = with(density) { 24.dp.toPx() }
+    val checkTouchPx = with(density) { 36.dp.toPx() }
+
+    /**
+     * 把屏幕坐标映射到当前可见项。使用 gridState.layoutInfo，不依赖视图实例，
+     * 因此列表滚动、视图复用都不影响命中结果。
+     */
+    fun hitTest(pos: Offset): MediaSaver.MediaEntry? {
+        val items = state.items
+        val layoutInfo = gridState.layoutInfo
+        for (item in layoutInfo.visibleItemsInfo) {
+            val x = item.offset.x.toFloat()
+            val y = item.offset.y.toFloat()
+            val w = item.size.width.toFloat()
+            val h = item.size.height.toFloat()
+            if (pos.x >= x && pos.x < x + w && pos.y >= y && pos.y < y + h) {
+                val idx = item.index
+                if (idx in items.indices) return items[idx]
+            }
+        }
+        return null
     }
 
-    // 应用内全屏查看器已按用户要求移除：点图直接跳系统相册
+    /**
+     * 判断屏幕坐标是否落在某项的圆圈热区。
+     * 圆圈位置：格子右上角 align(TopEnd).padding(4dp).size(24dp)；
+     * 热区以圆圈中心为中心、36dp 边长的正方形，便于手指点中。
+     * 多选态下只有按下圆圈才开始涂抹，按下图片本体则交给列表滚动。
+     */
+    fun checkHitAt(pos: Offset): MediaSaver.MediaEntry? {
+        val items = state.items
+        val layoutInfo = gridState.layoutInfo
+        val half = checkTouchPx / 2f
+        for (item in layoutInfo.visibleItemsInfo) {
+            val x = item.offset.x.toFloat()
+            val y = item.offset.y.toFloat()
+            val w = item.size.width.toFloat()
+            val h = item.size.height.toFloat()
+            if (pos.x >= x && pos.x < x + w && pos.y >= y && pos.y < y + h) {
+                val idx = item.index
+                if (idx in items.indices) {
+                    val cx = x + w - checkPadPx - checkSizePx / 2f
+                    val cy = y + checkPadPx + checkSizePx / 2f
+                    if (pos.x >= cx - half && pos.x <= cx + half &&
+                        pos.y >= cy - half && pos.y <= cy + half
+                    ) {
+                        return items[idx]
+                    }
+                }
+            }
+        }
+        return null
+    }
 
     Column(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .statusBarsPadding(),
-        ) {
-        // 顶部：返回、标题、多选状态、删除
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding(),
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -234,15 +281,19 @@ fun GalleryScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (state.selectionMode) "已选 ${state.selected.size} 项" else "照片与录像",
+                    if (state.mode == SelectionMode.MULTI_SELECT) "已选 ${state.selected.size} 项" else "照片与录像",
                     color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                 )
-                if (!state.selectionMode) {
+                if (state.mode == SelectionMode.BROWSE) {
                     Text(
                         "共 ${entries.size} 项",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -250,9 +301,13 @@ fun GalleryScreen(
                     )
                 }
             }
-            if (state.selectionMode) {
+            if (state.mode == SelectionMode.MULTI_SELECT) {
                 IconButton(onClick = { vm.clearSelection() }) {
-                    Icon(Icons.Default.Close, contentDescription = "取消多选", tint = MaterialTheme.colorScheme.onSurface)
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "取消多选",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
                 IconButton(
                     onClick = { requestDelete() },
@@ -272,7 +327,6 @@ fun GalleryScreen(
         }
 
         if (!readGranted) {
-            // 未授权：提示并引导授权（浏览全部照片需要）
             Column(
                 Modifier
                     .fillMaxSize()
@@ -293,7 +347,6 @@ fun GalleryScreen(
                 }
             }
         } else if (entries.isEmpty()) {
-            // 空状态
             Column(
                 Modifier
                     .fillMaxSize()
@@ -307,7 +360,11 @@ fun GalleryScreen(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp),
                 )
-                Text("相册里还没有照片\n去拍一张吧", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                Text(
+                    "相册里还没有照片\n去拍一张吧",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
                 Button(onClick = onGoShoot, modifier = Modifier.padding(top = 16.dp)) {
                     Text("去拍照")
                 }
@@ -318,14 +375,17 @@ fun GalleryScreen(
                 state = gridState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .onSizeChanged { viewportWidth = it.width }
+                    .onSizeChanged {
+                        viewportWidth = it.width
+                        viewportHeightPx = it.height
+                    }
                     // 双指捏合调整列数（3-5 列），松手落定
                     .pointerInput(columns) {
                         awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                             var zoomed = false
                             do {
-                                val event = awaitPointerEvent(pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                val event = awaitPointerEvent(pass = PointerEventPass.Initial)
                                 val zoom = event.calculateZoom()
                                 if (zoom != 1f) {
                                     zoomed = true
@@ -334,27 +394,152 @@ fun GalleryScreen(
                                 }
                             } while (event.changes.any { it.pressed })
                             if (zoomed) {
-                                // 张开变少列、捏合变多列（3-5 列）
                                 val target = (columns / pinchZoom).roundToInt().coerceIn(3, 6)
                                 pinchZoom = 1f
                                 if (target != columns) vm.setColumns(target)
                             }
                         }
                     }
-                    // 多选模式下按住滑动连续选中
-                    .pointerInput(state.selectionMode, entries) {
-                        if (!state.selectionMode) return@pointerInput
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { pos ->
-                                findEntryUnder(pos.x, pos.y)?.let { vm.onHoverSelect(it.uri) }
-                            },
-                            onDrag = { change, _ ->
-                                change.consume()
-                                findEntryUnder(change.position.x, change.position.y)?.let { vm.onHoverSelect(it.uri) }
-                            },
-                        )
+                    // 长按进入多选 + 滑动涂抹 + 边缘自动滚动
+                    // 单指手势全部由这一层处理：浏览态判断“点击 / 长按 / 拖动滚动”，
+                    // 多选态直接进入涂抹。长按后同一手势继续拖动，不会断。
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(
+                                requireUnconsumed = false,
+                                pass = PointerEventPass.Initial,
+                            )
+                            val downPos = down.position
+                            val downItem = hitTest(downPos)
+                            val modeAtStart = state.mode
+
+                            if (modeAtStart == SelectionMode.MULTI_SELECT) {
+                                // —— 多选态：点圆圈涂抹，点图片/空白滚动 ——
+                                // 只有按下在圆圈热区上才开始涂抹（按下瞬间决定 select/deselect）；
+                                // 按下图片本体或空白处则不消费事件，交给 LazyGrid 正常上下滚动。
+                                val checkItem = checkHitAt(downPos)
+                                if (checkItem != null) {
+                                    // 按下圆圈 → 进入涂抹
+                                    vm.onTouchDown(checkItem.uri)
+                                    var lastUri: Uri? = checkItem.uri
+                                    var lastAutoScrollAt = 0L
+                                    val edgeZonePx = 80f * density.density
+
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) break
+
+                                        // 涂抹滑动时手指经过的整个项都算命中（不限圆圈），
+                                        // 因为按下圆圈已经决定 paintMode，沿途整项涂抹才顺手。
+                                        val item = hitTest(change.position)
+                                        if (item != null && item.uri != lastUri) {
+                                            vm.onTouchMove(item.uri)
+                                            lastUri = item.uri
+                                        }
+
+                                        // 边缘自动滚动：手指进入顶部/底部热区后，
+                                        // 按节流步长滚动列表，新进入手指下的项继续被涂抹。
+                                        if (viewportHeightPx > 0) {
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (now - lastAutoScrollAt > 16L) {
+                                                val delta = when {
+                                                    change.position.y < edgeZonePx -> -12f
+                                                    change.position.y > viewportHeightPx - edgeZonePx -> 12f
+                                                    else -> 0f
+                                                }
+                                                if (delta != 0f) {
+                                                    gestureScope.launch { gridState.scrollBy(delta) }
+                                                    lastAutoScrollAt = now
+                                                }
+                                            }
+                                        }
+                                        change.consume()
+                                    }
+                                    vm.updateAutoScroll(AutoScrollDirection.NONE)
+                                    vm.onTouchUp()
+                                } else {
+                                    // 按下图片本体或空白 → 不消费，让 LazyGrid 正常滚动
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) break
+                                    }
+                                }
+                            } else {
+                                // —— 浏览态：判断点击 / 长按 / 拖动 ——
+                                var longPressed = false
+                                var scrolled = false
+                                var lastUri: Uri? = null
+                                var longPressJob: Job? = null
+
+                                if (downItem != null) {
+                                    longPressJob = gestureScope.launch {
+                                        delay(viewConfiguration.longPressTimeoutMillis)
+                                        if (!scrolled && !longPressed) {
+                                            longPressed = true
+                                            vm.onLongPress(downItem.uri)
+                                            lastUri = downItem.uri
+                                        }
+                                    }
+                                }
+
+                                var lastAutoScrollAt = 0L
+                                val edgeZonePx = 80f * density.density
+
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+
+                                    if (!change.pressed) {
+                                        longPressJob?.cancel()
+                                        if (!longPressed && !scrolled && downItem != null) {
+                                            openViewer(context, downItem)
+                                        }
+                                        if (longPressed) {
+                                            vm.updateAutoScroll(AutoScrollDirection.NONE)
+                                            vm.onTouchUp()
+                                        }
+                                        break
+                                    }
+
+                                    if (!longPressed && !scrolled) {
+                                        if ((change.position - downPos).getDistance() > viewConfiguration.touchSlop) {
+                                            // 用户拖动 → 交给 LazyGrid 滚动，取消长按
+                                            scrolled = true
+                                            longPressJob?.cancel()
+                                        }
+                                    }
+
+                                    if (longPressed) {
+                                        // 长按已触发：后续拖动作为涂抹
+                                        if (state.mode != SelectionMode.MULTI_SELECT) break
+                                        val item = hitTest(change.position)
+                                        if (item != null && item.uri != lastUri) {
+                                            vm.onTouchMove(item.uri)
+                                            lastUri = item.uri
+                                        }
+                                        if (viewportHeightPx > 0) {
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (now - lastAutoScrollAt > 16L) {
+                                                val delta = when {
+                                                    change.position.y < edgeZonePx -> -12f
+                                                    change.position.y > viewportHeightPx - edgeZonePx -> 12f
+                                                    else -> 0f
+                                                }
+                                                if (delta != 0f) {
+                                                    gestureScope.launch { gridState.scrollBy(delta) }
+                                                    lastAutoScrollAt = now
+                                                }
+                                            }
+                                        }
+                                        change.consume()
+                                    }
+                                    // 浏览态且未长按：不消费，让 LazyGrid 正常滚动
+                                }
+                            }
+                        }
                     },
-                // 无边框正方形网格：无间距、无内边距
                 contentPadding = PaddingValues(0.dp),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
@@ -363,16 +548,8 @@ fun GalleryScreen(
                     val entry = entries[index]
                     MediaCell(
                         entry = entry,
-                        selectionMode = state.selectionMode,
+                        mode = state.mode,
                         selected = entry.uri in state.selected,
-                        onClick = {
-                            if (state.selectionMode) {
-                                vm.onItemTap(entry.uri)
-                            } else {
-                                openViewer(context, entry)
-                            }
-                        },
-                        onLongClick = { vm.onItemLongPress(entry.uri) },
                     )
                 }
             }
@@ -384,7 +561,6 @@ private fun openViewer(context: android.content.Context, entry: MediaSaver.Media
     val mime = entry.mimeType.ifBlank { if (entry.isVideo) "video/mp4" else "image/jpeg" }
     val intent = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(entry.uri, mime)
-        // 部分系统图库（如 MIUI）依赖 ClipData 定位具体文件
         clipData = android.content.ClipData.newRawUri("", entry.uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
@@ -395,19 +571,15 @@ private fun openViewer(context: android.content.Context, entry: MediaSaver.Media
     }
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MediaCell(
     entry: MediaSaver.MediaEntry,
-    selectionMode: Boolean,
+    mode: SelectionMode,
     selected: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
 ) {
     Box(
         Modifier
-            .aspectRatio(1f)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .aspectRatio(1f),
     ) {
         AsyncImage(
             model = entry.uri,
@@ -428,9 +600,8 @@ private fun MediaCell(
                     .padding(horizontal = 4.dp, vertical = 1.dp),
             )
         }
-        if (selectionMode) {
+        if (mode == SelectionMode.MULTI_SELECT) {
             if (selected) {
-                // 红底白钩，醒目防误删（用户反馈 2026-10-10）
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -447,7 +618,6 @@ private fun MediaCell(
                     )
                 }
             } else {
-                // 未选中：白色空心圆（带投影，浅色照片上也可见）
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
