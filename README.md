@@ -14,9 +14,9 @@
 
 ## 界面预览
 
-| 主界面（水印所见即所得） | 模板选择器 | 水印编辑器 |
-|---|---|---|
-| ![主界面](screenshots/主界面.png) | ![模板选择器](screenshots/模板选择器.png) | ![水印编辑器](screenshots/水印编辑器.png) |
+| 主界面（水印所见即所得） | 水印编辑器 |
+|---|---|
+| ![主界面](screenshots/主界面.png) | ![水印编辑器](screenshots/水印编辑器.png) |
 
 | 给相册图片添加水印 | 设置抽屉 | 工程组 |
 |---|---|---|
@@ -82,7 +82,7 @@ minSdk 24（Android 7.0+），targetSdk 36。
 ## 已验证设备
 
 - Redmi Note 12 Turbo（Android 15 / MIUI）：四方向拍照、录像比例与水印、点击对焦、批量加水印、工程组、天气、7000+ 项相册
-- vivo V2426A（无完整 GMS）：中文地址多级兜底拼接
+- iQOO Neo 10 Pro（无完整 GMS）：中文地址多级兜底拼接
 - Android 模拟器（带 GMS）：定位/天气/网页水印模板全链路
 
 ## License
