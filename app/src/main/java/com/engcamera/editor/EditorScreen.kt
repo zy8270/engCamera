@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -107,11 +108,13 @@ fun EditorScreen(onBack: () -> Unit) {
     val autoLocation by vm.locationText.collectAsState()
     val weatherText by vm.weatherText.collectAsState()
     val fieldHistory by vm.fieldHistory.collectAsState()
+    val groups by vm.projects.collectAsState()
 
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showProjectGroups by remember { mutableStateOf(false) }
     var showTemplates by remember { mutableStateOf(false) }
+    var showResetConfirm by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -142,7 +145,6 @@ fun EditorScreen(onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 title = {
-                    val groups by vm.projects.collectAsState()
                     val current = groups.projects.firstOrNull { it.id == groups.current }?.name
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("水印编辑器")
@@ -162,6 +164,9 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showResetConfirm = true }) {
+                        Icon(Icons.Default.RestartAlt, contentDescription = "重置当前工程水印")
+                    }
                     TextButton(onClick = onBack) { Text("保存") }
                 },
             )
@@ -191,10 +196,15 @@ fun EditorScreen(onBack: () -> Unit) {
                     LaunchedEffect(state.fields, state.style, effDynamic, widthPx) {
                         val key = com.engcamera.watermark.WatermarkRenderer.webCacheKey(state, effDynamic, widthPx)
                         if (key != null && com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
-                            com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
-                                com.engcamera.watermark.WebTemplateRenderer.warmAsync(
-                                    context, key, tpl, state, effDynamic, widthPx,
-                                )
+                            // 防抖：滑杆拖动等连续状态变化只渲停手后的最后一个键，
+                            // 避免串行渲染队列被过期任务淹没（网页模板全 miss=水印"消失"）
+                            kotlinx.coroutines.delay(150)
+                            if (com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
+                                com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
+                                    com.engcamera.watermark.WebTemplateRenderer.warmAsync(
+                                        context, key, tpl, state, effDynamic, widthPx,
+                                    )
+                                }
                             }
                         }
                     }
@@ -355,6 +365,29 @@ fun EditorScreen(onBack: () -> Unit) {
             onConfirm = { type, label, value ->
                 vm.addField(type, label, value)
                 showAddDialog = false
+            },
+        )
+    }
+
+    if (showResetConfirm) {
+        val currentName = groups.projects.firstOrNull { it.id == groups.current }?.name
+        AlertDialog(
+            onDismissRequest = { showResetConfirm = false },
+            title = { Text("重置当前工程") },
+            text = {
+                Text(
+                    "是否将当前工程「${currentName ?: ""}」的水印重置为默认值？" +
+                        "正在使用的模板会切回默认模板，模板样式（颜色、记录点等选项）与全部字段值将一并清理；水印位置与重力设置保留。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.resetProjects(setOf(groups.current))
+                    showResetConfirm = false
+                }) { Text("确认重置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
             },
         )
     }

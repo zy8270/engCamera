@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -78,21 +79,40 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         s.copy(style = st)
     }
 
+    /** 滑杆拖动落盘防抖：拖动每帧只写内存（update persist=false），停手 400ms 后一次性写盘（与锚点拖动同款） */
+    private var scalarPersistJob: Job? = null
+
     /** 模板选项：数值类 */
-    fun setTemplateScalar(key: String, value: Float) = repo.update { s ->
-        val st = when (key) {
-            "bgOpacity" -> s.style.copy(bgOpacity = value.toInt().coerceIn(0, 100))
-            "cornerRatio" -> s.style.copy(cornerRatio = value)
-            // 上限 1.0：渐变底栏拉满整张照片宽度（其他模板滑杆最大 0.9）
-            "maxWidthRatio" -> s.style.copy(maxWidthRatio = value.coerceIn(0.3f, 1f))
-            "recDotSize" -> s.style.copy(recDotSize = value)
-            "recDotOffset" -> s.style.copy(recDotOffset = value)
-            "recGlow" -> s.style.copy(recGlow = value)
-            "borderWidth" -> s.style.copy(borderWidth = value)
-            "webScale" -> s.style.copy(webScale = value)
-            else -> s.style
+    fun setTemplateScalar(key: String, value: Float) {
+        repo.update(persist = false) { s ->
+            val st = when (key) {
+                "bgOpacity" -> s.style.copy(bgOpacity = value.toInt().coerceIn(0, 100))
+                "cornerRatio" -> s.style.copy(cornerRatio = value)
+                // 上限 1.0：渐变底栏拉满整张照片宽度（其他模板滑杆最大 0.9）
+                "maxWidthRatio" -> s.style.copy(maxWidthRatio = value.coerceIn(0.3f, 1f))
+                "recDotSize" -> s.style.copy(recDotSize = value)
+                "recDotOffset" -> s.style.copy(recDotOffset = value)
+                "recGlow" -> s.style.copy(recGlow = value)
+                "borderWidth" -> s.style.copy(borderWidth = value)
+                "webScale" -> s.style.copy(webScale = value)
+                else -> s.style
+            }
+            s.copy(style = st)
         }
-        s.copy(style = st)
+        scalarPersistJob?.cancel()
+        scalarPersistJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            repo.persistStateToDisk()
+        }
+    }
+
+    override fun onCleared() {
+        // 防抖窗口内退出编辑器：把未落盘的滑杆值同步写掉（与 CameraViewModel 兜底同款）
+        if (scalarPersistJob?.isActive == true) {
+            scalarPersistJob?.cancel()
+            kotlinx.coroutines.runBlocking { repo.persistStateToDisk() }
+        }
+        super.onCleared()
     }
 
     private val _dynamic = MutableStateFlow(DynamicValues())

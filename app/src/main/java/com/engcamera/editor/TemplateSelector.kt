@@ -371,15 +371,22 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
             val webWidth = 1080
             val tick by WebTemplateRenderer.tick.collectAsState()
             val key = WebTemplateRenderer.cacheKey(fakeState, template, SAMPLE_DYNAMIC, webWidth)
+            // 内存缓存优先；miss 时先显磁盘缓存的上次渲染结果（秒开，避免选择器开一片空白），
+            // 后台渲染完成后 tick 重组自动换新图并覆盖写盘
             val bmp = remember(key, tick) { WebTemplateRenderer.current(key) }
+            val diskBmp = remember(template.id) { WebTemplateRenderer.loadThumb(context, template.id) }
             LaunchedEffect(key) {
                 if (WebTemplateRenderer.current(key) == null) {
-                    WebTemplateRenderer.warmAsync(context, key, template, fakeState, SAMPLE_DYNAMIC, webWidth)
+                    WebTemplateRenderer.warmAsync(
+                        context, key, template, fakeState, SAMPLE_DYNAMIC, webWidth,
+                        diskThumbId = template.id,
+                    )
                 }
             }
-            if (bmp != null) {
+            val shown = bmp ?: diskBmp
+            if (shown != null) {
                 Image(
-                    bitmap = bmp.asImageBitmap(),
+                    bitmap = shown.asImageBitmap(),
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize(),
