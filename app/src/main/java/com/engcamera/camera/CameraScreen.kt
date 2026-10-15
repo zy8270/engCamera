@@ -3,6 +3,8 @@ package com.engcamera.camera
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -624,8 +626,6 @@ private fun SettingsDrawer(
                 }
                 Spacer(Modifier.height(16.dp))
 
-                Spacer(Modifier.height(16.dp))
-
                 // 新建工程标题联动（用户拍板 2026-10-13：放文件保存路径上方，默认开）
                 Row(
                     Modifier.fillMaxWidth(),
@@ -653,7 +653,7 @@ private fun SettingsDrawer(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .clickable { showSavePathDialog.value = true }
-                        .padding(vertical = 6.dp, horizontal = 4.dp),
+                        .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -670,8 +670,6 @@ private fun SettingsDrawer(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-
-                    Spacer(Modifier.height(16.dp))
                 }
 
                 // 署名固定置底（不随设置内容滚动；发布日期随版本更新）
@@ -681,7 +679,7 @@ private fun SettingsDrawer(
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                 }.getOrDefault(0L)
                 Text(
-                    "Rnzhy 2026.10.14 $versionCode engCamera MIT",
+                    "Rnzhy 2026.10.16 $versionCode engCamera MIT",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -740,6 +738,17 @@ private fun PreviewArea(
             },
     ) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+        // 液态玻璃实时采样源：PreviewView 当前帧（TextureView 模式可 getBitmap）。
+        // 上一次帧在下次采样时回收（本 lambda 串行调用，覆盖层拿到的位图只读不回收）
+        val backdropProvider = remember(previewView) {
+            var last: android.graphics.Bitmap? = null
+            {
+                last?.recycle()
+                val fresh = runCatching { previewView.bitmap }.getOrNull()
+                last = fresh
+                fresh
+            }
+        }
         WatermarkOverlay(
             state = effective,
             dynamic = dynamic,
@@ -747,6 +756,8 @@ private fun PreviewArea(
             onTap = onOpenEditor,
             onDrag = { dx, dy -> vm.onDragWatermark(dx, dy) },
             modifier = Modifier.fillMaxSize(),
+            backdropProvider = backdropProvider,
+            glassSource = previewView, // 液态玻璃：库 LiquidGlassView 直接采样相机预览
         )
         focusPoint?.let { pos -> FocusIndicator(pos) }
         // 后置焦段（右上角）：单击轮询下一档；长按向下展开半透明面板列出全部焦段供点选
@@ -815,10 +826,7 @@ private fun PreviewArea(
                         .background(Color.White)
                         .combinedClickable(
                             onClick = { vm.selectLens((ui.lensIndex + 1) % ui.lensLabels.size) },
-                            onLongClick = {
-                                android.util.Log.d("LensControl", "long press, open=${lensMenuOpen}")
-                                lensMenuOpen = !lensMenuOpen
-                            },
+                            onLongClick = { lensMenuOpen = !lensMenuOpen },
                         )
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                 )
@@ -907,6 +915,7 @@ private fun AnnotateArea(
     onOpenEditor: () -> Unit,
     onPick: () -> Unit,
 ) {
+    val context = LocalContext.current
     Box(modifier.aspectRatio(3f / 4f).background(MaterialTheme.colorScheme.surfaceVariant)) {
         val item = ui.annotateQueue.getOrNull(ui.annotateIndex)
         if (item == null) {
@@ -941,6 +950,15 @@ private fun AnnotateArea(
             }
         } else {
             // 图片按原比例居中（等比缩放），水印浮层铺在图片实际显示区上（所见即所得）
+            // 液态玻璃采样源：当前图片的 EXIF 转正降采样位图（与烧录基准一致）
+            var annotateBackdrop by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+            LaunchedEffect(item.uri) {
+                val bmp = loadAnnotateBackdrop(context, item.uri)
+                val old = annotateBackdrop
+                annotateBackdrop = bmp
+                old?.recycle()
+            }
+            val backdropProvider = remember { { annotateBackdrop } }
             Box(
                 Modifier
                     .align(Alignment.Center)
@@ -966,6 +984,7 @@ private fun AnnotateArea(
                         onDrag = { dx, dy -> vm.onDragWatermark(dx, dy) },
                         modifier = Modifier.fillMaxSize(),
                         scaleByShortSide = true, // 烧录按图片短边缩放，横图预览须一致
+                        backdropProvider = backdropProvider,
                     )
                 }
             }
@@ -986,8 +1005,31 @@ private fun AnnotateArea(
     }
 }
 
-/** 画质入口图标：方格胶片（圆角外框+四角齿孔）中央叠 HD 字样，单色线条风格对齐 material 图标 */
-@Composable
+/** 标注图降采样位图（EXIF 转正，≤720 边长）：液态玻璃采样用，与烧录基准同一方向 */
+private fun loadAnnotateBackdrop(context: android.content.Context, uri: Uri): android.graphics.Bitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        ?: return@runCatching null
+    var sample = 1
+    while (bounds.outWidth / (sample * 2) >= 720 || bounds.outHeight / (sample * 2) >= 720) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val src = context.contentResolver.openInputStream(uri)?.use {
+        BitmapFactory.decodeStream(it, null, opts)
+    } ?: return@runCatching null
+    val deg = context.contentResolver.openInputStream(uri)?.use {
+        androidx.exifinterface.media.ExifInterface(it).rotationDegrees
+    } ?: 0
+    if (deg == 0) {
+        src
+    } else {
+        val m = android.graphics.Matrix().apply { postRotate(deg.toFloat()) }
+        Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).also {
+            if (it != src) src.recycle()
+        }
+    }
+}.getOrNull()
+
+/** 画质入口图标：方格胶片（圆角外框+四角齿孔）中央叠 HD 字样，单色线条风格对齐 material 图标 */@Composable
 private fun QualityGlyph(tint: Color, modifier: Modifier = Modifier) {
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -1247,18 +1289,23 @@ private fun BottomBar(
                 modifier = Modifier.align(Alignment.Center),
             )
 
-            // 前后摄切换（右）
-            IconButton(
-                onClick = { vm.flipCamera() },
-                modifier = Modifier
+            // 前后摄切换（右）：容器风格与工程组/画质按钮统一（surfaceVariant 圆角块）
+            Box(
+                Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 24.dp),
+                    .padding(end = 24.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { vm.flipCamera() }
+                    .padding(8.dp),
             ) {
                 Icon(
                     Icons.Default.Cameraswitch,
                     contentDescription = "前后摄切换",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.rotate(rot.toFloat()),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(22.dp)
+                        .rotate(rot.toFloat()),
                 )
             }
         }

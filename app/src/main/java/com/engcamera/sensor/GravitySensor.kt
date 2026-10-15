@@ -29,7 +29,9 @@ class GravitySensor(context: Context) {
     private var sx = 0f
     private var sy = 0f
     private var current = 0
-    private var loggedFirst = false
+    /** start() 后尚未回传过首个方向：首读强制回调（否则与重置后的 current 相同就永远不通知，
+     *  锁屏重启后 UI 残留锁屏前方向而照片是竖屏的——用户复现 2026-10-15） */
+    private var emitInitial = false
 
     // 方向切换需稳定保持：新方向持续 HOLD_MS 才生效，手抖（瞬时越过阈值）不触发
     private var candidate: Int? = null
@@ -40,13 +42,6 @@ class GravitySensor(context: Context) {
             if (event.values.size < 3) return
             val gx = event.values[0]
             val gy = event.values[1]
-            if (!loggedFirst) {
-                loggedFirst = true
-                android.util.Log.d(
-                    "GravitySensor",
-                    "first reading: (${gx}, ${gy}, ${event.values[2]}), type=${event.sensor.type}",
-                )
-            }
             // 向量级低通（避免角度在 ±180 边界跳变）
             sx += ALPHA * (gx - sx)
             sy += ALPHA * (gy - sy)
@@ -63,6 +58,15 @@ class GravitySensor(context: Context) {
             }
             // -180 与 180 是同一物理方向，统一归一为 180
             if (next == -180) next = 180
+            if (emitInitial) {
+                // 启动首读：跳过保持窗，直接同步当前物理方向（VM 的 lastRoll 仍在，
+                // 方向真变了会照常触发锚点重置）
+                emitInitial = false
+                candidate = null
+                current = next
+                onQuantizedRoll?.invoke(next)
+                return
+            }
             val now = SystemClock.elapsedRealtime()
             if (next == current) {
                 candidate = null
@@ -72,7 +76,6 @@ class GravitySensor(context: Context) {
                 if (now - candidateSince >= HOLD_MS) {
                     candidate = null
                     current = next
-                    android.util.Log.d("GravitySensor", "quantized=$next (angle=$angle)")
                     onQuantizedRoll?.invoke(next)
                 }
             } else {
@@ -89,7 +92,7 @@ class GravitySensor(context: Context) {
         sy = 0f
         current = 0
         candidate = null
-        loggedFirst = false
+        emitInitial = true
         val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
         sensor?.let { sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME) }

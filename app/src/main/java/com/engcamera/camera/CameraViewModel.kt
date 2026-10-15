@@ -99,8 +99,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     val locationSource = container.locationSource
 
     private val quantizedRoll = MutableStateFlow(0)
-    /** 上次量化方向；初始按正立 0 算——启动后第一次转向也要触发锚点重置（曾因 null 跳过） */
-    private var lastRoll: Int = 0
 
     /**
      * 实际生效的水印状态（预览与成片共用）：
@@ -152,11 +150,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
 
         gravitySensor.onQuantizedRoll = { deg ->
-            val prev = lastRoll
-            lastRoll = deg
             quantizedRoll.value = deg
             // 成片方向跟随持机（对齐系统相机）：逆时针横屏(+90)→ROTATION_90，
-            // 顺时针横屏(-90)→ROTATION_270，倒置(180)→ROTATION_180（用户四方向实测推导）
+            // 顺时针横屏(-90)→ROTATION_270，倒置(180)→ROTATION_180（用户四方向实测推导）。
+            // 锚点不再随重力重置：水印位置由"水印位置"9 宫格选项/拖动决定（用户拍板 2026-10-16）
             engine?.setTargetRotation(
                 when (deg) {
                     90 -> android.view.Surface.ROTATION_90
@@ -165,17 +162,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                     else -> android.view.Surface.ROTATION_0
                 },
             )
-            // 方向切换时锚点重置（屏幕系，成片恒为视觉左下角）：
-            // 正立→左下；倒置(180)→屏幕右上；逆时针(+90)→屏幕左上；顺时针(-90)→屏幕右下
-            if (prev != deg) {
-                val (ax, ay) = when (deg) {
-                    90 -> 0f to 0f
-                    -90 -> 1f to 1f
-                    180, -180 -> 1f to 0f
-                    else -> 0f to 1f
-                }
-                container.repository.update { it.copy(anchorX = ax, anchorY = ay) }
-            }
         }
         viewModelScope.launch {
             quantizedRoll.collect { deg -> _ui.update { it.copy(uiRotation = deg) } }
@@ -449,6 +435,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         WatermarkRenderer.drawOnCanvas(
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, 0,
+            backdrop = upright,
         )
         upright.recycle()
         MediaSaver.saveBitmap(context, out, treeUri = saveTreeUri())
@@ -657,6 +644,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         WatermarkRenderer.drawOnCanvas(
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, frameRotation,
+            backdrop = upright,
         )
         // 双张保存（用户确认 2026-10-11 最终语义：水印图=最新=相册第一张，原图第二张）：
         // ① 原图先插入占主文件名（系统相册实测把 (1) 排最前，维持该行为）
@@ -718,7 +706,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
                 is VideoRecordEvent.Finalize -> {
                     stopTimer()
-                    Log.d("CameraVM", "Finalize: hasError=${event.hasError()}, error=${event.error}")
                     _ui.update { it.copy(recording = false, capturing = false) }
                     val f = pendingVideoFile
                     pendingVideoFile = null
@@ -757,7 +744,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val hasWatermark = snapshot?.first?.fields?.any { it.enabled } == true
         var saved: android.net.Uri? = null
         var watermarked = false
-        Log.d("CameraVM", "saveVideo: hasWatermark=$hasWatermark, size=${source.length()}")
 
         if (hasWatermark && snapshot != null) {
             _ui.update { it.copy(toast = "正在为视频合成水印…") }
@@ -766,7 +752,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             }.onFailure { t -> Log.w("CameraVM", "watermark burn failed", t) }
                 .getOrNull()
             if (burned != null) {
-                Log.d("CameraVM", "burn ok: ${burned.length()} bytes")
                 val takenAt = System.currentTimeMillis()
                 // 原图先存（主文件名）；水印版 DATE_TAKEN 晚 1 秒（水印=最新，与照片语义一致）
                 var originalSaved = false

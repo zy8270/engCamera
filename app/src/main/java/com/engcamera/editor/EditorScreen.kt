@@ -168,7 +168,7 @@ fun EditorScreen(onBack: () -> Unit) {
                 },
                 actions = {
                     IconButton(onClick = { showResetConfirm = true }) {
-                        Icon(Icons.Default.RestartAlt, contentDescription = "重置当前工程水印")
+                        Icon(Icons.Default.RestartAlt, contentDescription = "重置当前模板数据")
                     }
                     TextButton(onClick = onBack) { Text("保存") }
                 },
@@ -196,7 +196,10 @@ fun EditorScreen(onBack: () -> Unit) {
                     val effDynamic = remember(dynamic, isWeb) {
                         if (isWeb) com.engcamera.watermark.WebTemplateRenderer.previewDynamic(dynamic) else dynamic
                     }
-                    LaunchedEffect(state.fields, state.style, effDynamic, widthPx) {
+                    // key 必须含 templateId：三款网页模板的 stdFields 与默认样式结构完全相等，
+                    // 切换网页模板时 fields/style 不变 → 效应不重启 → 新模板永远不发起渲染
+                    // （预览窗格空白直到下一分钟时间变化才自愈，用户复现 2026-10-14）
+                    LaunchedEffect(state.templateId, state.fields, state.style, effDynamic, widthPx) {
                         val key = com.engcamera.watermark.WatermarkRenderer.webCacheKey(state, effDynamic, widthPx)
                         if (key != null && com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
                             // 防抖：滑杆拖动等连续状态变化只渲停手后的最后一个键，
@@ -221,6 +224,23 @@ fun EditorScreen(onBack: () -> Unit) {
                         val f = com.engcamera.watermark.WebTemplateRenderer.webDrawFraction(state) * widthPx / block.width
                         dw = (block.width * f).roundToInt().coerceAtLeast(1)
                         dh = (block.height * f).roundToInt().coerceAtLeast(1)
+                    }
+                    // 液态玻璃：编辑器无采样源，垫占位玻璃卡（淡底+描边）示意卡片范围
+                    if (state.style.layout == "LIQUID_GLASS" && block.width > 1) {
+                        val card = remember(state.style, widthPx, dw, dh) {
+                            runCatching {
+                                WatermarkRenderer.renderGlassCard(state, widthPx, dw, dh, null, placeholder = true)
+                            }.getOrNull()
+                        }
+                        card?.let {
+                            Image(
+                                bitmap = it.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .requiredSize(with(LocalDensity.current) { dw.toDp() }, with(LocalDensity.current) { dh.toDp() })
+                                    .graphicsLayer { rotationZ = rotationDeg },
+                            )
+                        }
                     }
                     Image(
                         bitmap = block.bitmap.asImageBitmap(),
@@ -262,6 +282,9 @@ fun EditorScreen(onBack: () -> Unit) {
                         TemplateOptionsCard(
                             template = currentTemplate,
                             style = state.style,
+                            anchorX = state.anchorX,
+                            anchorY = state.anchorY,
+                            onAnchor = { ax, ay -> vm.setAnchor(ax, ay) },
                             onColor = vm::setTemplateColor,
                             onScalar = vm::setTemplateScalar,
                             onSwitch = vm::setTemplateSwitch,
@@ -354,6 +377,8 @@ fun EditorScreen(onBack: () -> Unit) {
             currentTime = dynamic.time,
             weatherEmojiOn = state.style.weatherEmoji,
             onWeatherEmojiChange = { vm.setTemplateSwitch("weatherEmoji", it) },
+            showLatLngOn = state.style.showLatLng,
+            onLatLngChange = { vm.setTemplateSwitch("showLatLng", it) },
             onRefreshLocation = { vm.refreshLocation() },
             onRefreshWeather = { vm.refreshWeather() },
             onDismiss = { editingField = null },
@@ -375,19 +400,19 @@ fun EditorScreen(onBack: () -> Unit) {
     }
 
     if (showResetConfirm) {
-        val currentName = groups.projects.firstOrNull { it.id == groups.current }?.name
+        val tplName = com.engcamera.data.WatermarkTemplates.find(state.templateId)?.name ?: "当前模板"
         AlertDialog(
             onDismissRequest = { showResetConfirm = false },
-            title = { Text("重置当前工程") },
+            title = { Text("重置当前模板") },
             text = {
                 Text(
-                    "是否将当前工程「${currentName ?: ""}」的水印重置为默认值？" +
-                        "正在使用的模板会切回默认模板，模板样式（颜色、记录点等选项）与全部字段值将一并清理；水印位置与重力设置保留。",
+                    "将把字段值恢复为默认（标题/计数/备注等回默认文字），并把模板样式（颜色、记录点等选项）" +
+                        "还原为「$tplName」的初始状态；不会切换模板，水印位置与重力设置保留。",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    vm.resetProjects(setOf(groups.current))
+                    vm.resetToTemplate()
                     showResetConfirm = false
                 }) { Text("确认重置") }
             },
@@ -509,6 +534,8 @@ private fun EditFieldDialog(
     currentTime: String,
     weatherEmojiOn: Boolean,
     onWeatherEmojiChange: (Boolean) -> Unit,
+    showLatLngOn: Boolean,
+    onLatLngChange: (Boolean) -> Unit,
     onRefreshLocation: () -> Unit,
     onRefreshWeather: () -> Unit,
     onDismiss: () -> Unit,
@@ -629,6 +656,23 @@ private fun EditFieldDialog(
                     }
                 }
                 if (isLocation) {
+                    // 显示经纬度开关：挂在位置字段编辑内（默认关，用户拍板 2026-10-16），即时生效
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "显示经纬度（地址后括号段）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(
+                            checked = showLatLngOn,
+                            onCheckedChange = onLatLngChange,
+                        )
+                    }
                     Text(
                         "自动定位：$autoLocation",
                         style = MaterialTheme.typography.bodySmall,

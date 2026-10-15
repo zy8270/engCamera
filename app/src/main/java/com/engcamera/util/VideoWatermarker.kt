@@ -56,37 +56,21 @@ object VideoWatermarker {
             }
             width = w
             height = h
-            android.util.Log.d("VideoWM", "input ${width}x${height}, rotation=$rotation")
         } finally {
             retriever.release()
         }
         if (width <= 0 || height <= 0) error("无法读取视频尺寸")
 
-        // 2) 整帧透明位图上画水印。frameRotationDeg 为屏幕系→成片系换算角（只由持机方向决定）
+        // 2) 整帧透明位图上画水印。frameRotationDeg 为屏幕系→成片系换算角（只由持机方向决定）。
+        //    液态玻璃模板：视频无逐帧采样能力，走无采样退化（半透明玻璃底），其余模板不受影响
         val frame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(frame)
         WatermarkRenderer.drawOnCanvas(canvas, width, height, state, dynamic, state.rotationDeg, frameRotationDeg)
 
         // 3) 转码烧入
         val output = File(input.parentFile, input.nameWithoutExtension + "_wm.mp4")
-        val result = try {
-            transform(context, input, output, frame)
-        } finally {
-            frame.recycle()
-        }
-        // 记录输出尺寸便于核对方向一致性
-        runCatching {
-            val r = MediaMetadataRetriever()
-            try {
-                r.setDataSource(result.absolutePath)
-                val ow = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-                val oh = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-                val or = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-                android.util.Log.d("VideoWM", "output ${ow}x${oh}, rotation=$or")
-            } finally {
-                r.release()
-            }
-        }
+        val result = transform(context, input, output, frame)
+        frame.recycle()
         return result
     }
 

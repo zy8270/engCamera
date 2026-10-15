@@ -18,8 +18,8 @@ android {
         applicationId = "com.engcamera"
         minSdk = 24
         targetSdk = 36
-        versionCode = 135
-        versionName = "0.6.3"
+        versionCode = 165
+        versionName = "0.6.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -101,6 +101,9 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     // 相册缩略图加载
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // 液态玻璃效果（MIT，github.com/QmDeve/AndroidLiquidGlassView）：预览用其 LiquidGlassView 实时渲染，
+    // 成片烧录用同款 AGSL 着色器的 CPU 移植（WatermarkRenderer.renderGlassCard）保证所见即所得
+    implementation("com.qmdeve.liquidglass:core:1.1.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

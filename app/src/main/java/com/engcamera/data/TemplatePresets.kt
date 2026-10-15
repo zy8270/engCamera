@@ -29,27 +29,13 @@ object TemplatePresets {
         <div data-name="胶片场记" style="font-family:'monospace',monospace;background:rgba(8,8,10,{BG_A});border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;max-width:430px">
           <div style="background:repeating-linear-gradient(45deg,#141414 0 12px,#e8e8e8 12px 24px);padding:5px 12px">
             <span style="background:#fff;color:#111;font-weight:700;padding:1px 8px;border-radius:3px">SCENE</span>
-            <span data-f="PROJECT_NAME" style="color:#fff;font-weight:700;margin-left:6px">{{PROJECT_NAME}}</span>
+            <span data-f="PROJECT_NAME" style="color:#fff;font-weight:700;margin-left:6px;text-shadow:0 1px 2px rgba(0,0,0,.8),0 0 6px rgba(0,0,0,.6)">{{PROJECT_NAME}}</span>
           </div>
           <div style="padding:9px 14px;color:#f2f2f2;font-size:13px;line-height:1.75">
             <div data-f="NOTE">NOTE · {{NOTE}}</div>
             <div data-f="DATETIME">TAKE · {{DATETIME}}</div>
             <div data-f="LOCATION">LOC · {{LOCATION}}</div>
             <div data-f="WEATHER">WX &nbsp;· {{WEATHER}}</div>
-            <div data-extra></div>
-          </div>
-        </div>
-    """.trimIndent()
-
-    private val GLASS_HTML = """
-        <div data-name="玻璃拟态" style="max-width:430px;background:rgba(255,255,255,{BG_A});border:1px solid rgba(255,255,255,.4);border-radius:18px;padding:11px 16px;font-family:'sans-serif',sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.28)">
-          <div data-f="PROJECT_NAME" style="font-weight:700;font-size:16px;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.55)">{{PROJECT_NAME}}</div>
-          <div data-f="PROJECT_NAME" style="height:1px;background:rgba(255,255,255,.45);margin:6px 0"></div>
-          <div style="color:#fff;font-size:12.5px;line-height:1.85;opacity:.96;text-shadow:0 1px 3px rgba(0,0,0,.45)">
-            <div data-f="NOTE">◆ {{NOTE}}</div>
-            <div data-f="DATETIME">◆ {{DATETIME}}</div>
-            <div data-f="LOCATION">◆ {{LOCATION}}</div>
-            <div data-f="WEATHER">◆ {{WEATHER}}</div>
             <div data-extra></div>
           </div>
         </div>
@@ -88,10 +74,47 @@ object TemplatePresets {
                 TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
             ),
         ),
+        // ---------- 原生·液态玻璃（v158：接入 AndroidLiquidGlassView 库，参数/默认值对齐库） ----------
+        WatermarkTemplate(
+            id = "liquid_glass",
+            name = "液态玻璃",
+            // layout("LIQUID_GLASS")：预览=库 LiquidGlassView 实时渲染玻璃卡 + WatermarkRenderer 纯文本块叠加；
+            // 成片=同款 AGSL 着色器的 CPU 移植（renderGlassCard）保证所见即所得。
+            // 选项分三层：文字类（颜色/阴影/记录点）在外，库背景参数折叠为"背景选项"组
+            style = style("LIQUID_GLASS") {
+                copy(maxWidthRatio = 0.62f, recDot = false, accentColor = 0xFFFFC107L)
+            },
+            fields = stdFields,
+            anchorX = 0.5f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
+                TemplateOptionDef("textShadow", "阴影大小", "slider", 0f, 3f),
+                TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
+                TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
+                TemplateOptionDef("recDot", "记录点", "switch"),
+                TemplateOptionDef("recDotSize", "记录点大小", "slider", 0.5f, 2f),
+                TemplateOptionDef("recDotOffset", "记录点左边距", "slider", 0f, 0.2f),
+                TemplateOptionDef("recGlow", "光晕大小", "slider", 0f, 1.5f),
+                TemplateOptionDef("recDotColor", "记录点颜色", "color"),
+                TemplateOptionDef("glassCornerRadius", "圆角半径(dp)", "slider", 0f, 99f),
+                TemplateOptionDef("glassRefractionHeight", "折射高度(dp)", "slider", 12f, 50f),
+                TemplateOptionDef("glassRefractionOffset", "折射偏移(dp)", "slider", 20f, 120f),
+                TemplateOptionDef("glassTintAlpha", "着色透明度", "slider", 0f, 1f),
+                TemplateOptionDef("glassTintRed", "着色红", "slider", 0f, 1f),
+                TemplateOptionDef("glassTintGreen", "着色绿", "slider", 0f, 1f),
+                TemplateOptionDef("glassTintBlue", "着色蓝", "slider", 0f, 1f),
+                TemplateOptionDef("glassDispersion", "色散", "slider", 0f, 1f),
+                TemplateOptionDef("glassBlurRadius", "模糊半径", "slider", 0f, 50f),
+            ),
+        ),
         WatermarkTemplate(
             id = "minimal",
             name = "极简白影",
-            style = style("MINIMAL") { copy(bodyBgColor = 0x00000000, titleBgColor = 0x00000000) },
+            // 强调色即标题色（渲染器约定）；默认黄（用户拍板 2026-10-14：深色底深蓝字可读性差）
+            style = style("MINIMAL") {
+                copy(bodyBgColor = 0x00000000, titleBgColor = 0x00000000, accentColor = 0xFFFFB300L)
+            },
             fields = stdFields,
             options = listOf(
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
@@ -102,7 +125,10 @@ object TemplatePresets {
         WatermarkTemplate(
             id = "border",
             name = "边框卡片",
-            style = style("BORDER_CARD") { copy(bodyBgColor = 0x66000000) },
+            // 强调色即标题色；默认黄（用户拍板 2026-10-14：深色底深蓝字可读性差）
+            style = style("BORDER_CARD") {
+                copy(bodyBgColor = 0x66000000, accentColor = 0xFFFFB300L)
+            },
             fields = stdFields,
             options = listOf(
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
@@ -161,6 +187,7 @@ object TemplatePresets {
             ),
         ),
         // ---------- 网页（WebView 渲染） ----------
+        // 网页面板不透明度用独立的 webBgOpacity（v156：不再与原生模板的 bgOpacity 串值）
         WatermarkTemplate(
             id = "film",
             name = "胶片场记",
@@ -168,19 +195,8 @@ object TemplatePresets {
             html = FILM_HTML,
             fields = stdFields,
             options = listOf(
-                TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 1.5f),
-                TemplateOptionDef("bgOpacity", "面板不透明度", "slider", 30f, 100f),
-            ),
-        ),
-        WatermarkTemplate(
-            id = "glass",
-            name = "玻璃拟态",
-            backend = TemplateBackend.WEB,
-            html = GLASS_HTML,
-            fields = stdFields,
-            options = listOf(
-                TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 1.5f),
-                TemplateOptionDef("bgOpacity", "玻璃不透明度", "slider", 5f, 60f),
+                TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 3f),
+                TemplateOptionDef("webBgOpacity", "面板不透明度", "slider", 30f, 100f),
             ),
         ),
         WatermarkTemplate(
@@ -190,7 +206,7 @@ object TemplatePresets {
             html = MAGAZINE_HTML,
             fields = stdFields,
             options = listOf(
-                TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 1.5f),
+                TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 3f),
                 TemplateOptionDef("accentColor", "点缀色", "color"),
             ),
         ),
