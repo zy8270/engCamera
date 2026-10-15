@@ -14,10 +14,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,15 +35,35 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.engcamera.data.DynamicValues
 import com.engcamera.data.WatermarkState
+import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+
+/** 相机帧快照：等比缩到 ≤960 宽的自有位图（玻璃采样按比例对位，无需全分辨率） */
+private fun snapshotBackdrop(src: android.graphics.Bitmap): android.graphics.Bitmap {
+    val s = if (src.width > 960) 960f / src.width else 1f
+    if (s < 1f) {
+        return android.graphics.Bitmap.createScaledBitmap(
+            src,
+            (src.width * s).roundToInt().coerceAtLeast(1),
+            (src.height * s).roundToInt().coerceAtLeast(1),
+            true,
+        )
+    }
+    return src.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+        ?: android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+}
 
 /**
  * 预览上的水印悬浮层：与成片使用同一渲染引擎，所见即所得。
  * 点击进入水印编辑器，拖动改变位置（Compose 触摸 slop 天然区分点击与拖动）。
  * scaleByShortSide：烧录缩放基准是画面短边（WatermarkRenderer.drawOnCanvas），
  * 横向图片（宽=长边）的预览也须按短边缩放，否则预览比成片大。
+ * backdropProvider：液态玻璃模板的实时画面来源（标注模式静态图；每次调用返回当前画面
+ * 位图，生命周期归实现方管理，本层只读不回收；返回同一实例视为画面未变化）。
+ * glassSource：液态玻璃的实时采样源 ViewGroup（相机预览 PreviewView）——非空且
+ * API 33+ 时用库的 LiquidGlassView GPU 实时渲染玻璃卡；否则回退 CPU 版/占位。
  */
 @Composable
 fun WatermarkOverlay(
@@ -50,6 +74,8 @@ fun WatermarkOverlay(
     onDrag: (dxNorm: Float, dyNorm: Float) -> Unit,
     modifier: Modifier = Modifier,
     scaleByShortSide: Boolean = false,
+    backdropProvider: (() -> android.graphics.Bitmap?)? = null,
+    glassSource: android.view.ViewGroup? = null,
 ) {
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
@@ -65,9 +91,37 @@ fun WatermarkOverlay(
         val effDynamic = remember(dynamic, isWeb) {
             if (isWeb) WebTemplateRenderer.previewDynamic(dynamic) else dynamic
         }
+        val isLiquid = state.style.layout == "LIQUID_GLASS"
+        // 真库视图在场（GPU 实时）时无需 CPU 采样轮询
+        val useRealGlassView = isLiquid && glassSource != null &&
+            android.os.Build.VERSION.SDK_INT >= 33
+
+        // 液态玻璃 CPU 回退路径：周期采样背后的画面（标注模式静态图），快照成自有小图；
+        // 版本号递增触发玻璃卡重渲。提供方返回同一实例（静态图）时只快照一次
+        var glassBackdrop by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+        var glassTick by remember { mutableIntStateOf(0) }
+        LaunchedEffect(isLiquid, backdropProvider, useRealGlassView) {
+            if (!isLiquid || useRealGlassView || backdropProvider == null) return@LaunchedEffect
+            var lastFresh: android.graphics.Bitmap? = null
+            while (true) {
+                val fresh = backdropProvider.invoke()
+                if (fresh != null && fresh !== lastFresh && !fresh.isRecycled) {
+                    lastFresh = fresh
+                    val small = snapshotBackdrop(fresh)
+                    val old = glassBackdrop
+                    glassBackdrop = small
+                    old?.recycle()
+                    glassTick++
+                }
+                delay(66)
+            }
+        }
+        DisposableEffect(Unit) {
+            onDispose { glassBackdrop?.recycle() }
+        }
 
         // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
-        // 若作为 key 会导致每帧重建位图，拖动卡顿）
+        // 若作为 key 会导致每帧重建位图，拖动卡顿）。液态玻璃这里只出纯文本块。
         val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
         val block = remember(state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, rotationDeg, webTick) {
             if (widthPx > 0) {
@@ -86,7 +140,8 @@ fun WatermarkOverlay(
         }
 
         // 网页模板：缓存未命中时触发后台渲染（完成经 tick 回来重组）
-        LaunchedEffect(state.fields, state.style, effDynamic, widthPx, heightPx) {
+        // key 必须含 templateId：网页模板间切换时 fields/style 结构相等，效应不重启会漏渲（同 EditorScreen 预览 2026-10-14）
+        LaunchedEffect(state.templateId, state.fields, state.style, effDynamic, widthPx, heightPx) {
             if (widthPx > 0) {
                 val key = WatermarkRenderer.webCacheKey(state, effDynamic, widthPx)
                 if (key != null && WebTemplateRenderer.current(key) == null) {
@@ -100,8 +155,7 @@ fun WatermarkOverlay(
         if (widthPx > 0 && heightPx > 0) {
             // 齿轮占位两用：全字段关闭，或网页模板尚未渲染出图（可拖动=改锚点，点击=进编辑器）
             val blockReady = block != null && block.width > 1
-            if (state.fields.none { it.enabled } || !blockReady) {
-                // 全部字段关闭：齿轮占位图标替代水印块（仅预览不烧录），
+            if (state.fields.none { it.enabled } || !blockReady) {                // 全部字段关闭：齿轮占位图标替代水印块（仅预览不烧录），
                 // 位置=水印锚点（重新启用字段后水印出现在这里），点击进编辑器、可拖动
                 val iconPx = with(density) { 52.dp.toPx() }.roundToInt()
                 val (gl, gt) = WatermarkRenderer.positionBlock(
@@ -168,6 +222,62 @@ fun WatermarkOverlay(
                 rotationDeg,
                 edgeToEdge = WatermarkRenderer.isFullWidthBar(state),
             )
+            // 液态玻璃：文本块下面先铺玻璃卡——相机预览用库 LiquidGlassView（GPU 实时折射），
+            // 标注模式/无源场景用 CPU 版（与库同公式）；编辑器缩略图等无采样时画占位示意
+            if (isLiquid && dw > 1) {
+                if (useRealGlassView) {
+                    val gs = glassSource!!
+                    val st = state.style
+                    val glassScale = widthPx / 360f
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        // 内置修复版（上游 updateConfig 竞态 NPE，启动即崩——见类注释）
+                        factory = { ctx -> LiquidGlassViewSafe(ctx) },
+                        update = { v ->
+                            v.bind(gs)
+                            // 圆角钳短边 4/5（与烧录同规则）
+                            v.setCornerRadius(
+                                (st.glassCornerRadius * glassScale).coerceAtMost(minOf(dw, dh) * 0.8f),
+                            )
+                            v.setRefractionHeight(st.glassRefractionHeight * glassScale)
+                            v.setRefractionOffset(st.glassRefractionOffset * glassScale)
+                            v.setDispersion(st.glassDispersion)
+                            v.setBlurRadius(st.glassBlurRadius.coerceAtLeast(0.01f))
+                            v.setTintAlpha(st.glassTintAlpha)
+                            v.setTintColorRed(st.glassTintRed)
+                            v.setTintColorGreen(st.glassTintGreen)
+                            v.setTintColorBlue(st.glassTintBlue)
+                        },
+                        modifier = Modifier
+                            .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
+                            .requiredSize(with(density) { dw.toDp() }, with(density) { dh.toDp() })
+                            .graphicsLayer { rotationZ = rotationDeg },
+                    )
+                } else {
+                    val glassBmp = remember(
+                        state.style, dw, dh, rotationDeg, state.anchorX, state.anchorY,
+                        glassTick, widthPx, heightPx, scaleByShortSide,
+                    ) {
+                        runCatching {
+                            val frame = glassBackdrop?.takeIf { !it.isRecycled }?.let {
+                                WatermarkRenderer.FrameContext(it, widthPx, heightPx, rotationDeg, left, top)
+                            }
+                            WatermarkRenderer.renderGlassCard(
+                                state, scaleBasis, dw, dh, frame, placeholder = frame == null,
+                            )
+                        }.getOrNull()
+                    }
+                    glassBmp?.let { bmp ->
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
+                                .requiredSize(with(density) { dw.toDp() }, with(density) { dh.toDp() })
+                                .graphicsLayer { rotationZ = rotationDeg },
+                        )
+                    }
+                }
+            }
             Image(
                 bitmap = block.bitmap.asImageBitmap(),
                 contentDescription = "水印",
@@ -178,19 +288,17 @@ fun WatermarkOverlay(
                     // 单一手势源：位移超 slop 即拖动（本地增量按旋转角转回屏幕系，跟手方向不变），
                     // 未拖动抬手视为点击进入编辑器。避免 tap/drag 双检测器在旋转层互相干扰。
                     .pointerInput(rotationDeg) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            down.consume()
-                            android.util.Log.d("WmTap", "gesture down")
-                            var isDrag = false
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!change.pressed) {
-                                    android.util.Log.d("WmTap", "up isDrag=$isDrag onTap=${onTap !== null}")
-                                    if (!isDrag) onTap()
-                                    break
-                                }
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                var isDrag = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) {
+                                        if (!isDrag) onTap()
+                                        break
+                                    }
                                 val deltaLocal = change.position - change.previousPosition
                                 if (!isDrag && deltaLocal.getDistance() > viewConfiguration.touchSlop) {
                                     isDrag = true

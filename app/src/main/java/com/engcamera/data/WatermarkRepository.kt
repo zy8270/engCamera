@@ -94,7 +94,17 @@ class WatermarkRepository(private val context: Context) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
                     .onSuccess {
                         _state.value = ensureCountField(
-                            ensureWeatherField(migrateWidth(migrateFieldOrder(migrateTitleBg(it)))),
+                            ensureWeatherField(
+                                migrateWidth(
+                                    migrateWebScale(
+                                        migrateWebOpacity(
+                                            migrateLiquidGlass(
+                                                migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
                         )
                     }
             }
@@ -140,8 +150,37 @@ class WatermarkRepository(private val context: Context) {
                     )
                 }
                 .let { g ->
-                    g.copy(projects = g.projects.map { p -> p.copy(state = migrateFieldOrder(migrateTitleBg(p.state))) })
+                    g.copy(
+                        projects = g.projects.map { p ->
+                            p.copy(
+                                state = migrateFieldOrder(
+                                    migrateWebScale(
+                                        migrateWebOpacity(
+                                            migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                        ),
+                                    ),
+                                ),
+                            )
+                        },
+                    )
                 }
+            // 一次性迁移：液态玻璃记录点默认关闭（2026-10-16）——v158 预设默认曾把 recDot=true
+            // 带进液态玻璃存量状态，用户拍板该模板记录点默认关（可再手动开）
+            if (context.appDataStore.data.first()[booleanPreferencesKey("lg_recdot_off_migrated")] != true) {
+                fun lgRecDotOff(s: WatermarkState) =
+                    if (s.style.layout == "LIQUID_GLASS" && s.style.recDot) s.copy(style = s.style.copy(recDot = false)) else s
+                _state.value = lgRecDotOff(_state.value)
+                _projects.value = _projects.value.copy(
+                    projects = _projects.value.projects.map { p -> p.copy(state = lgRecDotOff(p.state)) },
+                )
+                scope.launch {
+                    context.appDataStore.edit {
+                        it[booleanPreferencesKey("lg_recdot_off_migrated")] = true
+                        it[stateKey] = json.encodeToString(_state.value)
+                        it[projectsKey] = json.encodeToString(_projects.value)
+                    }
+                }
+            }
             // 用户导入模板
             context.appDataStore.data.first()[templatesKey]?.let { raw ->
                 runCatching { json.decodeFromString<List<WatermarkTemplate>>(raw) }
@@ -215,6 +254,80 @@ class WatermarkRepository(private val context: Context) {
     private fun migrateWidth(s: WatermarkState): WatermarkState =
         if (s.style.maxWidthRatio == 0.72f || s.style.maxWidthRatio == 0.48f) {
             s.copy(style = s.style.copy(maxWidthRatio = 0.576f))
+        } else {
+            s
+        }
+
+    /** 存量数据迁移：极简白影/边框卡片标题默认强调色 深蓝 0xFF1D4E89 → 黄 0xFFFFB300（用户拍板 2026-10-14，
+     *  深色底深色字可读性差）。仅这两个模板且恰好等于旧默认值时替换，自定义过的不动；替换后特征消失，幂等。 */
+    private fun migrateAccentTitle(s: WatermarkState): WatermarkState =
+        if (s.templateId in setOf("minimal", "border") && s.style.accentColor == 0xFF1D4E89L) {
+            s.copy(style = s.style.copy(accentColor = 0xFFFFB300L))
+        } else {
+            s
+        }
+
+    /** 存量数据迁移：网页模板整体缩放默认 0.8 → 1.5（用户拍板 2026-10-14，默认太小）。
+     *  仅恰好等于旧默认值时替换，用户手动调过的不动；替换后特征消失，幂等。 */
+    private fun migrateWebScale(s: WatermarkState): WatermarkState =
+        if (s.style.webScale == 0.8f) {
+            s.copy(style = s.style.copy(webScale = 1.5f))
+        } else {
+            s
+        }
+
+    /** 存量数据迁移：网页面板不透明度独立化（v156）——旧版网页 {BG_A} 用原生 bgOpacity，
+     *  迁到 webBgOpacity 保视觉不变。仅网页后端模板（内置 id 或 u_ 导入）且 webBgOpacity
+     *  仍是新字段默认值（从未用新键调过）时执行一次；替换后特征消失，幂等。 */
+    private fun migrateWebOpacity(s: WatermarkState): WatermarkState {
+        val isWeb = TemplatePresets.find(s.templateId)?.backend == TemplateBackend.WEB ||
+            s.templateId.startsWith("u_")
+        if (!isWeb || s.style.webBgOpacity != 85) return s
+        return s.copy(style = s.style.copy(webBgOpacity = s.style.bgOpacity.coerceIn(0, 100)))
+    }
+
+    /** 存量数据迁移：液态玻璃参数体系切换到 AndroidLiquidGlassView 库（v158）——
+     *  v156/157 的旧比例参数（glassCornerRadius<1）回库默认值；v159 圆角默认 40→15；
+     *  旧 web 模板"玻璃拟态"（glass）已下架，切到液态玻璃（底部居中锚点）。
+     *  替换后特征消失，幂等。 */
+    private fun migrateLiquidGlass(s: WatermarkState): WatermarkState {
+        var st = s
+        if (st.templateId == "glass") {
+            st = st.copy(
+                templateId = "liquid_glass",
+                anchorX = 0.5f,
+                anchorY = 1f,
+                style = st.style.copy(layout = "LIQUID_GLASS"),
+            )
+        }
+        if (st.style.layout != "LIQUID_GLASS") return st
+        if (st.style.glassCornerRadius < 1f || st.style.glassCornerRadius == 40f) {
+            st = st.copy(
+                style = st.style.copy(
+                    glassCornerRadius = 15f,
+                    glassRefractionHeight = 20f,
+                    glassRefractionOffset = 70f,
+                    glassTintAlpha = 0f,
+                    glassTintRed = 1f,
+                    glassTintGreen = 1f,
+                    glassTintBlue = 1f,
+                    glassDispersion = 0.5f,
+                    glassBlurRadius = 0f,
+                ),
+            )
+        }
+        return st
+    }
+
+    /** 存量数据迁移：默认标题文字 "XX 工程施工记录" → "工程施工记录"（用户拍板 2026-10-14）。
+     *  仅恰好等于旧默认值时替换，用户改过标题的不动；替换后特征消失，幂等。 */
+    private fun migrateDefaultTitle(s: WatermarkState): WatermarkState =
+        if (s.fields.any { it.type == FieldType.PROJECT_NAME && it.value == "XX 工程施工记录" }) {
+            s.copy(
+                fields = s.fields.map {
+                    if (it.type == FieldType.PROJECT_NAME) it.copy(value = "工程施工记录") else it
+                },
+            )
         } else {
             s
         }
@@ -383,6 +496,9 @@ class WatermarkRepository(private val context: Context) {
                 templateId = tpl.id,
                 fields = newFields,
                 style = tpl.style.copy(maxWidthRatio = cur.style.maxWidthRatio),
+                // 模板自带默认锚点（如液态玻璃=底部居中）则落到该位置，否则保留当前位置
+                anchorX = tpl.anchorX ?: it.anchorX,
+                anchorY = tpl.anchorY ?: it.anchorY,
             )
         }
     }
@@ -403,7 +519,6 @@ class WatermarkRepository(private val context: Context) {
             state = _state.value,
         )
         val text = json.encodeToString(export)
-        android.util.Log.d("TplExport", "export ${tpl.name} (${text.length} chars)")
         return "${tpl.name}.json" to text
     }
 
@@ -481,8 +596,8 @@ class WatermarkRepository(private val context: Context) {
                 html = trimmed,
                 fields = defs,
                 options = listOf(
-                    TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 1.5f),
-                    TemplateOptionDef("bgOpacity", "面板不透明度", "slider", 10f, 100f),
+                    TemplateOptionDef("webScale", "整体缩放", "slider", 0.5f, 3f),
+                    TemplateOptionDef("webBgOpacity", "面板不透明度", "slider", 10f, 100f),
                     TemplateOptionDef("accentColor", "强调色", "color"),
                 ),
                 builtIn = false,
@@ -529,6 +644,44 @@ class WatermarkRepository(private val context: Context) {
                 it[projectsKey] = json.encodeToString(_projects.value)
             }
         }
+    }
+
+    /**
+     * 编辑器顶栏"重置"：回到当前模板初始状态——不切换模板（工程组里的重置才回默认模板，见 resetProjects）。
+     * 非快照模板：字段值恢复应用默认值（与 defaultFields 一致，如标题"工程施工记录"）、
+     * 字段结构/样式回模板定义（颜色、滑杆等调整一并还原）；
+     * 快照模板（导入含数据）：整份快照还原。位置/旋转/重力等摆放属性两种模板都保留。
+     */
+    fun resetToTemplate() {
+        val cur = _state.value
+        val tpl = WatermarkTemplates.find(cur.templateId) ?: return
+        val snap = tpl.snapshot
+        if (snap != null) {
+            update {
+                snap.copy(
+                    templateId = tpl.id,
+                    anchorX = cur.anchorX,
+                    anchorY = cur.anchorY,
+                    rotationDeg = cur.rotationDeg,
+                    followGravity = cur.followGravity,
+                )
+            }
+            return
+        }
+        val defaultValues = defaultFields().associateBy { it.type }
+        val newFields = tpl.fields.map { def ->
+            val existing = cur.fields.firstOrNull { it.type == def.type }
+            WatermarkField(
+                id = existing?.id ?: "f_${def.type.name.lowercase()}_${System.currentTimeMillis()}",
+                type = def.type,
+                label = def.label,
+                value = defaultValues[def.type]?.value.orEmpty(),
+                enabled = def.enabled,
+                isTitle = def.isTitle,
+                deletable = def.deletable,
+            )
+        }
+        update { it.copy(fields = newFields, style = tpl.style) }
     }
 
     fun setShutterSound(value: Boolean) {

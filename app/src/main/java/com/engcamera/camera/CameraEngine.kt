@@ -198,7 +198,6 @@ class CameraEngine(
                 height = s.height,
             )
         }
-        Log.d(TAG, "photo qualities: jpegSizes=${sizes.size}, 43=${ratio43.size}, tiers=${list.map { it.label }}")
         return list
     }
 
@@ -274,12 +273,7 @@ class CameraEngine(
         val info = camera?.cameraInfo ?: return
         if (info == zoomObservedInfo) return
         zoomObservedInfo?.let { old -> zoomObserver?.let { old.zoomState.removeObserver(it) } }
-        var zoomLogged = false
         val obs = Observer { zs: ZoomState ->
-            if (!zoomLogged) {
-                zoomLogged = true
-                Log.d(TAG, "zoom range=${zs.minZoomRatio}..${zs.maxZoomRatio}")
-            }
             _zoomRatio.value = zs.zoomRatio
             _zoomMin.value = zs.minZoomRatio
             _zoomMax.value = zs.maxZoomRatio
@@ -316,27 +310,6 @@ class CameraEngine(
         backLenses.clear()
         try {
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            // 诊断：全量相机清单（逻辑相机聚合多物理头时系统只暴露一颗后置）
-            runCatching {
-                Log.d(
-                    TAG,
-                    "allCameras=" + cm.cameraIdList.map { id ->
-                        val chars = cm.getCameraCharacteristics(id)
-                        val f = chars.get(CameraCharacteristics.LENS_FACING)
-                        // API 30+：逻辑相机包含的物理头 id（超广角是否聚合进来的关键证据）
-                        val phys = if (android.os.Build.VERSION.SDK_INT >= 30) {
-                            chars.physicalCameraIds.joinToString(",")
-                        } else {
-                            "?"
-                        }
-                        "$id:" + when (f) {
-                            CameraMetadata.LENS_FACING_BACK -> "BACK"
-                            CameraMetadata.LENS_FACING_FRONT -> "FRONT"
-                            else -> "EXT"
-                        } + "(phys=$phys)"
-                    },
-                )
-            }
             data class Raw(val id: String, val focal: Float)
             val raws = cm.cameraIdList.mapNotNull { id ->
                 val chars = cm.getCameraCharacteristics(id)
@@ -366,7 +339,6 @@ class CameraEngine(
                 backLenses += BackLens(raw.id, label)
             }
             selectedLensId = raws[bestIdx].id
-            Log.d(TAG, "enumerateBackLenses: ${backLenses.map { "${it.label}(id=${it.cameraId})" }}, best=$bestIdx")
         } catch (t: Throwable) {
             Log.w(TAG, "enumerateBackLenses failed", t)
             // 枚举失败：不显示焦段按钮，走默认后摄
@@ -545,14 +517,11 @@ class CameraEngine(
 
     fun startRecording(file: File, withAudio: Boolean, onEvent: (VideoRecordEvent) -> Unit): Recording? {
         val vc = videoCapture
-        Log.d(TAG, "startRecording: videoCapture=${vc != null}, audio=$withAudio")
         if (vc == null) return null
         return try {
             val pending = vc.output.prepareRecording(context, FileOutputOptions.Builder(file).build())
             if (withAudio) pending.withAudioEnabled()
-            val rec = pending.start(ContextCompat.getMainExecutor(context), onEvent)
-            Log.d(TAG, "startRecording: started=${rec != null}")
-            rec
+            pending.start(ContextCompat.getMainExecutor(context), onEvent)
         } catch (t: Throwable) {
             Log.w(TAG, "startRecording failed", t)
             null

@@ -54,6 +54,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
 
     override fun resetProjects(ids: Set<String>) = repo.resetProjects(ids)
 
+    /** 编辑器顶栏重置：仅回当前模板初始状态（清数据，不切模板）；工程组重置走 resetProjects */
+    fun resetToTemplate() = repo.resetToTemplate()
+
     /** 模板选项：颜色类（写入 WatermarkStyle 对应键） */
     fun setTemplateColor(key: String, color: Long) = repo.update { s ->
         val st = when (key) {
@@ -70,11 +73,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         s.copy(style = st)
     }
 
-    /** 模板选项：开关类（记录点等） */
+    /** 模板选项：水印位置 9 宫格（写锚点；不再随重力重置） */
+    fun setAnchor(ax: Float, ay: Float) = repo.update { it.copy(anchorX = ax, anchorY = ay) }
+
+    /** 模板选项：开关类（记录点/天气 emoji/位置经纬度等） */
     fun setTemplateSwitch(key: String, on: Boolean) = repo.update { s ->
         val st = when (key) {
             "recDot" -> s.style.copy(recDot = on)
             "weatherEmoji" -> s.style.copy(weatherEmoji = on)
+            "showLatLng" -> s.style.copy(showLatLng = on)
             else -> s.style
         }
         s.copy(style = st)
@@ -88,6 +95,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         repo.update(persist = false) { s ->
             val st = when (key) {
                 "bgOpacity" -> s.style.copy(bgOpacity = value.toInt().coerceIn(0, 100))
+                // 网页面板不透明度独立键（v156：与原生 bgOpacity 互不影响）
+                "webBgOpacity" -> s.style.copy(webBgOpacity = value.toInt().coerceIn(0, 100))
                 "cornerRatio" -> s.style.copy(cornerRatio = value)
                 // 上限 1.0：渐变底栏拉满整张照片宽度（其他模板滑杆最大 0.9）
                 "maxWidthRatio" -> s.style.copy(maxWidthRatio = value.coerceIn(0.3f, 1f))
@@ -96,6 +105,17 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 "recGlow" -> s.style.copy(recGlow = value)
                 "borderWidth" -> s.style.copy(borderWidth = value)
                 "webScale" -> s.style.copy(webScale = value)
+                // 液态玻璃（AndroidLiquidGlassView 库参数）
+                "glassCornerRadius" -> s.style.copy(glassCornerRadius = value.coerceIn(0f, 99f))
+                "glassRefractionHeight" -> s.style.copy(glassRefractionHeight = value.coerceIn(12f, 50f))
+                "glassRefractionOffset" -> s.style.copy(glassRefractionOffset = value.coerceIn(20f, 120f))
+                "glassTintAlpha" -> s.style.copy(glassTintAlpha = value.coerceIn(0f, 1f))
+                "glassTintRed" -> s.style.copy(glassTintRed = value.coerceIn(0f, 1f))
+                "glassTintGreen" -> s.style.copy(glassTintGreen = value.coerceIn(0f, 1f))
+                "glassTintBlue" -> s.style.copy(glassTintBlue = value.coerceIn(0f, 1f))
+                "glassDispersion" -> s.style.copy(glassDispersion = value.coerceIn(0f, 1f))
+                "glassBlurRadius" -> s.style.copy(glassBlurRadius = value.coerceIn(0f, 50f))
+                "textShadow" -> s.style.copy(textShadow = value.coerceIn(0f, 3f))
                 else -> s.style
             }
             s.copy(style = st)

@@ -310,17 +310,10 @@ class LocationSource(private val context: Context) {
                 .joinToString("")
         }?.takeIf { it.length > 4 }
         if (composed != null) {
-            android.util.Log.d(
-                "LocationSrc",
-                "line weak ('$sysLine') composed: '$composed' [省=${addr?.adminArea} 市=${addr?.locality} " +
-                    "区=${addr?.subLocality ?: addr?.subAdminArea} 村=${addr?.featureName} " +
-                    "路=${addr?.thoroughfare} 门牌=${addr?.subThoroughfare} 小区=${addr?.premises}]",
-            )
             return@withContext composed
         }
 
         val online = onlineReverseGeocode(location)
-        android.util.Log.d("LocationSrc", "fields empty ('$sysLine') -> online: '$online'")
         online
     }
 

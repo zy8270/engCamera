@@ -348,7 +348,8 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
         val context = LocalContext.current
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.roundToInt().coerceAtLeast(1)
         val fakeState = remember(template) {
-            // 全量快照模板（导入的）：直接用快照状态（含字段值），缩略图=导出时的样子
+            // 全量快照模板（导入的）：直接用快照状态（含字段值），缩略图=导出时的样子。
+            // 不再强制 maxWidthRatio=1f：缩略图宽度占比须与实际设置一致（用户反馈 2026-10-14）
             template.snapshot ?: WatermarkState(
                 templateId = template.id,
                 fields = template.fields.map {
@@ -362,7 +363,7 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
                         deletable = it.deletable,
                     )
                 },
-                style = template.style.copy(maxWidthRatio = 1f),
+                style = template.style,
             )
         }
         if (template.backend == TemplateBackend.WEB) {
@@ -407,6 +408,26 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
             val block = remember(fakeState, widthPx) {
                 WatermarkRenderer.render(fakeState, widthPx, SAMPLE_DYNAMIC)
             }
+            // 块按真实 maxWidthRatio 渲染（形状/换行与成片一致），显示时 Fit 等比放大到
+            // 贴满窗格可用边并居中：横向块贴宽、纵向块贴高，只放大不变形（用户拍板 2026-10-14）
+            // 液态玻璃：无采样源，先垫占位玻璃卡（淡底+描边）示意卡片范围
+            if (fakeState.style.layout == "LIQUID_GLASS" && block.width > 1) {
+                val card = remember(fakeState.style, widthPx, block.width, block.height) {
+                    runCatching {
+                        WatermarkRenderer.renderGlassCard(
+                            fakeState, widthPx, block.width, block.height, null, placeholder = true,
+                        )
+                    }.getOrNull()
+                }
+                card?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
             Image(
                 bitmap = block.bitmap.asImageBitmap(),
                 contentDescription = null,
@@ -438,11 +459,47 @@ private fun styleColor(key: String, style: WatermarkStyle): Long = when (key) {
     else -> 0xFF000000L
 }
 
-/** 模板选项编辑卡（默认折叠，点头展开）：颜色=统一色板+彩虹自由取色，数值=滑杆 */
+/** 可展开分组头（统一样式 2026-10-16）：文字 + 紧跟其右侧的展开箭头（不右对齐），
+ *  字号/边距/图标尺寸全项目一致；用于 模板选项/水印位置/记录点/背景选项 */
+@Composable
+private fun GroupHeader(
+    title: String,
+    expanded: Boolean,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onToggle)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = if (expanded) "收起$title" else "展开$title",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/** 模板选项编辑卡（默认折叠，点头展开）：水印位置 9 宫格排首位；颜色=统一色板+彩虹自由取色，数值=滑杆 */
 @Composable
 fun TemplateOptionsCard(
     template: WatermarkTemplate,
     style: WatermarkStyle,
+    anchorX: Float,
+    anchorY: Float,
+    onAnchor: (Float, Float) -> Unit,
     onColor: (String, Long) -> Unit,
     onScalar: (String, Float) -> Unit,
     onSwitch: (String, Boolean) -> Unit,
@@ -455,33 +512,22 @@ fun TemplateOptionsCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "模板选项 · ${template.name}",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "折叠" else "展开",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            GroupHeader(
+                "模板选项 · ${template.name}",
+                expanded,
+                Modifier.padding(horizontal = 12.dp),
+            ) { expanded = !expanded }
             androidx.compose.animation.AnimatedVisibility(visible = expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                    // 水印位置 9 宫格（所有模板排首位，用户拍板 2026-10-16）
+                    PositionOptionRow(anchorX, anchorY, onAnchor)
                     // 记录点四个子选项（大小/左边距/光晕/颜色）不单独平铺，收进"记录点"组内嵌套渲染
                     val recSubKeys = setOf("recDotSize", "recDotOffset", "recGlow", "recDotColor")
                     var recGroupOpen by remember(template.id) { mutableStateOf(false) }
                     template.options.forEach { opt ->
                         when {
+                            // 液态玻璃库背景参数收进"背景选项"折叠组（组在循环后渲染）
+                            opt.key.startsWith("glass") -> Unit
                             opt.key in recSubKeys -> Unit
                             opt.key == "recDot" -> {
                                 Row(
@@ -489,26 +535,12 @@ fun TemplateOptionsCard(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    // 点标签/箭头展开收起子设置；开关独立在右侧只管开关
-                                    Row(
-                                        Modifier
-                                            .weight(1f)
-                                            .clickable { recGroupOpen = !recGroupOpen }
-                                            .padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            opt.label,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                        Icon(
-                                            if (recGroupOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                            contentDescription = if (recGroupOpen) "收起记录点设置" else "展开记录点设置",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    }
+                                    // 点标签/箭头展开收起子设置（统一样式）；开关独立在右侧只管开关
+                                    GroupHeader(
+                                        opt.label,
+                                        recGroupOpen,
+                                        Modifier.weight(1f),
+                                    ) { recGroupOpen = !recGroupOpen }
                                     Switch(
                                         checked = style.recDot,
                                         onCheckedChange = { onSwitch(opt.key, it) },
@@ -570,7 +602,21 @@ fun TemplateOptionsCard(
                             }
                         }
                         // 记录点子选项收进组内不渲染，间隔也不留（否则记录点下方空出一截）
-                        if (opt.key !in recSubKeys) Spacer(Modifier.height(6.dp))
+                        if (opt.key !in recSubKeys && !opt.key.startsWith("glass")) Spacer(Modifier.height(6.dp))
+                    }
+                    // 液态玻璃库背景参数折叠组（默认收起，用户拍板 2026-10-16）
+                    val bgOpts = template.options.filter { it.key.startsWith("glass") }
+                    if (bgOpts.isNotEmpty()) {
+                        var bgOpen by remember(template.id) { mutableStateOf(false) }
+                        GroupHeader("背景选项", bgOpen) { bgOpen = !bgOpen }
+                        androidx.compose.animation.AnimatedVisibility(visible = bgOpen) {
+                            Column {
+                                bgOpts.forEach { bgOpt ->
+                                    SliderOptionRow(bgOpt, style, onScalar)
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -589,6 +635,64 @@ fun TemplateOptionsCard(
     }
 }
 
+/** 水印位置 9 宫格选项：可视化选 9 个位置（左上/上中/右上/左中/正中/右中/左下/下中/右下），
+ *  高亮当前锚点最近的格；点选直接写锚点，不再随重力重置（用户拍板 2026-10-16） */
+@Composable
+private fun PositionOptionRow(
+    anchorX: Float,
+    anchorY: Float,
+    onAnchor: (Float, Float) -> Unit,
+) {
+    val xs = listOf(0f, 0.5f, 1f)
+    val ys = listOf(0f, 0.5f, 1f)
+    var open by remember { mutableStateOf(false) }
+    Column {
+        GroupHeader("水印位置", open) { open = !open }
+        androidx.compose.animation.AnimatedVisibility(visible = open) {
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // 纵向 4:3（宽:高=3:4）九宫格，整体居中（用户拍板 2026-10-16）
+                Column(
+                    Modifier
+                        .fillMaxWidth(0.55f)
+                        .aspectRatio(3f / 4f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .padding(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    ys.forEach { gy ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            xs.forEach { gx ->
+                                val selected = kotlin.math.abs(anchorX - gx) < 0.26f &&
+                                    kotlin.math.abs(anchorY - gy) < 0.26f
+                                Box(
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceContainerHigh
+                                        )
+                                        .clickable { onAnchor(gx, gy) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+}
+
 /** 数值选项行：标签+百分比值 + 滑杆（值映射自 WatermarkStyle 对应字段） */
 @Composable
 private fun SliderOptionRow(
@@ -598,6 +702,7 @@ private fun SliderOptionRow(
 ) {
     val current = when (opt.key) {
         "bgOpacity" -> style.bgOpacity.toFloat()
+        "webBgOpacity" -> style.webBgOpacity.toFloat()
         "cornerRatio" -> style.cornerRatio
         "maxWidthRatio" -> style.maxWidthRatio
         "recDotSize" -> style.recDotSize
@@ -605,12 +710,25 @@ private fun SliderOptionRow(
         "recGlow" -> style.recGlow
         "borderWidth" -> style.borderWidth
         "webScale" -> style.webScale
+        "glassCornerRadius" -> style.glassCornerRadius
+        "glassRefractionHeight" -> style.glassRefractionHeight
+        "glassRefractionOffset" -> style.glassRefractionOffset
+        "glassTintAlpha" -> style.glassTintAlpha
+        "glassTintRed" -> style.glassTintRed
+        "glassTintGreen" -> style.glassTintGreen
+        "glassTintBlue" -> style.glassTintBlue
+        "glassDispersion" -> style.glassDispersion
+        "glassBlurRadius" -> style.glassBlurRadius
+        "textShadow" -> style.textShadow
         else -> opt.min
     }
     val display = when (opt.key) {
-        "bgOpacity" -> "${current.roundToInt()}"
-        // 倍率类（边框粗细/记录点大小/网页整体缩放）按 ×N 显示
-        "borderWidth", "recDotSize", "webScale" -> "×" + "%.1f".format(current)
+        "bgOpacity", "webBgOpacity" -> "${current.roundToInt()}"
+        // 倍率类（边框粗细/记录点大小/网页整体缩放/文字阴影强度）按 ×N 显示
+        "borderWidth", "recDotSize", "webScale", "textShadow" -> "×" + "%.1f".format(current)
+        // 液态玻璃库参数：dp/半径类按原始数值显示（标签已带单位）
+        "glassCornerRadius", "glassRefractionHeight", "glassRefractionOffset", "glassBlurRadius" ->
+            "${current.roundToInt()}"
         else -> "${(current * 100).roundToInt()}%"
     }
     Text(
