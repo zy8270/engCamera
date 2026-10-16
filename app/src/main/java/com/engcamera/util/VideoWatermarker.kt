@@ -61,11 +61,15 @@ object VideoWatermarker {
         }
         if (width <= 0 || height <= 0) error("无法读取视频尺寸")
 
-        // 2) 整帧透明位图上画水印。frameRotationDeg 为屏幕系→成片系换算角（只由持机方向决定）。
+        // 2) 整帧透明位图上画水印。frameRotationDeg 为屏幕系→成片系换算角（只由持机方向决定）；
+        //    锚点为重力参照系（成片显示系），不随该角旋转，仅水印块旋转补偿。
         //    液态玻璃模板：视频无逐帧采样能力，走无采样退化（半透明玻璃底），其余模板不受影响
         val frame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(frame)
-        WatermarkRenderer.drawOnCanvas(canvas, width, height, state, dynamic, state.rotationDeg, frameRotationDeg)
+        WatermarkRenderer.drawOnCanvas(
+            canvas, width, height, state, dynamic, state.rotationDeg, frameRotationDeg,
+            gravityAnchor = true,
+        )
 
         // 3) 转码烧入
         val output = File(input.parentFile, input.nameWithoutExtension + "_wm.mp4")
