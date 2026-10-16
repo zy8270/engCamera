@@ -375,12 +375,12 @@ class CameraEngine(
      * 全量绑失败逐级回退：去扫码 → 去录像 → 去 ViewPort，保证相机始终可用。
      */
     @SuppressLint("RestrictedApi")
-    fun bind(previewView: PreviewView, analyzer: ImageAnalysis.Analyzer?) {
+    fun bind(previewView: PreviewView, analyzer: ImageAnalysis.Analyzer?, force: Boolean = false) {
         val p = provider ?: return
         val vw = previewView.width
         val vh = previewView.height
         val bindKey = "$frontCamera|$selectedLensId|${videoQuality.label}|${photoQuality?.label}|$vw|$vh"
-        if (bindKey == lastBindKey && camera != null) return
+        if (!force && bindKey == lastBindKey && camera != null) return
         lastBindKey = bindKey
         meteringFactory = previewView.meteringPointFactory
 

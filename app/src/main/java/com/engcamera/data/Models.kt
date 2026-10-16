@@ -65,6 +65,10 @@ data class WatermarkStyle(
     val glassDispersion: Float = 0.5f,       // 色散 0~1（库默认 0.5）
     val glassBlurRadius: Float = 0f,         // 模糊半径（库默认 0.01≈0，0~50）
     val textShadow: Float = 1f,              // 文字阴影强度倍数（液态玻璃，0=无阴影，默认 1）
+    // ---- v171 阴影细分（用户拍板默认值 2026-10-16：大小 1.0/扩散 1.0/透明度 100%/偏移 1.0）----
+    val shadowSpread: Float = 1f,            // 阴影扩散倍数（只放大模糊半径，1=旧效果）
+    val shadowAlpha: Float = 1f,             // 阴影透明度 0~1（默认 100%，用户拍板 2026-10-16）
+    val shadowOffsetY: Float = 1f,           // 阴影垂直偏移倍数（1=旧效果）
     // ---- v159 位置字段经纬度开关 ----
     val showLatLng: Boolean = false,         // 位置文本显示尾部经纬度括号段（默认关，用户拍板 2026-10-16）
 )

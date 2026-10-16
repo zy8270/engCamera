@@ -292,10 +292,9 @@ fun WatermarkOverlay(
                         withContext(kotlinx.coroutines.Dispatchers.Default) {
                             var lastFresh: android.graphics.Bitmap? = null
                             var small: android.graphics.Bitmap? = null
-                            var laggedOut: android.graphics.Bitmap? = null
                             try {
                                 for (fresh in frames) {
-                                    // 静态图（标注模式）同实例只处理一次；相机帧一拍一换
+                                    // 静态图（标注/编辑器截帧）同实例只处理一次；相机帧一拍一换
                                     if (fresh.isRecycled || fresh === lastFresh) continue
                                     val prev = lastFresh
                                     lastFresh = fresh
@@ -311,23 +310,20 @@ fun WatermarkOverlay(
                                             state, scaleBasis / 2, dw / 2, dh / 2, frame,
                                         )
                                     }.getOrNull()
-                                    if (out != null) {
-                                        val oldOut = glassBmp
-                                        glassBmp = out
-                                        // 隔一代回收：主线程可能还在画上一张成品
-                                        laggedOut?.recycle()
-                                        laggedOut = oldOut
-                                    }
+                                    // 玻璃卡成品不做任何手工回收（含替换与退出）：滑杆拖动会高频
+                                    // 重启渲染效应，隔代回收会在主线程仍在绘制时把位图回收掉
+                                    // （真机崩溃实锤 2026-10-16 "Canvas: trying to use a recycled
+                                    // bitmap"）；成品位图量小，交给 GC
+                                    if (out != null) glassBmp = out
                                 }
                             } finally {
                                 small?.recycle()
-                                laggedOut?.recycle()
-                                // lastFresh 不在此回收：标注模式的静态图归提供方所有，相机最后一帧交给 GC
+                                // lastFresh 不在此回收：静态图归提供方所有，相机最后一帧交给 GC
                             }
                         }
                     }
                     DisposableEffect(Unit) {
-                        onDispose { glassBmp?.recycle() }
+                        onDispose { } // glassBmp 交给 GC（同上：手工回收有绘制竞态）
                     }
                     glassBmp?.let { bmp ->
                         Image(

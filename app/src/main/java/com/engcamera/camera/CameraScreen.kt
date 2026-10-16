@@ -254,10 +254,37 @@ fun CameraScreen(
             DisposableEffect(navLifecycle) {
                 val engine = CameraEngine(context, navLifecycle)
                 vm.attachEngine(engine)
-                vm.rebind = {
-                    engine.bind(previewView, vm.barcodeAnalyzer())
+                val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                // 帧看门狗：快速进出编辑器等场景下引擎 release→重绑会撞上异步相机关闭
+                // （绑成功但 HAL 忙、无帧黑屏，用户 100% 复现 2026-10-16）——绑完每 0.5s
+                // 查一次流状态，1.5s（3 查）仍无流才强制重绑（force 跳过同键去重），
+                // 最多再试 2 次；间隔足够宽不搅 HAL（vivo 热身窗口内密集重绑会卡死）
+                fun rebindWithWatchdog(attempt: Int) {
+                    engine.bind(previewView, vm.barcodeAnalyzer(), force = attempt > 0)
                     vm.onEngineBound()
+                    var checks = 0
+                    fun check() {
+                        mainHandler.postDelayed(
+                            {
+                                if (!navLifecycle.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return@postDelayed
+                                if (previewView.previewStreamState.value ==
+                                    androidx.camera.view.PreviewView.StreamState.STREAMING
+                                ) {
+                                    return@postDelayed
+                                }
+                                checks++
+                                if (checks >= 3) {
+                                    if (attempt < 2) rebindWithWatchdog(attempt + 1)
+                                } else {
+                                    check()
+                                }
+                            },
+                            500,
+                        )
+                    }
+                    check()
                 }
+                vm.rebind = { rebindWithWatchdog(0) }
                 // 预览控件完成测量后重绑一次，让 ViewPort 拿到真实宽高（录像比例与预览一致的关键）
                 val layoutListener = android.view.View.OnLayoutChangeListener { v, _, _, _, _, oldL, oldT, oldR, oldB ->
                     if (v.width > 0 && v.height > 0 &&
@@ -292,10 +319,16 @@ fun CameraScreen(
                 }
                 navLifecycle.lifecycle.addObserver(observer)
                 onDispose {
+                    mainHandler.removeCallbacksAndMessages(null)
                     navLifecycle.lifecycle.removeObserver(observer)
                     previewView.removeOnLayoutChangeListener(layoutListener)
                     vm.stopEverything()
                     vm.rebind = null
+                    // 进编辑器前截取取景器一帧作静态预览背景（低配所见即所得，用户拍板 2026-10-16）
+                    EditorBackdrop.capture(previewView)
+                    // 释放闸门：先注册可用性回调再关相机——编辑器据此在真正释放完后
+                    // 才显示眼睛（用户拍板 2026-10-16）
+                    CameraGate.markReleasing(context)
                     vm.detachEngine()
                 }
             }
@@ -346,7 +379,12 @@ fun CameraScreen(
                         effective = effective,
                         dynamic = dynamic,
                         ui = ui,
-                        onOpenEditor = onOpenEditor,
+                        onOpenEditor = {
+                            // 进编辑器前截取取景器一帧（编辑器组合早于本页 dispose，
+                            // 必须在跳转动作时截，v188 在 dispose 里截导致读到空）
+                            EditorBackdrop.capture(previewView)
+                            onOpenEditor()
+                        },
                         onPick = {
                             annotatePicker.launch(
                                 androidx.activity.result.PickVisualMediaRequest(
@@ -364,7 +402,11 @@ fun CameraScreen(
                         dynamic = dynamic,
                         ui = ui,
                         rot = rot,
-                        onOpenEditor = onOpenEditor,
+                        onOpenEditor = {
+                            // 同上：跳转动作时截帧（dispose 里截太晚）
+                            EditorBackdrop.capture(previewView)
+                            onOpenEditor()
+                        },
                     )
                 }
 
@@ -626,6 +668,29 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
+                }
+                Spacer(Modifier.height(16.dp))
+
+                // 取景器截帧背景（用户拍板 2026-10-16：放文件保存路径上方，默认开）
+                val editorBackdrop by vm.editorBackdrop.collectAsState()
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "取景器截帧背景",
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "进入水印编辑器时，截取取景器当前画面作为水印预览背景；关闭则使用几何图案背景",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = editorBackdrop, onCheckedChange = { vm.setEditorBackdrop(it) })
                 }
                 Spacer(Modifier.height(16.dp))
 

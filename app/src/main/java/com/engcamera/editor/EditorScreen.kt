@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +73,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -118,6 +121,118 @@ fun EditorScreen(onBack: () -> Unit) {
     var showProjectGroups by remember { mutableStateOf(false) }
     var showTemplates by remember { mutableStateOf(false) }
     var showResetConfirm by remember { mutableStateOf(false) }
+
+    // ---------- 眼睛开关：预览背景换相机实时画面（所见即所得参考调整，默认闭眼） ----------
+    var eyeOpen by remember { mutableStateOf(false) }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val hasCameraPermission = remember {
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.CAMERA,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    val cameraPreviewView = remember {
+        androidx.camera.view.PreviewView(context).apply {
+            scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
+            implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+    // 释放闸门：主相机真正释放完（HAL 报后摄可用或 2s 兜底）才显示眼睛——睁眼时相机
+    // 必已空闲，直接绑定即可，无需任何等待/看门狗（用户拍板方案 2026-10-16）
+    val cameraReady by com.engcamera.camera.CameraGate.ready.collectAsState()
+    val cameraBound = remember { mutableStateOf(false) }
+    DisposableEffect(eyeOpen, lifecycleOwner) {
+        if (!eyeOpen || !hasCameraPermission) {
+            cameraBound.value = false
+            onDispose { }
+        } else {
+            var disposed = false
+            var boundPreview: androidx.camera.core.Preview? = null
+            val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+            var cm: android.hardware.camera2.CameraManager? = null
+            var availabilityCb: android.hardware.camera2.CameraManager.AvailabilityCallback? = null
+
+            fun cleanupAvailability() {
+                availabilityCb?.let { cb ->
+                    cm?.let { runCatching { it.unregisterAvailabilityCallback(cb) } }
+                }
+                availabilityCb = null
+            }
+
+            // 绑定+流验证：闸门（可用信号）不保证绑定必出流（逻辑相机关了子设备可能
+            // 还在收尾、个别设备信号来早）——绑完 1s 查一次，没流就解绑、等下一个
+            // 可用信号再绑，≤3 轮自愈（快速进编辑器点眼睛的黑屏根治，2026-10-16）
+            fun bindOnce(attempt: Int) {
+                if (disposed || attempt > 3) return
+                runCatching {
+                    val provider = androidx.camera.lifecycle.ProcessCameraProvider
+                        .getInstance(context).get()
+                    boundPreview?.let { provider.unbind(it) }
+                    boundPreview = null
+                    cameraBound.value = false
+                    provider.unbindAll()
+                    val preview = androidx.camera.core.Preview.Builder().build()
+                    preview.setSurfaceProvider(cameraPreviewView.surfaceProvider)
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                    )
+                    boundPreview = preview
+                    cameraBound.value = true
+                    mainHandler.postDelayed(
+                        {
+                            if (disposed || boundPreview == null) return@postDelayed
+                            if (cameraPreviewView.previewStreamState.value ==
+                                androidx.camera.view.PreviewView.StreamState.STREAMING
+                            ) {
+                                return@postDelayed // 出流，收工
+                            }
+                            // 静默无流：解绑，等下一个「可用」信号（真释放）再试；
+                            // 800ms 也补一次防信号丢失
+                            boundPreview?.let { provider.unbind(it) }
+                            boundPreview = null
+                            cameraBound.value = false
+                            val manager = context.getSystemService(android.content.Context.CAMERA_SERVICE)
+                                as android.hardware.camera2.CameraManager
+                            cm = manager
+                            cleanupAvailability()
+                            val nextAttempt = attempt + 1
+                            val cb = object : android.hardware.camera2.CameraManager.AvailabilityCallback() {
+                                override fun onCameraAvailable(id: String) {
+                                    if (!disposed && boundPreview == null) {
+                                        cleanupAvailability()
+                                        bindOnce(nextAttempt)
+                                    }
+                                }
+                            }
+                            availabilityCb = cb
+                            runCatching { manager.registerAvailabilityCallback(cb, mainHandler) }
+                            mainHandler.postDelayed(
+                                { if (!disposed && boundPreview == null) bindOnce(nextAttempt) },
+                                800,
+                            )
+                        },
+                        1000,
+                    )
+                }.onFailure {
+                    mainHandler.postDelayed({ bindOnce(attempt + 1) }, 500)
+                }
+            }
+            bindOnce(0)
+            onDispose {
+                disposed = true
+                mainHandler.removeCallbacksAndMessages(null)
+                cleanupAvailability()
+                cameraBound.value = false
+                runCatching {
+                    boundPreview?.let {
+                        androidx.camera.lifecycle.ProcessCameraProvider
+                            .getInstance(context).get().unbind(it)
+                    }
+                }
+            }
+        }
+    }
 
     val listState = rememberLazyListState()
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -184,88 +299,106 @@ fun EditorScreen(onBack: () -> Unit) {
                 BoxWithConstraints(
                     Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
+                        .height(150.dp),
                 ) {
-                    val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.roundToInt()
-                    // 网页模板：渲染完成 tick 触发重组取新缓存；预览用分钟级时间（不每秒重渲 WebView）
-                    val webTick by com.engcamera.watermark.WebTemplateRenderer.tick.collectAsState()
-                    val isWeb = com.engcamera.data.WatermarkTemplates.find(state.templateId)
-                        ?.backend == com.engcamera.data.TemplateBackend.WEB
-                    val effDynamic = remember(dynamic, isWeb) {
-                        if (isWeb) com.engcamera.watermark.WebTemplateRenderer.previewDynamic(dynamic) else dynamic
-                    }
-                    // key 必须含 templateId：三款网页模板的 stdFields 与默认样式结构完全相等，
-                    // 切换网页模板时 fields/style 不变 → 效应不重启 → 新模板永远不发起渲染
-                    // （预览窗格空白直到下一分钟时间变化才自愈，用户复现 2026-10-14）
-                    LaunchedEffect(state.templateId, state.fields, state.style, effDynamic, widthPx) {
-                        val key = com.engcamera.watermark.WatermarkRenderer.webCacheKey(state, effDynamic, widthPx)
-                        if (key != null && com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
-                            // 防抖：滑杆拖动等连续状态变化只渲停手后的最后一个键，
-                            // 避免串行渲染队列被过期任务淹没（网页模板全 miss=水印"消失"）
-                            kotlinx.coroutines.delay(150)
-                            if (com.engcamera.watermark.WebTemplateRenderer.current(key) == null) {
-                                com.engcamera.data.WatermarkTemplates.find(state.templateId)?.let { tpl ->
-                                    com.engcamera.watermark.WebTemplateRenderer.warmAsync(
-                                        context, key, tpl, state, effDynamic, widthPx,
-                                    )
-                                }
+                    val previewWpx = with(LocalDensity.current) { maxWidth.toPx() }.roundToInt()
+                    val previewHpx = with(LocalDensity.current) { maxHeight.toPx() }.roundToInt()
+                    if (eyeOpen) {
+                        // 相机实时背景 + 水印浮层：液态玻璃实时折射（glassSource=PreviewView，
+                        // API33+ 走库 GPU）。占满整个预览框不留边不留圆角（用户拍板 2026-10-16）；
+                        // 水印恒居中展示（不吃九宫格锚点、禁止拖动——只做效果参考，用户拍板）
+                        Box(Modifier.fillMaxSize()) {
+                            androidx.compose.ui.viewinterop.AndroidView(
+                                factory = { cameraPreviewView },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            if (cameraBound.value) {
+                                com.engcamera.watermark.WatermarkOverlay(
+                                    state = state.copy(anchorX = 0.5f, anchorY = 0.5f),
+                                    dynamic = dynamic,
+                                    rotationDeg = rotationDeg,
+                                    onTap = { showTemplates = true },
+                                    onDrag = { _, _ -> }, // 禁止拖动：居中纯展示
+                                    modifier = Modifier.fillMaxSize(),
+                                    glassSource = cameraPreviewView,
+                                )
                             }
                         }
-                    }
-                    val block = remember(state, effDynamic, widthPx, webTick) {
-                        WatermarkRenderer.render(state, widthPx, effDynamic)
-                    }
-                    // 网页位图按固定宽渲染，这里缩放到画面宽 × webScale 显示（与成片一致）
-                    var dw = block.width
-                    var dh = block.height
-                    if (isWeb && block.width > 1 && widthPx > 0) {
-                        val f = com.engcamera.watermark.WebTemplateRenderer.webDrawFraction(state) * widthPx / block.width
-                        dw = (block.width * f).roundToInt().coerceAtLeast(1)
-                        dh = (block.height * f).roundToInt().coerceAtLeast(1)
-                    }
-                    // 液态玻璃：编辑器无采样源，垫占位玻璃卡（淡底+描边）示意卡片范围
-                    if (state.style.layout == "LIQUID_GLASS" && block.width > 1) {
-                        val card = remember(state.style, widthPx, dw, dh) {
-                            runCatching {
-                                WatermarkRenderer.renderGlassCard(state, widthPx, dw, dh, null, placeholder = true)
-                            }.getOrNull()
+                    } else {
+                        // 静态预览：背景与水印浮层都铺满整个预览框（无内边距）——显示与
+                        // 玻璃采样同几何，折射位置才对得上（用户反馈 2026-10-16）
+                        val useBackdrop by vm.editorBackdrop.collectAsState()
+                        // 截帧中心裁剪到预览框宽高比：背景显示(FillBounds)与玻璃采样共用同一张
+                        val rawFrame = com.engcamera.camera.EditorBackdrop.frame
+                        val frame = remember(rawFrame, previewWpx, previewHpx) {
+                            rawFrame?.takeIf { !it.isRecycled }?.let {
+                                com.engcamera.camera.EditorBackdrop.cropToAspect(it, previewWpx.toFloat(), previewHpx.toFloat())
+                            }
                         }
-                        card?.let {
+                        if (useBackdrop && frame != null) {
                             Image(
-                                bitmap = it.asImageBitmap(),
+                                bitmap = frame.asImageBitmap(),
                                 contentDescription = null,
-                                modifier = Modifier
-                                    .requiredSize(with(LocalDensity.current) { dw.toDp() }, with(LocalDensity.current) { dh.toDp() })
-                                    .graphicsLayer { rotationZ = rotationDeg },
+                                contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            com.engcamera.ui.theme.GeometricPatternBackground(Modifier.fillMaxSize())
+                        }
+                        // 图案模式也给玻璃同几何的采样源（山形位图版），玻璃才有折射
+                        val patternDark = com.engcamera.ui.theme.LocalAppDarkTheme.current
+                        val patternProvider: () -> android.graphics.Bitmap? =
+                            remember(patternDark, previewWpx, previewHpx) {
+                                val w = previewWpx.coerceAtMost(480)
+                                val bmp = com.engcamera.ui.theme.renderPatternBitmap(
+                                    patternDark, w,
+                                    (w * previewHpx / previewWpx).coerceAtLeast(1),
+                                )
+                                val provider: () -> android.graphics.Bitmap? = { bmp }
+                                provider
+                            }
+                        com.engcamera.watermark.WatermarkOverlay(
+                            state = state.copy(anchorX = 0.5f, anchorY = 0.5f),
+                            dynamic = dynamic,
+                            rotationDeg = rotationDeg,
+                            onTap = { showTemplates = true },
+                            onDrag = { _, _ -> }, // 静态预览纯展示，禁止拖动
+                            modifier = Modifier.fillMaxSize(),
+                            backdropProvider = if (useBackdrop) {
+                                { frame }
+                            } else {
+                                patternProvider
+                            },
+                        )
+                    } // else（静态预览）结束
+                    // 眼睛开关：主相机释放完才显示（CameraGate）；闭眼=静态预览；
+                    // 睁眼=相机实时背景（水印居中纯展示，效果所见即所得）
+                    if (cameraReady) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(6.dp)
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(com.engcamera.ui.theme.ChromeNeutral)
+                                .clickable {
+                                    if (hasCameraPermission) {
+                                        eyeOpen = !eyeOpen
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context, "无相机权限，请先到相机页授权", android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                if (eyeOpen) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = if (eyeOpen) "关闭相机预览" else "打开相机预览",
+                                tint = com.engcamera.ui.theme.ChromeIcon,
+                                modifier = Modifier.size(22.dp),
                             )
                         }
-                    }
-                    Image(
-                        bitmap = block.bitmap.asImageBitmap(),
-                        contentDescription = "水印预览",
-                        modifier = Modifier
-                            .requiredSize(with(LocalDensity.current) { dw.toDp() }, with(LocalDensity.current) { dh.toDp() })
-                            .graphicsLayer { rotationZ = rotationDeg },
-                    )
-                    // 魔法棒：预览窗右下角（与整块预览同入口，按钮保留备用）
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(com.engcamera.ui.theme.ChromeNeutral)
-                            .clickable { showTemplates = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.AutoFixHigh,
-                            contentDescription = "水印模板",
-                            tint = com.engcamera.ui.theme.ChromeIcon,
-                            modifier = Modifier.size(22.dp),
-                        )
                     }
                 }
             }

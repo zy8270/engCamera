@@ -523,12 +523,15 @@ fun TemplateOptionsCard(
                     PositionOptionRow(anchorX, anchorY, onAnchor)
                     // 记录点四个子选项（大小/左边距/光晕/颜色）不单独平铺，收进"记录点"组内嵌套渲染
                     val recSubKeys = setOf("recDotSize", "recDotOffset", "recGlow", "recDotColor")
+                    // 阴影四拉杆（大小/扩散/透明度/垂直偏移）收进"文字阴影"折叠组（v171）
+                    val shadowSubKeys = setOf("textShadow", "shadowSpread", "shadowAlpha", "shadowOffsetY")
                     var recGroupOpen by remember(template.id) { mutableStateOf(false) }
                     template.options.forEach { opt ->
                         when {
                             // 液态玻璃库背景参数收进"背景选项"折叠组（组在循环后渲染）
                             opt.key.startsWith("glass") -> Unit
                             opt.key in recSubKeys -> Unit
+                            opt.key in shadowSubKeys -> Unit
                             opt.key == "recDot" -> {
                                 Row(
                                     Modifier.fillMaxWidth(),
@@ -601,8 +604,10 @@ fun TemplateOptionsCard(
                                 else -> SliderOptionRow(opt, style, onScalar)
                             }
                         }
-                        // 记录点子选项收进组内不渲染，间隔也不留（否则记录点下方空出一截）
-                        if (opt.key !in recSubKeys && !opt.key.startsWith("glass")) Spacer(Modifier.height(6.dp))
+                        // 记录点/阴影子选项收进组内不渲染，间隔也不留（否则下方空出一截）
+                        if (opt.key !in recSubKeys && !opt.key.startsWith("glass") &&
+                            opt.key !in shadowSubKeys
+                        ) Spacer(Modifier.height(6.dp))
                     }
                     // 液态玻璃库背景参数折叠组（默认收起，用户拍板 2026-10-16）
                     val bgOpts = template.options.filter { it.key.startsWith("glass") }
@@ -613,6 +618,21 @@ fun TemplateOptionsCard(
                             Column {
                                 bgOpts.forEach { bgOpt ->
                                     SliderOptionRow(bgOpt, style, onScalar)
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                            }
+                        }
+                    }
+                    // 文字阴影四拉杆折叠组（默认收起，用户拍板 2026-10-16）
+                    val shadowOpts = template.options.filter { it.key in shadowSubKeys }
+                    if (shadowOpts.isNotEmpty()) {
+                        var shadowOpen by remember(template.id) { mutableStateOf(false) }
+                        Spacer(Modifier.height(6.dp))
+                        GroupHeader("文字阴影", shadowOpen) { shadowOpen = !shadowOpen }
+                        androidx.compose.animation.AnimatedVisibility(visible = shadowOpen) {
+                            Column {
+                                shadowOpts.forEach { shOpt ->
+                                    SliderOptionRow(shOpt, style, onScalar)
                                     Spacer(Modifier.height(6.dp))
                                 }
                             }
@@ -722,12 +742,16 @@ private fun SliderOptionRow(
         "glassDispersion" -> style.glassDispersion
         "glassBlurRadius" -> style.glassBlurRadius
         "textShadow" -> style.textShadow
+        "shadowSpread" -> style.shadowSpread
+        "shadowAlpha" -> style.shadowAlpha
+        "shadowOffsetY" -> style.shadowOffsetY
         else -> opt.min
     }
     val display = when (opt.key) {
         "bgOpacity", "webBgOpacity" -> "${current.roundToInt()}"
-        // 倍率类（边框粗细/记录点大小/网页整体缩放/文字阴影强度）按 ×N 显示
-        "borderWidth", "recDotSize", "webScale", "textShadow" -> "×" + "%.1f".format(current)
+        // 倍率类（边框粗细/记录点大小/网页整体缩放/阴影大小·扩散·垂直偏移）按 ×N 显示
+        "borderWidth", "recDotSize", "webScale", "textShadow", "shadowSpread", "shadowOffsetY" ->
+            "×" + "%.1f".format(current)
         // 液态玻璃库参数：dp/半径类按原始数值显示（标签已带单位）
         "glassCornerRadius", "glassRefractionHeight", "glassRefractionOffset", "glassBlurRadius" ->
             "${current.roundToInt()}"

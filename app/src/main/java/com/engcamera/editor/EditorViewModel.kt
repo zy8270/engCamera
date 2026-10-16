@@ -30,6 +30,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
 
     val state: StateFlow<WatermarkState> = repo.state
 
+    /** 取景器截帧背景开关（默认开）：关=编辑器预览用几何图案背景 */
+    val editorBackdrop: StateFlow<Boolean> = repo.editorBackdrop
+
     /** 自动定位文本（相机页共享同一个 LocationSource） */
     val locationText: StateFlow<String> = container.locationSource.text
 
@@ -76,6 +79,24 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     /** 模板选项：水印位置 9 宫格（写锚点；不再随重力重置） */
     fun setAnchor(ax: Float, ay: Float) = repo.update { it.copy(anchorX = ax, anchorY = ay) }
 
+    /** 编辑器相机预览（眼睛）下的水印拖动：编辑器画面即重力系，屏幕增量直接写锚点；
+     *  拖动每帧只写内存，停手 400ms 后落盘一次（与相机页同款防抖） */
+    private var anchorPersistJob: Job? = null
+
+    fun onDragWatermark(dx: Float, dy: Float) {
+        repo.update(persist = false) { st ->
+            st.copy(
+                anchorX = (st.anchorX + dx).coerceIn(0f, 1f),
+                anchorY = (st.anchorY + dy).coerceIn(0f, 1f),
+            )
+        }
+        anchorPersistJob?.cancel()
+        anchorPersistJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            repo.persistStateToDisk()
+        }
+    }
+
     /** 模板选项：开关类（记录点/天气 emoji/位置经纬度等） */
     fun setTemplateSwitch(key: String, on: Boolean) = repo.update { s ->
         val st = when (key) {
@@ -116,6 +137,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 "glassDispersion" -> s.style.copy(glassDispersion = value.coerceIn(0f, 1f))
                 "glassBlurRadius" -> s.style.copy(glassBlurRadius = value.coerceIn(0f, 50f))
                 "textShadow" -> s.style.copy(textShadow = value.coerceIn(0f, 3f))
+                // v171 阴影细分拉杆（液态玻璃）
+                "shadowSpread" -> s.style.copy(shadowSpread = value.coerceIn(0f, 3f))
+                "shadowAlpha" -> s.style.copy(shadowAlpha = value.coerceIn(0f, 1f))
+                "shadowOffsetY" -> s.style.copy(shadowOffsetY = value.coerceIn(0f, 3f))
                 else -> s.style
             }
             s.copy(style = st)
@@ -128,9 +153,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     }
 
     override fun onCleared() {
-        // 防抖窗口内退出编辑器：把未落盘的滑杆值同步写掉（与 CameraViewModel 兜底同款）
-        if (scalarPersistJob?.isActive == true) {
+        // 防抖窗口内退出编辑器：把未落盘的滑杆值/锚点同步写掉（与 CameraViewModel 兜底同款）
+        if (scalarPersistJob?.isActive == true || anchorPersistJob?.isActive == true) {
             scalarPersistJob?.cancel()
+            anchorPersistJob?.cancel()
             kotlinx.coroutines.runBlocking { repo.persistStateToDisk() }
         }
         super.onCleared()

@@ -89,7 +89,11 @@ object TemplatePresets {
             anchorY = 1f,
             options = listOf(
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
+                // 阴影四拉杆（收进"文字阴影"折叠组，用户自调后定默认，2026-10-16）
                 TemplateOptionDef("textShadow", "阴影大小", "slider", 0f, 3f),
+                TemplateOptionDef("shadowSpread", "阴影扩散", "slider", 0f, 3f),
+                TemplateOptionDef("shadowAlpha", "阴影透明度", "slider", 0f, 1f),
+                TemplateOptionDef("shadowOffsetY", "阴影垂直偏移", "slider", 0f, 3f),
                 TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
                 TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
                 TemplateOptionDef("recDot", "记录点", "switch"),
