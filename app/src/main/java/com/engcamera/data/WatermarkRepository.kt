@@ -43,6 +43,9 @@ class WatermarkRepository(private val context: Context) {
     private val deletableMigratedKey = booleanPreferencesKey("deletable_migrated_v1")
     private val createTitleFromNameKey = booleanPreferencesKey("create_title_from_name")
     private val editorBackdropKey = booleanPreferencesKey("editor_backdrop")
+    private val languageKey = stringPreferencesKey("app_language")
+    private val photoConfirmKey = booleanPreferencesKey("photo_confirm")
+    private val annotationToolKey = intPreferencesKey("annotation_tool")
     private val saveTreeUriKey = stringPreferencesKey("save_tree_uri")
     private val saveTreeNameKey = stringPreferencesKey("save_tree_name")
 
@@ -67,6 +70,18 @@ class WatermarkRepository(private val context: Context) {
     /** 取景器截帧作编辑器预览背景（默认开，用户拍板 2026-10-16） */
     private val _editorBackdrop = MutableStateFlow(true)
     val editorBackdrop: StateFlow<Boolean> = _editorBackdrop.asStateFlow()
+
+    /** 拍照后确认（v193：默认开，拍摄后先预览标注再保存，用户拍板 2026-10-16） */
+    private val _photoConfirm = MutableStateFlow(true)
+    val photoConfirm: StateFlow<Boolean> = _photoConfirm.asStateFlow()
+
+    /** 上次使用的标注工具（v195：跨照片/重启记忆，用户拍板 2026-10-16） */
+    private val _annotationTool = MutableStateFlow(0)
+    val annotationTool: StateFlow<Int> = _annotationTool.asStateFlow()
+
+    /** 界面语言（v191：跟随系统/中文/English，用户拍板全量中英） */
+    private val _languageMode = MutableStateFlow(com.engcamera.i18n.AppLanguageMode.SYSTEM)
+    val languageMode: StateFlow<com.engcamera.i18n.AppLanguageMode> = _languageMode.asStateFlow()
 
     /** 快门声音：拍照时播放系统快门音（默认关，兼容部分地区法律） */
     private val _shutterSound = MutableStateFlow(false)
@@ -124,6 +139,16 @@ class WatermarkRepository(private val context: Context) {
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
             _createTitleFromName.value = context.appDataStore.data.first()[createTitleFromNameKey] ?: true
             _editorBackdrop.value = context.appDataStore.data.first()[editorBackdropKey] ?: true
+            _photoConfirm.value = context.appDataStore.data.first()[photoConfirmKey] ?: true
+            _annotationTool.value = (context.appDataStore.data.first()[annotationToolKey] ?: 0).coerceIn(0, 3)
+            runCatching {
+                com.engcamera.i18n.AppLanguageMode.valueOf(
+                    context.appDataStore.data.first()[languageKey] ?: "SYSTEM",
+                )
+            }.getOrNull()?.let {
+                _languageMode.value = it
+                com.engcamera.i18n.I18n.mode = it
+            }
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
             _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
             _themeMode.value = context.appDataStore.data.first()[themeModeKey]
@@ -480,6 +505,31 @@ class WatermarkRepository(private val context: Context) {
         _createTitleFromName.value = value
         scope.launch {
             context.appDataStore.edit { it[createTitleFromNameKey] = value }
+        }
+    }
+
+    /** 标注工具记忆 */
+    fun setAnnotationTool(tool: Int) {
+        _annotationTool.value = tool.coerceIn(0, 3)
+        scope.launch {
+            context.appDataStore.edit { it[annotationToolKey] = tool.coerceIn(0, 3) }
+        }
+    }
+
+    /** 拍照后确认开关 */
+    fun setPhotoConfirm(value: Boolean) {
+        _photoConfirm.value = value
+        scope.launch {
+            context.appDataStore.edit { it[photoConfirmKey] = value }
+        }
+    }
+
+    /** 界面语言设置（即时生效：同步刷 I18n.mode） */
+    fun setLanguageMode(mode: com.engcamera.i18n.AppLanguageMode) {
+        _languageMode.value = mode
+        com.engcamera.i18n.I18n.mode = mode
+        scope.launch {
+            context.appDataStore.edit { it[languageKey] = mode.name }
         }
     }
 

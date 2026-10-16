@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import com.engcamera.i18n.I18n
 
 /**
  * 自由取色对话框（可视化）：色相条 + 饱和度/明度二维窗口 + 透明度拉杆 + 颜色代码输入，
@@ -139,10 +140,10 @@ fun ColorPickerDialog(
         confirmButton = {
             TextButton(onClick = {
                 onConfirm(currentColor().toArgb().toLong() and 0xFFFFFFFFL)
-            }) { Text("确定") }
+            }) { Text(I18n.t("确定")) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(I18n.t("取消")) }
         },
     )
 }

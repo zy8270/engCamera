@@ -19,6 +19,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.engcamera.i18n.I18n
 
 /**
  * MediaStore 读写：成片统一保存到 DCIM/Camera/，文件名前缀 engCamera_
@@ -72,10 +73,10 @@ object MediaSaver {
             }
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("MediaStore 插入失败")
+            ?: error(I18n.t("MediaStore 插入失败"))
         resolver.openOutputStream(uri)?.use { out ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-        } ?: error("无法写入照片")
+        } ?: error(I18n.t("无法写入照片"))
         if (Build.VERSION.SDK_INT >= 29) {
             val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
             resolver.update(uri, done, null, null)
@@ -108,10 +109,10 @@ object MediaSaver {
             }
         }
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("MediaStore 插入失败")
+            ?: error(I18n.t("MediaStore 插入失败"))
         resolver.openOutputStream(uri)?.use { out ->
             src.inputStream().use { it.copyTo(out) }
-        } ?: error("无法写入视频")
+        } ?: error(I18n.t("无法写入视频"))
         if (Build.VERSION.SDK_INT >= 29) {
             val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
             resolver.update(uri, done, null, null)
@@ -135,8 +136,8 @@ object MediaSaver {
             DocumentsContract.getTreeDocumentId(treeUri),
         )
         val doc = DocumentsContract.createDocument(resolver, treeDoc, mime, timeStampName(mime.substringAfterLast('/')))
-            ?: error("无法在所选目录创建文件")
-        resolver.openOutputStream(doc)?.use { out -> write(out) } ?: error("无法写入所选目录")
+            ?: error(I18n.t("无法在所选目录创建文件"))
+        resolver.openOutputStream(doc)?.use { out -> write(out) } ?: error(I18n.t("无法写入所选目录"))
         // 等媒体扫描完成拿到 MediaStore Uri（缩略图/相册立即可见）；3 秒超时回退 document uri
         val mediaUri = withTimeoutOrNull(3000) {
             suspendCancellableCoroutine { cont ->

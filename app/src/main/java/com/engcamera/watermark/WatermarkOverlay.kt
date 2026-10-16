@@ -84,6 +84,10 @@ fun WatermarkOverlay(
     backdropProvider: (() -> android.graphics.Bitmap?)? = null,
     glassSource: android.view.ViewGroup? = null,
     gravityRollDeg: Float = 0f,
+    // false = 不挂手势（确认标注页：水印只是冻结的展示层，手势全部让给
+    // 标注/文字工具——否则水印块 down.consume() 会吞掉其覆盖区域的
+    // 点按，文字工具点在水印上无法添加文字）
+    interactive: Boolean = true,
 ) {
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
@@ -162,11 +166,11 @@ fun WatermarkOverlay(
                     Modifier
                         .offset { IntOffset(gl.roundToInt(), gt.roundToInt()) }
                         .graphicsLayer { rotationZ = rotationDeg }
-                        .pointerInput(rotationDeg) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                down.consume()
-                                var isDrag = false
+                        .then(
+                            if (interactive) Modifier.pointerInput(rotationDeg) {                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    down.consume()
+                                    var isDrag = false
                                 while (true) {
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -188,8 +192,9 @@ fun WatermarkOverlay(
                                         }
                                     }
                                 }
-                            }
-                        }
+                                }
+                            } else Modifier,
+                        )
                         .size(52.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(Color(0x66000000)),
@@ -346,7 +351,8 @@ fun WatermarkOverlay(
                     .graphicsLayer { rotationZ = rotationDeg }
                     // 单一手势源：位移超 slop 即拖动（本地增量按旋转角转回屏幕系，跟手方向不变），
                     // 未拖动抬手视为点击进入编辑器。避免 tap/drag 双检测器在旋转层互相干扰。
-                    .pointerInput(rotationDeg) {
+                    .then(
+                        if (interactive) Modifier.pointerInput(rotationDeg) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 down.consume()
@@ -358,23 +364,24 @@ fun WatermarkOverlay(
                                         if (!isDrag) onTap()
                                         break
                                     }
-                                val deltaLocal = change.position - change.previousPosition
-                                if (!isDrag && deltaLocal.getDistance() > viewConfiguration.touchSlop) {
-                                    isDrag = true
-                                }
-                                if (isDrag) {
-                                    change.consume()
-                                    // 本地坐标 -> 屏幕坐标（与 graphicsLayer rotationZ 同一变换）
-                                    val rad = Math.toRadians(rotationDeg.toDouble())
-                                    val sx = (deltaLocal.x * cos(rad) - deltaLocal.y * sin(rad)).toFloat()
-                                    val sy = (deltaLocal.x * sin(rad) + deltaLocal.y * cos(rad)).toFloat()
-                                    if (widthPx > 0 && heightPx > 0) {
-                                        onDrag(sx / widthPx, sy / heightPx)
+                                    val deltaLocal = change.position - change.previousPosition
+                                    if (!isDrag && deltaLocal.getDistance() > viewConfiguration.touchSlop) {
+                                        isDrag = true
+                                    }
+                                    if (isDrag) {
+                                        change.consume()
+                                        // 本地坐标 -> 屏幕坐标（与 graphicsLayer rotationZ 同一变换）
+                                        val rad = Math.toRadians(rotationDeg.toDouble())
+                                        val sx = (deltaLocal.x * cos(rad) - deltaLocal.y * sin(rad)).toFloat()
+                                        val sy = (deltaLocal.x * sin(rad) + deltaLocal.y * cos(rad)).toFloat()
+                                        if (widthPx > 0 && heightPx > 0) {
+                                            onDrag(sx / widthPx, sy / heightPx)
+                                        }
                                     }
                                 }
                             }
-                        }
-                    },
+                        } else Modifier,
+                    ),
             )
             }
         }

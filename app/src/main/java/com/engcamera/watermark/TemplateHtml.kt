@@ -108,7 +108,9 @@ object TemplateHtml {
         if (extra.isEmpty()) return body.replace(EXTRA_MARKER, "")
         val rows = extra.joinToString("") { f ->
             val text = escape(fieldValue(f, dynamic, state.style.weatherEmoji, state.style.showLatLng))
-            if (f.label.isBlank()) "<div>$text</div>" else "<div>${escape(f.label)}：$text</div>"
+            // 标签随界面语言（与原生渲染同规则）
+            val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
+            if (labelTxt.isBlank()) "<div>$text</div>" else "<div>${escape(labelTxt)}：$text</div>"
         }
         return if (body.contains(EXTRA_MARKER)) body.replace(EXTRA_MARKER, rows) else body + rows
     }

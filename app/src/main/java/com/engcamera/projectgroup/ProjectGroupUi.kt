@@ -57,6 +57,7 @@ import com.engcamera.data.ProjectGroupEntry
 import com.engcamera.data.ProjectGroups
 import com.engcamera.ui.theme.ChromeScrim
 import kotlinx.coroutines.flow.StateFlow
+import com.engcamera.i18n.I18n
 
 /** 工程组操作接口：编辑器与相机页共用同一套管理能力 */
 interface ProjectGroupHandler {
@@ -128,7 +129,7 @@ fun ProjectGroupSelector(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "工程组",
+                                I18n.t("工程组"),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
@@ -148,7 +149,7 @@ fun ProjectGroupSelector(
                                     modifier = Modifier.size(16.dp),
                                 )
                                 Spacer(Modifier.width(4.dp))
-                                Text("重置")
+                                Text(I18n.t("重置"))
                             }
                             Spacer(Modifier.width(4.dp))
                         }
@@ -170,7 +171,7 @@ fun ProjectGroupSelector(
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Text(
-                                    "新建",
+                                    I18n.t("新建"),
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -238,7 +239,7 @@ fun ProjectGroupSelector(
         if (showResetConfirm) {
             AlertDialog(
                 onDismissRequest = { showResetConfirm = false },
-                title = { Text("重置勾选的工程") },
+                title = { Text(I18n.t("重置勾选的工程")) },
                 text = {
                     Text("是否重置勾选的 ${pendingDelete.size} 个工程的水印为默认值？它们的模板、样式、宽度与全部字段值将恢复默认（水印位置保留）。")
                 },
@@ -247,10 +248,10 @@ fun ProjectGroupSelector(
                         handler.resetProjects(pendingDelete)
                         pendingDelete = emptySet()
                         showResetConfirm = false
-                    }) { Text("确认重置") }
+                    }) { Text(I18n.t("确认重置")) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
+                    TextButton(onClick = { showResetConfirm = false }) { Text(I18n.t("取消")) }
                 },
             )
         }
@@ -259,12 +260,12 @@ fun ProjectGroupSelector(
             var name by remember(renameTarget) { mutableStateOf(renameTarget!!.name) }
             AlertDialog(
                 onDismissRequest = { showRename = false },
-                title = { Text("重命名工程") },
+                title = { Text(I18n.t("重命名工程")) },
                 text = {
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("工程名") },
+                        label = { Text(I18n.t("工程名")) },
                         singleLine = true,
                     )
                 },
@@ -272,10 +273,10 @@ fun ProjectGroupSelector(
                     TextButton(onClick = {
                         handler.renameProject(renameTarget!!.id, name)
                         showRename = false
-                    }) { Text("确定") }
+                    }) { Text(I18n.t("确定")) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showRename = false }) { Text("取消") }
+                    TextButton(onClick = { showRename = false }) { Text(I18n.t("取消")) }
                 },
             )
         }
@@ -285,15 +286,15 @@ fun ProjectGroupSelector(
             var name by remember { mutableStateOf(initialName) }
             AlertDialog(
                 onDismissRequest = { showCreate = false },
-                title = { Text("新建工程") },
+                title = { Text(I18n.t("新建工程")) },
                 text = {
                     Column {
-                        Text("将复制当前工程的水印内容，可在切换后修改。")
+                        Text(I18n.t("将复制当前工程的水印内容，可在切换后修改。"))
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = name,
                             onValueChange = { name = it },
-                            label = { Text("工程名") },
+                            label = { Text(I18n.t("工程名")) },
                             singleLine = true,
                         )
                     }
@@ -306,10 +307,10 @@ fun ProjectGroupSelector(
                         handler.selectProject(id) // 创建后自动切换到新工程
                         showCreate = false
                         onDismiss()
-                    }) { Text("创建") }
+                    }) { Text(I18n.t("创建")) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showCreate = false }) { Text("取消") }
+                    TextButton(onClick = { showCreate = false }) { Text(I18n.t("取消")) }
                 },
             )
         }
@@ -369,7 +370,7 @@ private fun ProjectRow(
                 color = MaterialTheme.colorScheme.primary,
             ) {
                 Text(
-                    "当前",
+                    I18n.t("当前"),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
@@ -380,7 +381,7 @@ private fun ProjectRow(
         IconButton(onClick = onRename) {
             Icon(
                 Icons.Default.Edit,
-                contentDescription = "重命名" + entry.name,
+                contentDescription = I18n.t("重命名") + entry.name,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp),
             )

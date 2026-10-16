@@ -79,12 +79,13 @@ import com.engcamera.ui.theme.ChromeScrim
 import com.engcamera.watermark.WatermarkRenderer
 import com.engcamera.watermark.WebTemplateRenderer
 import kotlin.math.roundToInt
+import com.engcamera.i18n.I18n
 
 /** 模板缩略图/编辑预览共用的示例动态值（虚构，无隐私） */
 val SAMPLE_DYNAMIC = DynamicValues(
     time = "2026-10-12 16:30:00",
-    location = "广东省广州市天河区示例路 88 号 (23.1291,113.2644)",
-    weather = "晴 26℃",
+    location = I18n.t("广东省广州市天河区示例路 88 号 (23.1291,113.2644)"),
+    weather = I18n.t("晴 26℃"),
 )
 
 /**
@@ -109,7 +110,7 @@ fun TemplateSelector(
     fun importSucceeded(name: String?) {
         android.widget.Toast.makeText(
             context,
-            if (name != null) "已导入：$name" else "导入失败：无法识别的模板文本",
+            if (name != null) I18n.t("已导入：{name}").replace("{name}", name) else I18n.t("导入失败：无法识别的模板文本"),
             android.widget.Toast.LENGTH_SHORT,
         ).show()
         if (name != null) {
@@ -124,7 +125,7 @@ fun TemplateSelector(
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
             }.getOrNull()
             val name = text?.let {
-                vm.importTemplateText(it, uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: "导入模板")
+                vm.importTemplateText(it, uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: I18n.t("导入模板"))
             }
             importSucceeded(name)
         }
@@ -167,35 +168,35 @@ fun TemplateSelector(
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "水印模板",
+                                I18n.t("水印模板"),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
-                                "点卡片应用 · 长按导入模板可删除",
+                                I18n.t("点卡片应用 · 长按导入模板可删除"),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        TextButton(onClick = { showImport = true }) { Text("导入") }
+                        TextButton(onClick = { showImport = true }) { Text(I18n.t("导入")) }
                         TextButton(onClick = {
                             val data = vm.exportTemplateText()
                             if (data == null) {
-                                android.widget.Toast.makeText(context, "当前没有可导出的模板", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, I18n.t("当前没有可导出的模板"), android.widget.Toast.LENGTH_SHORT).show()
                             } else {
                                 val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                     as android.content.ClipboardManager
-                                cm.setPrimaryClip(android.content.ClipData.newPlainText("engCamera模板", data.second))
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText(I18n.t("engCamera模板"), data.second))
                                 android.widget.Toast.makeText(
                                     context,
-                                    "已复制到剪贴板（${data.first}），发给他人粘贴导入即可",
+                                    I18n.t("已复制到剪贴板（{n} 字符），发给他人粘贴导入即可").replace("{n}", "${data.first}"),
                                     android.widget.Toast.LENGTH_SHORT,
                                 ).show()
                             }
-                        }) { Text("导出") }
+                        }) { Text(I18n.t("导出")) }
                         IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "关闭", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Icon(Icons.Default.Close, contentDescription = I18n.t("关闭"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -212,6 +213,8 @@ fun TemplateSelector(
                                 selected = tpl.id == state.templateId,
                                 onApply = {
                                     vm.applyTemplate(tpl.id)
+                                    // 选中即自动返回编辑器（用户拍板 2026-10-16）
+                                    onDismiss()
                                 },
                                 onLongPress = {
                                     if (!tpl.builtIn) deleteTarget = tpl
@@ -226,11 +229,11 @@ fun TemplateSelector(
         if (showImport) {
             AlertDialog(
                 onDismissRequest = { showImport = false },
-                title = { Text("导入模板") },
+                title = { Text(I18n.t("导入模板")) },
                 text = {
                     Column {
                         Text(
-                            "粘贴模板文本（JSON 或网页 HTML），也可从文件选择。",
+                            I18n.t("粘贴模板文本（JSON 或网页 HTML），也可从文件选择。"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -238,26 +241,26 @@ fun TemplateSelector(
                         OutlinedTextField(
                             value = importText,
                             onValueChange = { importText = it },
-                            placeholder = { Text("粘贴到这里") },
+                            placeholder = { Text(I18n.t("粘贴到这里")) },
                             minLines = 3,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         TextButton(onClick = {
                             importLauncher.launch(arrayOf("text/*", "application/*"))
-                        }) { Text("从文件选择…") }
+                        }) { Text(I18n.t("从文件选择…")) }
                     }
                 },
                 confirmButton = {
                     TextButton(
                         enabled = importText.isNotBlank(),
                         onClick = {
-                            val name = vm.importTemplateText(importText, "导入模板")
+                            val name = vm.importTemplateText(importText, I18n.t("导入模板"))
                             importSucceeded(name)
                         },
-                    ) { Text("导入") }
+                    ) { Text(I18n.t("导入")) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showImport = false }) { Text("取消") }
+                    TextButton(onClick = { showImport = false }) { Text(I18n.t("取消")) }
                 },
             )
         }
@@ -265,16 +268,16 @@ fun TemplateSelector(
         if (deleteTarget != null) {
             AlertDialog(
                 onDismissRequest = { deleteTarget = null },
-                title = { Text("删除模板") },
-                text = { Text("确定删除导入的模板《${deleteTarget?.name}》？") },
+                title = { Text(I18n.t("删除模板")) },
+                text = { Text(I18n.t("确定删除导入的模板《{name}》？").replace("{name}", deleteTarget?.name ?: "")) },
                 confirmButton = {
                     TextButton(onClick = {
                         vm.deleteUserTemplate(deleteTarget!!.id)
                         deleteTarget = null
-                    }) { Text("删除") }
+                    }) { Text(I18n.t("删除")) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+                    TextButton(onClick = { deleteTarget = null }) { Text(I18n.t("取消")) }
                 },
             )
         }
@@ -322,7 +325,7 @@ private fun TemplateCard(
                 ) {
                     Icon(
                         Icons.Default.Check,
-                        contentDescription = "当前模板",
+                        contentDescription = I18n.t("当前模板"),
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(13.dp),
                     )
@@ -331,7 +334,7 @@ private fun TemplateCard(
         }
         Spacer(Modifier.height(3.dp))
         Text(
-            template.name,
+            I18n.t(template.name),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
@@ -357,7 +360,7 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
                         id = "f_${it.type.name.lowercase()}",
                         type = it.type,
                         label = it.label,
-                        value = if (it.type == FieldType.PROJECT_NAME) "示例工程" else "",
+                        value = if (it.type == FieldType.PROJECT_NAME) I18n.t("示例工程") else "",
                         enabled = it.enabled,
                         isTitle = it.isTitle,
                         deletable = it.deletable,
@@ -485,7 +488,7 @@ private fun GroupHeader(
         Spacer(Modifier.width(6.dp))
         Icon(
             if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = if (expanded) "收起$title" else "展开$title",
+            contentDescription = if (expanded) I18n.t("收起 {t}").replace("{t}", title) else I18n.t("展开 {t}").replace("{t}", title),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp),
         )
@@ -513,7 +516,7 @@ fun TemplateOptionsCard(
     ) {
         Column {
             GroupHeader(
-                "模板选项 · ${template.name}",
+                I18n.t("模板选项") + " · " + I18n.t(template.name),
                 expanded,
                 Modifier.padding(horizontal = 12.dp),
             ) { expanded = !expanded }
@@ -540,7 +543,7 @@ fun TemplateOptionsCard(
                                 ) {
                                     // 点标签/箭头展开收起子设置（统一样式）；开关独立在右侧只管开关
                                     GroupHeader(
-                                        opt.label,
+                                        I18n.t(opt.label),
                                         recGroupOpen,
                                         Modifier.weight(1f),
                                     ) { recGroupOpen = !recGroupOpen }
@@ -560,7 +563,7 @@ fun TemplateOptionsCard(
                                         template.options.firstOrNull { it.key == "recDotColor" }
                                             ?.let { colorOpt ->
                                                 ColorOptionRow(
-                                                    label = colorOpt.label,
+                                                    label = I18n.t(colorOpt.label),
                                                     current = styleColor(colorOpt.key, style),
                                                     original = styleColor(colorOpt.key, template.style),
                                                     isBackground = false,
@@ -583,7 +586,7 @@ fun TemplateOptionsCard(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Text(
-                                            opt.label,
+                                            I18n.t(opt.label),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
@@ -594,7 +597,7 @@ fun TemplateOptionsCard(
                                     }
                                 }
                                 "color" -> ColorOptionRow(
-                                    label = opt.label,
+                                    label = I18n.t(opt.label),
                                     current = styleColor(opt.key, style),
                                     original = styleColor(opt.key, template.style),
                                     // 背景色预设点选默认 50% 半透明；文字色预设不透明（用户拍板 2026-10-12）
@@ -613,7 +616,7 @@ fun TemplateOptionsCard(
                     val bgOpts = template.options.filter { it.key.startsWith("glass") }
                     if (bgOpts.isNotEmpty()) {
                         var bgOpen by remember(template.id) { mutableStateOf(false) }
-                        GroupHeader("背景选项", bgOpen) { bgOpen = !bgOpen }
+                        GroupHeader(I18n.t("背景选项"), bgOpen) { bgOpen = !bgOpen }
                         androidx.compose.animation.AnimatedVisibility(visible = bgOpen) {
                             Column {
                                 bgOpts.forEach { bgOpt ->
@@ -628,7 +631,7 @@ fun TemplateOptionsCard(
                     if (shadowOpts.isNotEmpty()) {
                         var shadowOpen by remember(template.id) { mutableStateOf(false) }
                         Spacer(Modifier.height(6.dp))
-                        GroupHeader("文字阴影", shadowOpen) { shadowOpen = !shadowOpen }
+                        GroupHeader(I18n.t("文字阴影"), shadowOpen) { shadowOpen = !shadowOpen }
                         androidx.compose.animation.AnimatedVisibility(visible = shadowOpen) {
                             Column {
                                 shadowOpts.forEach { shOpt ->
@@ -643,7 +646,7 @@ fun TemplateOptionsCard(
         }
         pickingKey?.let { key ->
             ColorPickerDialog(
-                title = "选择${template.options.firstOrNull { it.key == key }?.label ?: "颜色"}",
+                title = I18n.t("选择{label}").replace("{label}", template.options.firstOrNull { it.key == key }?.label?.let { I18n.t(it) } ?: I18n.t("颜色")),
                 initial = styleColor(key, style),
                 onDismiss = { pickingKey = null },
                 onConfirm = { c ->
@@ -669,7 +672,7 @@ private fun PositionOptionRow(
     val ys = listOf(0f, 0.5f, 1f)
     var open by remember { mutableStateOf(false) }
     Column {
-        GroupHeader("水印位置", open) { open = !open }
+        GroupHeader(I18n.t("水印位置"), open) { open = !open }
         androidx.compose.animation.AnimatedVisibility(visible = open) {
             Column(
                 Modifier.fillMaxWidth(),
@@ -758,7 +761,7 @@ private fun SliderOptionRow(
         else -> "${(current * 100).roundToInt()}%"
     }
     Text(
-        "${opt.label} $display",
+        I18n.t(opt.label) + " " + display,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -816,7 +819,7 @@ private fun ColorOptionRow(
                     0.94f * (1f - c.alpha)
                 Icon(
                     Icons.Default.Refresh,
-                    contentDescription = "重置到模板原始颜色",
+                    contentDescription = I18n.t("重置到模板原始颜色"),
                     tint = if (effLum > 0.6f) {
                         Color.Black.copy(alpha = 0.75f)
                     } else {
@@ -870,7 +873,7 @@ private fun ColorOptionRow(
         }
         if (showPicker) {
             ColorPickerDialog(
-                title = "选择$label",
+                title = I18n.t("选择{label}").replace("{label}", label),
                 initial = current,
                 onDismiss = { showPicker = false },
                 onConfirm = { c ->
