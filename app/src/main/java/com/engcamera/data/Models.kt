@@ -101,12 +101,17 @@ fun stripLatLng(text: String): String {
 data class WatermarkState(
     val fields: List<WatermarkField> = defaultFields(),
     val style: WatermarkStyle = WatermarkStyle(),
-    /** 归一化中心点 0..1；默认底部居中（默认模板=液态玻璃） */
+    /**
+     * 归一化中心点 0..1；默认底部居中（默认模板=液态玻璃）。
+     * 参照系为重力（v0.6.4，用户拍板 2026-10-16）：「下方」=物理重力方向（桌面所在侧），
+     * 与持机方向无关——竖屏在画面下缘，横屏/倒置仍稳定在物理下方；
+     * 预览显示由浮层按量化重力角转到屏幕系，成片显示系=重力系直接落位。
+     */
     val anchorX: Float = 0.5f,
     val anchorY: Float = 1f,
     /** 重力跟随关闭时使用的固定旋转角 */
     val rotationDeg: Float = 0f,
-    /** 重力跟随开启后按重力 90° 量化旋转水印，方向切换时自动落到预览画面右下角 */
+    /** 重力跟随开启后按重力 90° 量化旋转水印文字；位置（锚点）恒为重力参照系 */
     val followGravity: Boolean = true,
     /** 当前水印模板 id（默认=液态玻璃；内置见 TemplatePresets，用户导入的存 DataStore） */
     val templateId: String = "liquid_glass",

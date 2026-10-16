@@ -56,6 +56,8 @@ data class CameraUiState(
     val bubble: String? = null,
     val capturing: Boolean = false,
     val toast: String? = null,
+    /** 拍照成功计数：预览层据此触发一次快门闪黑反馈（文件已写入临时文件时递增） */
+    val shutterTick: Int = 0,
     val lensLabels: List<String> = emptyList(),
     val lensIndex: Int = 0,
     val latestMedia: MediaSaver.MediaEntry? = null,
@@ -102,8 +104,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     /**
      * 实际生效的水印状态（预览与成片共用）：
-     * 重力跟随开启时旋转角取量化重力角；锚点即"当前预览画面内的块中心"，
-     * 拖动在任何方向下都直接生效，方向切换时由 VM 重置到预览画面右下角。
+     * 重力跟随开启时旋转角取量化重力角。锚点为重力参照系（「下方」=物理重力方向）：
+     * 预览层负责转到屏幕系显示，成片显示系=重力系直接落位——九宫格选「下方」，
+     * 竖屏横屏倒置都稳定烧在成片的物理下方（用户拍板 2026-10-16）。
      */
     val effectiveWatermark: StateFlow<WatermarkState> =
         combine(watermark, quantizedRoll) { w, roll ->
@@ -436,6 +439,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, 0,
             backdrop = upright,
+            gravityAnchor = true, // 待标注图片本身摆正显示，图片系=重力系，锚点直接落位
         )
         upright.recycle()
         MediaSaver.saveBitmap(context, out, treeUri = saveTreeUri())
@@ -470,13 +474,20 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     /** 拖动落盘防抖：拖动期间只改内存，停手 400ms 后写一次盘 */
     private var anchorPersistJob: kotlinx.coroutines.Job? = null
 
-    // ---------- 水印拖动（任何方向下均生效，锚点为当前画面内的块中心） ----------
+    // ---------- 水印拖动（任何方向下均生效；锚点为重力参照系） ----------
     fun onDragWatermark(dx: Float, dy: Float) {
+        // 浮层传来的是屏幕系归一化增量，先转到重力系再写锚点（S→G = R(−roll)）：
+        // 手指往物理下方拖，锚点就往「下方」方向走，任何持机方向都跟手
+        val rad = Math.toRadians(-quantizedRoll.value.toDouble())
+        val cos = kotlin.math.cos(rad).toFloat()
+        val sin = kotlin.math.sin(rad).toFloat()
+        val gx = dx * cos - dy * sin
+        val gy = dx * sin + dy * cos
         // 每帧只改内存（update persist=false），停手 400ms 后落盘一次——逐帧写盘是拖动卡顿根源
         container.repository.update(persist = false) { st ->
             st.copy(
-                anchorX = (st.anchorX + dx).coerceIn(0f, 1f),
-                anchorY = (st.anchorY + dy).coerceIn(0f, 1f),
+                anchorX = (st.anchorX + gx).coerceIn(0f, 1f),
+                anchorY = (st.anchorY + gy).coerceIn(0f, 1f),
             )
         }
         anchorPersistJob?.cancel()
@@ -562,7 +573,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         _ui.update { it.copy(bubble = null, toast = "已复制") }
     }
 
-    /** 持机方向 → 烧录坐标系换算角（屏幕系→成片系；与 targetRotation 互补，由四方向实测推导） */
+    /**
+     * 持机方向 → 烧录坐标系换算角（屏幕系→成片系；与 targetRotation 互补，由四方向实测推导）。
+     * 锚点改重力参照系后不再用于旋转锚点，只用于水印块旋转补偿（rotationDeg + 角 ≡ 摆正）。
+     */
     private fun frameRotationFor(deg: Int): Int = when (deg) {
         90 -> 270
         -90 -> 90
@@ -589,6 +603,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 _ui.update { it.copy(capturing = false, toast = "拍照失败") }
                 return@takePhoto
             }
+            // 文件已写入：递增闪黑计数，预览层播一次机械快门式反馈（纯 UI 动画不阻塞保存）
+            _ui.update { it.copy(shutterTick = it.shutterTick + 1) }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     burnAndSave(file, frameRotation)
@@ -645,6 +661,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, frameRotation,
             backdrop = upright,
+            // 锚点为重力参照系：成片按方向元数据显示出来即重力系，直接落位不旋转
+            // （九宫格「下方」=成片物理下方，与持机方向无关）；水印块旋转仍按 frameRotation 补偿
+            gravityAnchor = true,
         )
         // 双张保存（用户确认 2026-10-11 最终语义：水印图=最新=相册第一张，原图第二张）：
         // ① 原图先插入占主文件名（系统相册实测把 (1) 排最前，维持该行为）

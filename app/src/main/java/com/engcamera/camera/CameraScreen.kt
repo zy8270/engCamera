@@ -85,6 +85,9 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -591,7 +594,7 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "开启后水印按重力 90° 旋转（跟随照片方向），并自动重置到预览画面右下角；关闭后使用固定角度",
+                            "开启后水印文字按重力 90° 旋转（跟随照片方向）；关闭后使用固定角度。水印位置（九宫格/拖动）始终以重力为准：选「下方」无论横竖屏都贴物理下方",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -700,6 +703,32 @@ private fun SettingsDrawer(
     }
 }
 
+/** 徽标随重力旋转的布局修饰符：0/180° 原地旋转（旋转后包围盒不变，不越界）；
+ *  ±90° 按旋转后的可视尺寸参与布局——测量约束宽高互换、绘制期中心补偿旋转，
+ *  胶囊横竖排都严丝合缝落在原边距内、点击区=可视区
+ *  （v167 纯 rotate 原地旋转，横屏下竖排胶囊越出预览边界，用户反馈 2026-10-16） */
+private fun Modifier.rotateWithLayout(deg: Float): Modifier {
+    val norm = ((deg.roundToInt() % 360) + 360) % 360
+    if (norm != 90 && norm != 270) return graphicsLayer { rotationZ = deg }
+    return layout { measurable, constraints ->
+        val placeable = measurable.measure(
+            Constraints(
+                minWidth = 0,
+                minHeight = 0,
+                maxWidth = if (constraints.hasBoundedHeight) constraints.maxHeight else Constraints.Infinity,
+                maxHeight = if (constraints.hasBoundedWidth) constraints.maxWidth else Constraints.Infinity,
+            ),
+        )
+        val w = placeable.height
+        val h = placeable.width
+        layout(w, h) {
+            placeable.placeWithLayer((w - placeable.width) / 2, (h - placeable.height) / 2) {
+                rotationZ = deg
+            }
+        }
+    }
+}
+
 /** 3:4 预览区（与成片比例一致），水印浮层所见即所得；焦段/计时角标只转角度不挪位置 */
 @Composable
 private fun PreviewArea(
@@ -758,7 +787,27 @@ private fun PreviewArea(
             modifier = Modifier.fillMaxSize(),
             backdropProvider = backdropProvider,
             glassSource = previewView, // 液态玻璃：库 LiquidGlassView 直接采样相机预览
+            // 锚点为重力参照系：预览按当前持机方向转到屏幕系（横拍时「下方」落在预览物理下方侧）
+            gravityRollDeg = rot.toFloat(),
         )
+        // 快门闪黑：拍照成功（文件已写入）瞬间的机械快门式强反馈——立即压暗、短暂停留、
+        // 快速抬起；纯 UI 动画不阻塞烧录保存，连拍时新计数直接重启本轮动画
+        val shutterTick = ui.shutterTick
+        val flashAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
+        LaunchedEffect(shutterTick) {
+            if (shutterTick > 0) {
+                flashAlpha.snapTo(0.9f)
+                kotlinx.coroutines.delay(60)
+                flashAlpha.animateTo(0f, tween(180))
+            }
+        }
+        if (flashAlpha.value > 0f) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = flashAlpha.value)),
+            )
+        }
         focusPoint?.let { pos -> FocusIndicator(pos) }
         // 后置焦段（右上角）：单击轮询下一档；长按向下展开半透明面板列出全部焦段供点选
         // （不同设备焦段数不同；面板展开时点面板外关闭，用户拍板 2026-10-13）
@@ -778,7 +827,8 @@ private fun PreviewArea(
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 56.dp, end = 8.dp),
+                    // ±90° 时变焦徽标转成竖排占高约 58dp，焦段胶囊下移避让防碰撞
+                    .padding(top = if (rot == 90 || rot == -90) 86.dp else 56.dp, end = 8.dp),
             ) {
                 // 纵向半透明焦段面板（按钮正下方展开；不随重力旋转，数字横排好读）
                 AnimatedVisibility(
@@ -832,13 +882,13 @@ private fun PreviewArea(
                 )
             }
         }
-        // 录像中角标（左上角，位置固定）
+        // 录像中角标（左上角，位置固定；±90° 按旋转后尺寸布局防越界）
         if (ui.recording) {
             Row(
                 Modifier
                     .align(Alignment.TopStart)
                     .padding(12.dp)
-                    .rotate(rot.toFloat())
+                    .rotateWithLayout(rot.toFloat())
                     .clip(RoundedCornerShape(8.dp))
                     .background(ChromeBadge)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -854,11 +904,13 @@ private fun PreviewArea(
                 Text("${ui.recordingSeconds}s", color = Color.White)
             }
         }
-        // 电子变焦倍数徽标：点击在 1×/2× 间快速切换（右上角；镜头胶囊下移让位）
+        // 电子变焦倍数徽标：点击在 1×/2× 间快速切换（右上角；镜头胶囊下移让位）；
+        // 随重力旋转且按旋转后可视尺寸布局（±90° 竖排胶囊不越出预览边界，边距与竖屏一致）
         Box(
             Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 8.dp, end = 8.dp)
+                .rotateWithLayout(rot.toFloat())
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0x66000000))
                 .clickable { vm.toggleZoom() }
@@ -985,6 +1037,7 @@ private fun AnnotateArea(
                         modifier = Modifier.fillMaxSize(),
                         scaleByShortSide = true, // 烧录按图片短边缩放，横图预览须一致
                         backdropProvider = backdropProvider,
+                        // gravityRollDeg 保持默认 0：待标注图片本身摆正显示，图片系=重力系，锚点直接落位
                     )
                 }
             }

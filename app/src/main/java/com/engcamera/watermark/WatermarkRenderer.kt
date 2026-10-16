@@ -864,9 +864,27 @@ object WatermarkRenderer {
     }
 
     /**
+     * 锚点参照系换算：绕画面中心旋转 rollDeg（归一化 0..1 坐标，y-down，正角=顺时针）。
+     * 重力参照系 = 画面按重力方向摆正后的坐标系——「下方」恒为物理重力方向，
+     * 即成片按方向元数据正确显示出来时的坐标系。滚转 +90（逆时针横屏）时
+     * 重力下方落在屏幕左缘：R(+90)·(0,+0.5) = (−0.5, 0)；反变换传 −rollDeg。
+     */
+    fun rotateAnchor(ax: Float, ay: Float, rollDeg: Float): Pair<Float, Float> {
+        val norm = ((rollDeg.roundToInt() % 360) + 360) % 360
+        if (norm == 0) return ax to ay
+        val rad = Math.toRadians(norm.toDouble())
+        val cos = kotlin.math.cos(rad).toFloat()
+        val sin = kotlin.math.sin(rad).toFloat()
+        val vx = ax - 0.5f
+        val vy = ay - 0.5f
+        return (0.5f + (vx * cos - vy * sin)) to (0.5f + (vx * sin + vy * cos))
+    }
+
+    /**
      * 根据锚点（归一化中心点）计算旋转后仍完整在画面内的块左上角（未旋转坐标系）。
      * edgeToEdge：拉满宽度的渐变底栏等，不做边缘安全边距（贴边铺满）。
      * extraBottomMarginPx：液态玻璃底部安全边距——下边界额外内收（画面 px）。
+     * 锚点必须在目标画布自己的参照系里（成片=重力系；预览=先经 rotateAnchor 转屏幕系）。
      */
     fun positionBlock(
         canvasW: Int,
@@ -902,6 +920,8 @@ object WatermarkRenderer {
      *
      * @param rotationDeg 水印旋转角（预览/屏幕坐标系）
      * @param frameRotationDeg 成片相对屏幕坐标系的旋转角（EXIF 方向/视频旋转元数据）
+     * @param gravityAnchor 锚点参照系：true=state.anchorX/Y 为重力参照系（成片显示系，
+     *      「下方」=物理重力方向，直接使用不旋转）；false=屏幕参照系（按 frameRotation 旋进成片系）
      */
     fun drawOnCanvas(
         canvas: Canvas,
@@ -912,6 +932,7 @@ object WatermarkRenderer {
         rotationDeg: Float,
         frameRotationDeg: Int = 0,
         backdrop: Bitmap? = null,
+        gravityAnchor: Boolean = false,
     ) {
         val tpl = WatermarkTemplates.find(state.templateId)
         val isWeb = tpl?.backend == TemplateBackend.WEB && tpl.html != null
@@ -937,10 +958,12 @@ object WatermarkRenderer {
         val rad = Math.toRadians(e.toDouble())
         val cos = kotlin.math.cos(rad).toFloat()
         val sin = kotlin.math.sin(rad).toFloat()
+        // 锚点：重力参照系=成片显示系，直接使用；屏幕参照系按 frameRotation 旋进成片系。
+        // 水印块旋转角仍需 +e（重力跟随开启时 rotationDeg=roll，roll+e≡0，成片里文字摆正）
         val vx = renderState.anchorX - 0.5f
         val vy = renderState.anchorY - 0.5f
-        val ax = 0.5f + (vx * cos - vy * sin)
-        val ay = 0.5f + (vx * sin + vy * cos)
+        val ax = if (gravityAnchor) renderState.anchorX else 0.5f + (vx * cos - vy * sin)
+        val ay = if (gravityAnchor) renderState.anchorY else 0.5f + (vx * sin + vy * cos)
         val rot = rotationDeg + e
         // 缩放基准取短边：预览恒为竖向 3:4（宽=短边），横拍成片显示为横向（宽=长边）。
         // 若按长边缩放，横屏水印会比预览大 4/3 倍；短边在两种方向下都对应预览宽度维度。
