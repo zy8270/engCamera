@@ -495,16 +495,18 @@ object WatermarkRenderer {
 
         val bitmap = Bitmap.createBitmap(blockWidth, blockHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        // 阴影大小可调（0=无阴影）：手动双遍绘制（阴影遍 + 正文遍）——
-        // Paint.setShadowLayer 在该路径用户实测无效（2026-10-16），BlurMaskFilter 必现
-        val shadowBlur = if (style.textShadow > 0f) width * 0.014f * style.textShadow else 0f
-        val shadowDy = if (style.textShadow > 0f) width * 0.004f * style.textShadow else 0f
+        // 阴影四参数可调（0=无阴影）：强度倍数×扩散（模糊半径）×透明度×垂直偏移
+        // （v171 拆分，默认值=旧硬编码效果：blur=0.014W、dy=0.004W、alpha≈0xB4）
+        val shadowBlur = if (style.textShadow > 0f) width * 0.014f * style.textShadow * style.shadowSpread else 0f
+        val shadowDy = if (style.textShadow > 0f) width * 0.004f * style.textShadow * style.shadowOffsetY else 0f
+        val shadowColor =
+            ((style.shadowAlpha.coerceIn(0f, 1f) * 255f).roundToInt() shl 24) or 0x000000
         fun drawWithShadow(layout: StaticLayout, x: Float, y: Float) {
             if (shadowBlur > 0f) {
                 val p = layout.paint as TextPaint
                 val keepColor = p.color
                 val keepFilter = p.maskFilter
-                p.color = 0xB4000000.toInt()
+                p.color = shadowColor
                 p.maskFilter = BlurMaskFilter(shadowBlur, BlurMaskFilter.Blur.NORMAL)
                 canvas.save(); canvas.translate(x, y + shadowDy); layout.draw(canvas); canvas.restore()
                 p.color = keepColor
@@ -880,6 +882,58 @@ object WatermarkRenderer {
         return (0.5f + (vx * cos - vy * sin)) to (0.5f + (vx * sin + vy * cos))
     }
 
+    /** 液态玻璃卡在成片中的几何与参数（视频 GPU 折射路径用；与烧录同一套定位/换算） */
+    class GlassGeometry(
+        val centerX: Float, val centerY: Float,    // 卡中心（成片 px，图像系 y 向下）
+        val width: Float, val height: Float,       // 未旋转卡宽高 px
+        val rotationDeg: Float,                    // 卡旋转角（成片系，烧录同款）
+        val cornerPx: Float,
+        val refractionHeightPx: Float,
+        val refractionOffsetPx: Float,             // 负=向内（与库/CPU 版一致）
+        val dispersion: Float,
+        val tintAlpha: Float, val tintR: Float, val tintG: Float, val tintB: Float,
+        val blurPx: Float,
+    )
+
+    /**
+     * 计算液态玻璃卡在成片（显示系=重力系）中的几何。非液态模板或空块返回 null。
+     * 视频合成用它在 GPU 上做折射，几何必须与 drawOnCanvas 的文本块定位完全一致。
+     */
+    fun liquidGlassGeometry(
+        state: WatermarkState,
+        canvasW: Int,
+        canvasH: Int,
+        dynamic: DynamicValues,
+        rotationDeg: Float,
+    ): GlassGeometry? {
+        if (state.style.layout != "LIQUID_GLASS") return null
+        val basis = minOf(canvasW, canvasH)
+        val block = render(state, basis, dynamic)
+        if (block.width <= 1) return null
+        val (left, top) = positionBlock(
+            canvasW, canvasH, block.width, block.height,
+            state.anchorX, state.anchorY, rotationDeg,
+        )
+        val st = state.style
+        return GlassGeometry(
+            centerX = left + block.width / 2f,
+            centerY = top + block.height / 2f,
+            width = block.width.toFloat(),
+            height = block.height.toFloat(),
+            rotationDeg = rotationDeg,
+            cornerPx = glassDpToPx(st.glassCornerRadius, basis)
+                .coerceIn(1f, minOf(block.width, block.height) * 0.8f),
+            refractionHeightPx = glassDpToPx(st.glassRefractionHeight, basis).coerceAtLeast(1f),
+            refractionOffsetPx = -glassDpToPx(st.glassRefractionOffset, basis),
+            dispersion = st.glassDispersion.coerceIn(0f, 1f),
+            tintAlpha = st.glassTintAlpha.coerceIn(0f, 1f),
+            tintR = st.glassTintRed.coerceIn(0f, 1f),
+            tintG = st.glassTintGreen.coerceIn(0f, 1f),
+            tintB = st.glassTintBlue.coerceIn(0f, 1f),
+            blurPx = glassDpToPx(st.glassBlurRadius, basis),
+        )
+    }
+
     /**
      * 根据锚点（归一化中心点）计算旋转后仍完整在画面内的块左上角（未旋转坐标系）。
      * edgeToEdge：拉满宽度的渐变底栏等，不做边缘安全边距（贴边铺满）。
@@ -922,6 +976,8 @@ object WatermarkRenderer {
      * @param frameRotationDeg 成片相对屏幕坐标系的旋转角（EXIF 方向/视频旋转元数据）
      * @param gravityAnchor 锚点参照系：true=state.anchorX/Y 为重力参照系（成片显示系，
      *      「下方」=物理重力方向，直接使用不旋转）；false=屏幕参照系（按 frameRotation 旋进成片系）
+     * @param skipGlassCard 液态玻璃只画文本块、跳过玻璃卡（视频合成：玻璃由 GPU 折射效果
+     *      单独处理，文字层经本函数逐秒重渲实现时间流动）
      */
     fun drawOnCanvas(
         canvas: Canvas,
@@ -933,6 +989,7 @@ object WatermarkRenderer {
         frameRotationDeg: Int = 0,
         backdrop: Bitmap? = null,
         gravityAnchor: Boolean = false,
+        skipGlassCard: Boolean = false,
     ) {
         val tpl = WatermarkTemplates.find(state.templateId)
         val isWeb = tpl?.backend == TemplateBackend.WEB && tpl.html != null
@@ -995,7 +1052,8 @@ object WatermarkRenderer {
             canvasW, canvasH, drawW.roundToInt(), drawH.roundToInt(), ax, ay, rot, edgeToEdge = fullBar,
         )
         // 液态玻璃：先画玻璃卡（CPU 版 AGSL 采样成片画面，公式与库一致），再画文本块
-        if (isLiquid) {
+        // （视频 GPU 折射路径跳过玻璃卡，只出文字层）
+        if (isLiquid && !skipGlassCard) {
             val glassFrame = if (backdrop != null && !backdrop.isRecycled) {
                 FrameContext(backdrop, canvasW, canvasH, rot, left, top)
             } else {

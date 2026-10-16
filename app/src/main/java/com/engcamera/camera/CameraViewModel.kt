@@ -130,8 +130,23 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private var timerJob: Job? = null
     private var zoomCollectJob: Job? = null
 
-    /** 录像开始瞬间的水印快照 + 成片坐标系换算角（合成时使用，所见即所得） */
-    private var videoWatermarkSnapshot: Triple<WatermarkState, DynamicValues, Int>? = null
+    /**
+     * 录像开始瞬间的水印快照 + 成片坐标系换算角 + 开始时刻 + 重力时间线（合成时使用，
+     * 所见即所得）：startEpochMs 用于水印时间随录像实际时间流动（帧时间戳换算回墙钟）；
+     * rollTimeline 记录录像期间的重力方向变化（epochMs → 量化 roll），烧录时按
+     * 「当时 roll − 开录 roll」把锚点/文字角度旋回视频系——视频帧方向固定为开录时刻，
+     * 预览水印随重力动，成片同步跟随（用户拍板 2026-10-16）
+     */
+    private class VideoSnapshot(
+        val state: WatermarkState,
+        val dynamic: DynamicValues,
+        val frameRotation: Int,
+        val startEpochMs: Long,
+        val rollTimeline: List<Pair<Long, Int>>,
+    )
+
+    private var videoWatermarkSnapshot: VideoSnapshot? = null
+    private var rollTimelineJob: Job? = null
 
     init {
         // 动态时间/位置每秒刷新（位置用于【位置】标签值为空时的拍照瞬间自动填充）
@@ -305,6 +320,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     val createTitleFromName: StateFlow<Boolean> = container.repository.createTitleFromName
 
     fun setCreateTitleFromName(value: Boolean) = container.repository.setCreateTitleFromName(value)
+
+    /** 取景器截帧作编辑器预览背景（默认开） */
+    val editorBackdrop: StateFlow<Boolean> = container.repository.editorBackdrop
+
+    fun setEditorBackdrop(value: Boolean) = container.repository.setEditorBackdrop(value)
 
     private var shutterPlayer: MediaActionSound? = null
 
@@ -710,11 +730,22 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
         val file = File(context.cacheDir, "video_${System.currentTimeMillis()}.mp4")
         pendingVideoFile = file
-        videoWatermarkSnapshot = Triple(
+        val startAt = System.currentTimeMillis()
+        val timeline = mutableListOf(startAt to quantizedRoll.value)
+        videoWatermarkSnapshot = VideoSnapshot(
             effectiveWatermark.value,
             dynamic.value,
             frameRotationFor(quantizedRoll.value),
+            startAt,
+            timeline,
         )
+        // 录像期间记录重力方向变化（量化跳变才追加），供烧录时与预览同步
+        rollTimelineJob?.cancel()
+        rollTimelineJob = viewModelScope.launch {
+            quantizedRoll.collect { roll ->
+                if (roll != timeline.last().second) timeline.add(System.currentTimeMillis() to roll)
+            }
+        }
         _ui.update { it.copy(capturing = true) }
         val rec = e.startRecording(file, withAudio) { event ->
             when (event) {
@@ -725,6 +756,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
                 is VideoRecordEvent.Finalize -> {
                     stopTimer()
+                    rollTimelineJob?.cancel()
                     _ui.update { it.copy(recording = false, capturing = false) }
                     val f = pendingVideoFile
                     pendingVideoFile = null
@@ -760,14 +792,17 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private suspend fun saveVideoWithWatermark(source: File) {
         val snapshot = videoWatermarkSnapshot
         videoWatermarkSnapshot = null
-        val hasWatermark = snapshot?.first?.fields?.any { it.enabled } == true
+        val hasWatermark = snapshot?.state?.fields?.any { it.enabled } == true
         var saved: android.net.Uri? = null
         var watermarked = false
 
         if (hasWatermark && snapshot != null) {
             _ui.update { it.copy(toast = "正在为视频合成水印…") }
             val burned = runCatching {
-                VideoWatermarker.burn(context, source, snapshot.first, snapshot.second, snapshot.third)
+                VideoWatermarker.burn(
+                    context, source, snapshot.state, snapshot.dynamic,
+                    snapshot.frameRotation, snapshot.startEpochMs, snapshot.rollTimeline,
+                )
             }.onFailure { t -> Log.w("CameraVM", "watermark burn failed", t) }
                 .getOrNull()
             if (burned != null) {

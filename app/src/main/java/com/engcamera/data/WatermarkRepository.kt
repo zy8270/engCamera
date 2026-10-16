@@ -42,6 +42,7 @@ class WatermarkRepository(private val context: Context) {
     private val templatesKey = stringPreferencesKey("templates_v1") // 用户导入的水印模板
     private val deletableMigratedKey = booleanPreferencesKey("deletable_migrated_v1")
     private val createTitleFromNameKey = booleanPreferencesKey("create_title_from_name")
+    private val editorBackdropKey = booleanPreferencesKey("editor_backdrop")
     private val saveTreeUriKey = stringPreferencesKey("save_tree_uri")
     private val saveTreeNameKey = stringPreferencesKey("save_tree_name")
 
@@ -62,6 +63,10 @@ class WatermarkRepository(private val context: Context) {
     /** 新建工程标题联动：新建工程组输入的工程名自动写入该工程水印标题（默认开） */
     private val _createTitleFromName = MutableStateFlow(true)
     val createTitleFromName: StateFlow<Boolean> = _createTitleFromName.asStateFlow()
+
+    /** 取景器截帧作编辑器预览背景（默认开，用户拍板 2026-10-16） */
+    private val _editorBackdrop = MutableStateFlow(true)
+    val editorBackdrop: StateFlow<Boolean> = _editorBackdrop.asStateFlow()
 
     /** 快门声音：拍照时播放系统快门音（默认关，兼容部分地区法律） */
     private val _shutterSound = MutableStateFlow(false)
@@ -98,8 +103,10 @@ class WatermarkRepository(private val context: Context) {
                                 migrateWidth(
                                     migrateWebScale(
                                         migrateWebOpacity(
-                                            migrateLiquidGlass(
-                                                migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                                            migrateShadowAlpha(
+                                                migrateLiquidGlass(
+                                                    migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                                                ),
                                             ),
                                         ),
                                     ),
@@ -116,6 +123,7 @@ class WatermarkRepository(private val context: Context) {
             _galleryColumns.value = cols.coerceIn(3, 5)
             _saveOriginal.value = context.appDataStore.data.first()[saveOriginalKey] ?: false
             _createTitleFromName.value = context.appDataStore.data.first()[createTitleFromNameKey] ?: true
+            _editorBackdrop.value = context.appDataStore.data.first()[editorBackdropKey] ?: true
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
             _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
             _themeMode.value = context.appDataStore.data.first()[themeModeKey]
@@ -156,7 +164,9 @@ class WatermarkRepository(private val context: Context) {
                                 state = migrateFieldOrder(
                                     migrateWebScale(
                                         migrateWebOpacity(
-                                            migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                            migrateShadowAlpha(
+                                                migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                            ),
                                         ),
                                     ),
                                 ),
@@ -269,6 +279,14 @@ class WatermarkRepository(private val context: Context) {
 
     /** 存量数据迁移：网页模板整体缩放默认 0.8 → 1.5（用户拍板 2026-10-14，默认太小）。
      *  仅恰好等于旧默认值时替换，用户手动调过的不动；替换后特征消失，幂等。 */
+    /** 存量迁移：阴影透明度默认改 100%（用户拍板 2026-10-16）——恰好=旧默认 0.71 才替换，幂等 */
+    private fun migrateShadowAlpha(s: WatermarkState): WatermarkState =
+        if (s.style.shadowAlpha == 0.71f) {
+            s.copy(style = s.style.copy(shadowAlpha = 1f))
+        } else {
+            s
+        }
+
     private fun migrateWebScale(s: WatermarkState): WatermarkState =
         if (s.style.webScale == 0.8f) {
             s.copy(style = s.style.copy(webScale = 1.5f))
@@ -462,6 +480,14 @@ class WatermarkRepository(private val context: Context) {
         _createTitleFromName.value = value
         scope.launch {
             context.appDataStore.edit { it[createTitleFromNameKey] = value }
+        }
+    }
+
+    /** 取景器截帧背景开关 */
+    fun setEditorBackdrop(value: Boolean) {
+        _editorBackdrop.value = value
+        scope.launch {
+            context.appDataStore.edit { it[editorBackdropKey] = value }
         }
     }
 
