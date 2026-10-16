@@ -45,6 +45,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import com.engcamera.i18n.I18n
 
 data class CameraUiState(
     /** 0 关 / 1 开 / 2 自动 */
@@ -81,9 +82,49 @@ data class CameraUiState(
     val annotateIndex: Int = 0,
     /** 正在烧录保存当前图片（防重复点击快门） */
     val annotateWorking: Boolean = false,
+    // ---------- 拍照后确认（v193，用户拍板 2026-10-16） ----------
+    /** 确认预览态：照片拍完先进预览框（绿描边+标注工具），手动点保存才落盘 */
+    val confirming: Boolean = false,
+    val confirmBitmap: Bitmap? = null,
+    val annotations: List<PhotoAnnotation> = emptyList(),
+    /** 0=箭头 1=矩形 2=笔刷 3=文字 */
+    val annotationTool: Int = 0,
+    val annotationColor: Long = 0xFFFF5252L, // 默认红
+    /** 文字标注元素（归一化中心坐标 + 缩放/旋转，v195） */
+    val textItems: List<TextItem> = emptyList(),
+    /** 当前选中的文字元素（点按/拖动即选中；改颜色立即作用其上，v200） */
+    val selectedTextId: Long? = null,
+    /** 确认态冻结的水印状态与时间（按下快门定格，预览与保存共用；水印位置不再变） */
+    val confirmWatermark: WatermarkState? = null,
+    val confirmDynamic: DynamicValues? = null,
+    /** 快门时刻的重力角（确认态水印锚点锁定用，转动手机不再变） */
+    val confirmRoll: Int = 0,
+    /** 快门时刻的屏幕系→成片系换算角（确认态水印块旋转补偿=与烧录同构，v210） */
+    val confirmFrameRotation: Int = 0,
 ) {
     /** 添加水印模式的一个待处理图片 */
     data class AnnotateItem(val uri: android.net.Uri, val aspect: Float)
+
+    /** 文字标注元素 */
+    data class TextItem(
+        val id: Long,
+        val text: String,
+        val x: Float, // 归一化（照片显示区）
+        val y: Float,
+        val scale: Float = 1f,
+        val rotation: Float = 0f,
+        val color: Long,
+    )
+
+    /** 一笔标注：点位归一化（0..1，相对照片显示区），保存时按全分辨率缩放绘制；
+     * strokeScale=落笔时的预览缩放倍数——放大时画的笔画更细（精细标注），
+     * 显示与烧录都按它除宽，笔画粗细定格在落笔瞬间（v204） */
+    data class PhotoAnnotation(
+        val tool: Int,
+        val color: Long,
+        val points: List<androidx.compose.ui.geometry.Offset>,
+        val strokeScale: Float = 1f,
+    )
 }
 
 class CameraViewModel(app: Application) : AndroidViewModel(app),
@@ -126,6 +167,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     fun barcodeAnalyzer(): BarcodeAnalyzer = analyzer
 
     private var activeRecording: Recording? = null
+
+    /** 确认态持有的临时照片文件与其成片换算角（保存/丢弃时消费） */
+    private var confirmTempFile: File? = null
+    private var confirmFrameRotation: Int = 0
+    private var textIdGen = 0L
     private var pendingVideoFile: File? = null
     private var timerJob: Job? = null
     private var zoomCollectJob: Job? = null
@@ -324,6 +370,17 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     /** 取景器截帧作编辑器预览背景（默认开） */
     val editorBackdrop: StateFlow<Boolean> = container.repository.editorBackdrop
 
+    /** 拍照后确认（默认开）：拍摄后先预览标注，手动保存 */
+    val photoConfirm: StateFlow<Boolean> = container.repository.photoConfirm
+
+    fun setPhotoConfirm(value: Boolean) = container.repository.setPhotoConfirm(value)
+
+    /** 界面语言 */
+    val languageMode: StateFlow<com.engcamera.i18n.AppLanguageMode> = container.repository.languageMode
+
+    fun setLanguageMode(mode: com.engcamera.i18n.AppLanguageMode) =
+        container.repository.setLanguageMode(mode)
+
     fun setEditorBackdrop(value: Boolean) = container.repository.setEditorBackdrop(value)
 
     private var shutterPlayer: MediaActionSound? = null
@@ -379,7 +436,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 annotateAspect(u)?.let { CameraUiState.AnnotateItem(u, it) }
             }
             if (items.isEmpty()) {
-                _ui.update { it.copy(toast = "图片读取失败") }
+                _ui.update { it.copy(toast = I18n.t("图片读取失败")) }
                 return@launch
             }
             _ui.update { it.copy(annotateQueue = items, annotateIndex = 0) }
@@ -402,7 +459,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                             annotateQueue = emptyList(),
                             annotateIndex = 0,
                             annotateWorking = false,
-                            toast = "已保存 ${nextIdx} 张",
+                            toast = I18n.t("已保存 {n} 张").replace("{n}", "$nextIdx"),
                         )
                     } else {
                         s.copy(annotateIndex = nextIdx, annotateWorking = false)
@@ -411,7 +468,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 _mediaVersion.value += 1
             } catch (t: Throwable) {
                 t.printStackTrace()
-                _ui.update { it.copy(annotateWorking = false, toast = "保存失败：${t.message ?: "未知错误"}") }
+                _ui.update { it.copy(annotateWorking = false, toast = I18n.t("保存失败：{msg}").replace("{msg}", t.message ?: I18n.t("未知错误"))) }
             }
         }
     }
@@ -442,7 +499,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val src = context.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, opts)
-        } ?: error("图片解码失败")
+        } ?: error(I18n.t("图片解码失败"))
         val upright = if (deg != 0) {
             val m = Matrix().apply { postRotate(deg.toFloat()) }
             Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).also {
@@ -590,7 +647,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val text = _ui.value.bubble ?: return
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("qrcode", text))
-        _ui.update { it.copy(bubble = null, toast = "已复制") }
+        _ui.update { it.copy(bubble = null, toast = I18n.t("已复制")) }
     }
 
     /**
@@ -610,7 +667,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         if (st.capturing || st.recording) return
         val e = engine
         if (e == null || st.videoMode) {
-            _ui.update { it.copy(toast = if (st.videoMode) "录像模式下请录像或切回拍照" else "相机未就绪") }
+            _ui.update { it.copy(toast = if (st.videoMode) I18n.t("录像模式下请录像或切回拍照") else I18n.t("相机未就绪")) }
             return
         }
         _ui.update { it.copy(capturing = true) }
@@ -620,7 +677,39 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         e.takePhoto(file) { ok ->
             if (!ok) {
                 file.delete()
-                _ui.update { it.copy(capturing = false, toast = "拍照失败") }
+                _ui.update { it.copy(capturing = false, toast = I18n.t("拍照失败")) }
+                return@takePhoto
+            }
+            if (container.repository.photoConfirm.value) {
+                // 拍照后确认（用户拍板 2026-10-16）：不闪黑、不落盘——解码转正进预览框，
+                // 手动点保存（快门变下载图标）才写相册；X 丢弃
+                viewModelScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        val upright = decodeUpright(file)
+                        confirmTempFile = file
+                        confirmFrameRotation = frameRotation
+                        // 按下快门定格：水印状态/时间/位置冻结（用户拍板 2026-10-16），
+                        // 工具跨照片记忆不重置
+                        _ui.update {
+                            it.copy(
+                                confirming = true,
+                                confirmBitmap = upright,
+                                annotations = emptyList(),
+                                textItems = emptyList(),
+                                annotationColor = 0xFFFF5252L,
+                                confirmWatermark = effectiveWatermark.value,
+                                confirmDynamic = dynamic.value,
+                                confirmRoll = quantizedRoll.value,
+                                confirmFrameRotation = frameRotation,
+                                capturing = false,
+                            )
+                        }
+                    }.onFailure { t ->
+                        t.printStackTrace()
+                        file.delete()
+                        _ui.update { it.copy(capturing = false, toast = I18n.t("照片解码失败")) }
+                    }
+                }
                 return@takePhoto
             }
             // 文件已写入：递增闪黑计数，预览层播一次机械快门式反馈（纯 UI 动画不阻塞保存）
@@ -634,17 +723,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 } catch (t: Throwable) {
                     t.printStackTrace()
                     file.delete()
-                    _ui.update { it.copy(capturing = false, toast = "保存失败：${t.message}") }
+                    _ui.update { it.copy(capturing = false, toast = I18n.t("保存失败：{msg}").replace("{msg}", t.message ?: "")) }
                 }
             }
         }
     }
 
-    /**
-     * 拍照合成流程（计划书 5.1）：采样解码 -> EXIF 转正 -> 烧录水印 -> 存 MediaStore -> 删临时。
-     * frameRotation 为屏幕系→成片系的换算角（只由持机方向决定，不能用 EXIF——EXIF 含传感器基准角）。
-     */
-    private suspend fun burnAndSave(tempFile: File, frameRotation: Int) {
+    /** 解码临时照片并按 EXIF 转正（上限采样防 OOM），burnAndSave 与确认态共用 */
+    private fun decodeUpright(tempFile: File): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(tempFile.absolutePath, bounds)
         var sample = 1
@@ -653,9 +739,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val src = BitmapFactory.decodeFile(tempFile.absolutePath, opts)
-            ?: error("照片解码失败")
+            ?: error(I18n.t("照片解码失败"))
         val deg = MediaSaver.exifDegrees(tempFile.absolutePath)
-        val upright = if (deg != 0) {
+        return if (deg != 0) {
             val m = Matrix().apply { postRotate(deg.toFloat()) }
             Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).also {
                 if (it != src) src.recycle()
@@ -663,6 +749,261 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         } else {
             src
         }
+    }
+
+    // ---------- 拍照后确认：标注与保存 ----------
+
+    /** 添加一笔标注（点位为照片显示区归一化坐标，UI 层手势结束时调用） */
+    fun addAnnotation(
+        tool: Int,
+        color: Long,
+        points: List<androidx.compose.ui.geometry.Offset>,
+        strokeScale: Float = 1f,
+    ) {
+        if (points.isEmpty()) return
+        _ui.update {
+            it.copy(annotations = it.annotations + CameraUiState.PhotoAnnotation(tool, color, points, strokeScale))
+        }
+    }
+
+    // ---------- 文字标注（v195） ----------
+    private fun nextTextId() = System.currentTimeMillis().also { textIdGen = it }
+
+    fun addTextItem(text: String, x: Float, y: Float, color: Long) {
+        if (text.isBlank()) return
+        val id = textIdGen++
+        _ui.update {
+            it.copy(
+                textItems = it.textItems + CameraUiState.TextItem(id, text, x, y, 1f, 0f, color),
+                selectedTextId = id, // 新增即选中：随后改色立即生效（用户拍板 2026-10-16）
+            )
+        }
+    }
+
+    /** 选中文字元素（点按/拖动触发）：同步把当前颜色设为该元素颜色（取色圆点跟随） */
+    fun selectTextItem(id: Long) = _ui.update { st ->
+        val item = st.textItems.firstOrNull { it.id == id } ?: return@update st
+        st.copy(selectedTextId = id, annotationColor = item.color)
+    }
+
+    fun updateTextItem(item: CameraUiState.TextItem) = _ui.update {
+        it.copy(textItems = it.textItems.map { t -> if (t.id == item.id) item else t })
+    }
+
+    fun removeTextItem(id: Long) = _ui.update {
+        it.copy(textItems = it.textItems.filterNot { t -> t.id == id })
+    }
+
+    /** 撤销最近一笔标注（逐笔，用户拍板 2026-10-16） */
+    fun annotationUndo() = _ui.update { if (it.annotations.isEmpty()) it else it.copy(annotations = it.annotations.dropLast(1)) }
+
+    fun setAnnotationTool(tool: Int) {
+        _ui.update { it.copy(annotationTool = tool) }
+        container.repository.setAnnotationTool(tool)
+    }
+
+    fun setAnnotationColor(color: Long) = _ui.update {
+        // 有选中的文字元素：立即改它的颜色；同时更新默认色（新文字用）
+        val sel = it.selectedTextId
+        it.copy(
+            annotationColor = color,
+            textItems = if (sel != null) {
+                it.textItems.map { t -> if (t.id == sel) t.copy(color = color) else t }
+            } else {
+                it.textItems
+            },
+        )
+    }
+
+    /** 丢弃确认态照片：删临时文件回拍摄模式（不计数） */
+    fun confirmDiscard() {
+        val bmp = _ui.value.confirmBitmap
+        _ui.update {
+            it.copy(confirming = false, confirmBitmap = null, annotations = emptyList(), textItems = emptyList())
+        }
+        bmp?.recycle()
+        confirmTempFile?.delete()
+        confirmTempFile = null
+    }
+
+    /** 确认保存：标注画上照片 → 标注+水印一张、水印一张、（可选）原图一张（用户拍板语义） */
+    fun confirmSave() {
+        val st = _ui.value
+        if (!st.confirming || st.capturing) return
+        val photo = st.confirmBitmap ?: return
+        val file = confirmTempFile ?: return
+        val frameRotation = confirmFrameRotation
+        confirmTempFile = null
+        _ui.update {
+            it.copy(
+                confirming = false, confirmBitmap = null, annotations = emptyList(),
+                textItems = emptyList(), confirmWatermark = null, confirmDynamic = null,
+                capturing = true,
+            )
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var annotated: Bitmap = photo
+            try {
+                annotated = drawAnnotations(photo, st.annotations, st.textItems)
+                saveConfirmed(
+                    file, photo, annotated, frameRotation,
+                    st.confirmWatermark ?: effectiveWatermark.value,
+                    st.confirmDynamic ?: dynamic.value,
+                    st.annotations, st.textItems,
+                )
+                incrementCount()
+                _ui.update { it.copy(capturing = false) }
+                _mediaVersion.value += 1
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                file.delete()
+                _ui.update { it.copy(capturing = false, toast = I18n.t("保存失败：{msg}").replace("{msg}", t.message ?: "")) }
+            } finally {
+                if (annotated !== photo) annotated.recycle()
+                photo.recycle()
+            }
+        }
+    }
+
+    /** 把标注（笔画+文字元素）按全分辨率绘制到照片副本上（无标注返回原件不拷贝） */
+    private fun drawAnnotations(
+        photo: Bitmap,
+        annotations: List<CameraUiState.PhotoAnnotation>,
+        textItems: List<CameraUiState.TextItem> = emptyList(),
+    ): Bitmap {
+        if (annotations.isEmpty() && textItems.isEmpty()) return photo
+        val out = photo.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(out)
+        val w = out.width.toFloat()
+        val h = out.height.toFloat()
+        val strokeW = w * 0.008f
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = strokeW
+            strokeCap = android.graphics.Paint.Cap.ROUND
+        }
+        annotations.forEach { ann ->
+            // 每笔自己的线宽：放大时画的更细（strokeScale=落笔时缩放），箭头头随线宽
+            val sw = strokeW / ann.strokeScale.coerceAtLeast(1f)
+            paint.strokeWidth = sw
+            paint.color = ann.color.toInt()
+            val pts = ann.points.map { androidx.compose.ui.geometry.Offset(it.x * w, it.y * h) }
+            when (ann.tool) {
+                0 -> { // 箭头：起点→终点直线 + 终点箭头两翼
+                    if (pts.size < 2) return@forEach
+                    val a = pts.first()
+                    val b = pts.last()
+                    canvas.drawLine(a.x, a.y, b.x, b.y, paint)
+                    val angle = kotlin.math.atan2((b.y - a.y).toDouble(), (b.x - a.x).toDouble())
+                    val head = sw * 4f
+                    for (da in listOf(Math.PI / 6, -Math.PI / 6)) {
+                        val ax = (b.x - head * kotlin.math.cos(angle + da)).toFloat()
+                        val ay = (b.y - head * kotlin.math.sin(angle + da)).toFloat()
+                        canvas.drawLine(b.x, b.y, ax, ay, paint)
+                    }
+                }
+                1 -> { // 矩形框
+                    if (pts.size < 2) return@forEach
+                    val a = pts.first()
+                    val b = pts.last()
+                    canvas.drawRect(
+                        minOf(a.x, b.x), minOf(a.y, b.y),
+                        maxOf(a.x, b.x), maxOf(a.y, b.y),
+                        paint,
+                    )
+                }
+                else -> { // 笔刷：路径连线
+                    if (pts.size < 2) return@forEach
+                    val path = android.graphics.Path()
+                    path.moveTo(pts.first().x, pts.first().y)
+                    pts.drop(1).forEach { path.lineTo(it.x, it.y) }
+                    canvas.drawPath(path, paint)
+                }
+            }
+        }
+        // 文字元素：颜色文字（白细框仅 UI 展示不烧录），锚点=左上角、绕锚点旋转缩放
+        // ——与预览的 transformOrigin(0,0) 完全同构（v200 修位置偏移）；多行逐行绘制
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        textItems.forEach { t ->
+            val px = t.x * w
+            val py = t.y * h
+            val textSize = w * 0.05f * t.scale
+            textPaint.textSize = textSize
+            textPaint.color = t.color.toInt()
+            textPaint.isFakeBoldText = true
+            // 文字阴影（与预览一致，v199）
+            textPaint.setShadowLayer(w * 0.012f, w * 0.004f, w * 0.004f, 0x66000000)
+            canvas.save()
+            canvas.rotate(t.rotation, px, py)
+            val fm = textPaint.fontMetrics
+            val lineH = textSize * 1.25f
+            t.text.split('\n').forEachIndexed { i, line ->
+                val baseline = py + i * lineH - fm.ascent
+                canvas.drawText(line, px, baseline, textPaint)
+            }
+            canvas.restore()
+        }
+        return out
+    }
+
+    /**
+     * 确认保存落盘（用户拍板语义）：标注+水印一张、水印一张；「保存原图」开着再加原图
+     * 共 2~3 张。时间序：原图 ≤ 水印 ≤ 标注+水印（标注版最新=相册最前）。
+     */
+    private suspend fun saveConfirmed(
+        tempFile: File,
+        photo: Bitmap,
+        annotated: Bitmap,
+        frameRotation: Int,
+        wmState: WatermarkState,
+        dyn: DynamicValues,
+        anns: List<CameraUiState.PhotoAnnotation>,
+        texts: List<CameraUiState.TextItem>,
+    ) {
+        val noWatermark = wmState.fields.none { it.enabled }
+        val takenAt = System.currentTimeMillis()
+        fun burn(src: Bitmap): Bitmap {
+            val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(out)
+            canvas.drawBitmap(src, 0f, 0f, null)
+            WatermarkRenderer.drawOnCanvas(
+                canvas, src.width, src.height,
+                wmState, dyn, wmState.rotationDeg, frameRotation,
+                backdrop = src,
+                gravityAnchor = true,
+            )
+            return out
+        }
+        val saveOriginal = container.repository.saveOriginal.value
+        if (saveOriginal) {
+            runCatching { MediaSaver.saveBitmap(context, photo, takenAt, treeUri = saveTreeUri()) }
+        }
+        if (noWatermark) {
+            // 水印全关：成片=画面本身；存标注版一张（+可选原图）
+            MediaSaver.saveBitmap(context, annotated, takenAt + 1000, treeUri = saveTreeUri())
+            tempFile.delete()
+            return
+        }
+        val wmOnPhoto = burn(photo)
+        MediaSaver.saveBitmap(context, wmOnPhoto, takenAt + 1000, treeUri = saveTreeUri())
+        wmOnPhoto.recycle()
+        // 标注+水印版：先烧水印，再在**水印之上**画标注（与确认预览层级一致，用户拍板 2026-10-16）
+        if (anns.isNotEmpty() || texts.isNotEmpty()) {
+            val wmBase = burn(photo)
+            val overlay = drawAnnotations(wmBase, anns, texts)
+            MediaSaver.saveBitmap(context, overlay, takenAt + 2000, treeUri = saveTreeUri())
+            overlay.recycle()
+            if (wmBase !== overlay) wmBase.recycle()
+        }
+        tempFile.delete()
+    }
+
+    /**
+     * 拍照合成流程（计划书 5.1）：采样解码 -> EXIF 转正 -> 烧录水印 -> 存 MediaStore -> 删临时。
+     * frameRotation 为屏幕系→成片系的换算角（只由持机方向决定，不能用 EXIF——EXIF 含传感器基准角）。
+     */
+    private suspend fun burnAndSave(tempFile: File, frameRotation: Int) {
+        val upright = decodeUpright(tempFile)
         // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）
         val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
         if (noWatermark) {
@@ -720,7 +1061,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         if (st.recording || st.capturing) return
         val e = engine
         if (e == null) {
-            _ui.update { it.copy(toast = "相机未就绪") }
+            _ui.update { it.copy(toast = I18n.t("相机未就绪")) }
             return
         }
         if (quick && !st.videoMode) {
@@ -764,7 +1105,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                     viewModelScope.launch(Dispatchers.IO) {
                         if (event.hasError()) {
                             f?.delete()
-                            _ui.update { it.copy(toast = "录像失败（错误码 ${event.error}）") }
+                            _ui.update { it.copy(toast = I18n.t("录像失败（错误码 {code}）").replace("{code}", "${event.error}")) }
                         } else if (f != null) {
                             saveVideoWithWatermark(f)
                         }
@@ -776,7 +1117,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
         if (rec == null) {
             pendingVideoFile = null
-            _ui.update { it.copy(capturing = false, toast = "录像启动失败") }
+            _ui.update { it.copy(capturing = false, toast = I18n.t("录像启动失败")) }
         } else {
             activeRecording = rec
         }
@@ -797,7 +1138,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         var watermarked = false
 
         if (hasWatermark && snapshot != null) {
-            _ui.update { it.copy(toast = "正在为视频合成水印…") }
+            _ui.update { it.copy(toast = I18n.t("正在为视频合成水印…")) }
             val burned = runCatching {
                 VideoWatermarker.burn(
                     context, source, snapshot.state, snapshot.dynamic,
@@ -817,11 +1158,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt + 1000, treeUri = saveTreeUri()) }.getOrNull()
                 watermarked = saved != null
                 if (saved == null && originalSaved) {
-                    _ui.update { it.copy(toast = "水印视频保存失败，已保留原片") }
+                    _ui.update { it.copy(toast = I18n.t("水印视频保存失败，已保留原片")) }
                 }
             }
             if (saved == null) {
-                _ui.update { it.copy(toast = "水印合成失败，已保存无水印视频") }
+                _ui.update { it.copy(toast = I18n.t("水印合成失败，已保存无水印视频")) }
             }
         }
         if (saved == null) {
@@ -831,10 +1172,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         if (saved != null) {
             _mediaVersion.value += 1
             if (watermarked) {
-                _ui.update { it.copy(toast = "水印视频已保存") }
+                _ui.update { it.copy(toast = I18n.t("水印视频已保存")) }
             }
         } else {
-            _ui.update { it.copy(toast = "保存失败") }
+            _ui.update { it.copy(toast = I18n.t("保存失败")) }
         }
     }
 

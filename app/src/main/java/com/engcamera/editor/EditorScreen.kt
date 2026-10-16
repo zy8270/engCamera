@@ -92,6 +92,7 @@ import com.engcamera.data.WatermarkField
 import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkRenderer
 import kotlin.math.roundToInt
+import com.engcamera.i18n.I18n
 
 /** 水印编辑器（计划书 3.4）：字段增删、启用禁用、拖动排序、重力开关，修改即时保存。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -256,7 +257,7 @@ fun EditorScreen(onBack: () -> Unit) {
                 ) {
                     ProjectGroupIcon()
                     Spacer(Modifier.width(8.dp))
-                    Text("工程组", color = MaterialTheme.colorScheme.onPrimary)
+                    Text(I18n.t("工程组"), color = MaterialTheme.colorScheme.onPrimary)
                 }
             }
         },
@@ -265,7 +266,7 @@ fun EditorScreen(onBack: () -> Unit) {
                 title = {
                     val current = groups.projects.firstOrNull { it.id == groups.current }?.name
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("水印编辑器")
+                        Text(I18n.t("水印编辑器"))
                         if (current != null) {
                             Spacer(Modifier.width(8.dp))
                             Text(
@@ -278,14 +279,14 @@ fun EditorScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = I18n.t("返回"))
                     }
                 },
                 actions = {
                     IconButton(onClick = { showResetConfirm = true }) {
-                        Icon(Icons.Default.RestartAlt, contentDescription = "重置当前模板数据")
+                        Icon(Icons.Default.RestartAlt, contentDescription = I18n.t("重置当前模板数据"))
                     }
-                    TextButton(onClick = onBack) { Text("保存") }
+                    TextButton(onClick = onBack) { Text(I18n.t("保存")) }
                 },
             )
         },
@@ -371,6 +372,25 @@ fun EditorScreen(onBack: () -> Unit) {
                             },
                         )
                     } // else（静态预览）结束
+                    // 魔棒：预览窗左下角=打开模板选择器（用户拍板 2026-10-16：要让用户
+                    // 看到魔棒图标才知道它是切模板的入口；右下角是眼睛=相机预览开关）
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(6.dp)
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(com.engcamera.ui.theme.ChromeNeutral)
+                            .clickable { showTemplates = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.AutoFixHigh,
+                            contentDescription = I18n.t("水印模板"),
+                            tint = com.engcamera.ui.theme.ChromeIcon,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                     // 眼睛开关：主相机释放完才显示（CameraGate）；闭眼=静态预览；
                     // 睁眼=相机实时背景（水印居中纯展示，效果所见即所得）
                     if (cameraReady) {
@@ -386,7 +406,7 @@ fun EditorScreen(onBack: () -> Unit) {
                                         eyeOpen = !eyeOpen
                                     } else {
                                         android.widget.Toast.makeText(
-                                            context, "无相机权限，请先到相机页授权", android.widget.Toast.LENGTH_SHORT,
+                                            context, I18n.t("无相机权限，请先到相机页授权"), android.widget.Toast.LENGTH_SHORT,
                                         ).show()
                                     }
                                 },
@@ -394,7 +414,7 @@ fun EditorScreen(onBack: () -> Unit) {
                         ) {
                             Icon(
                                 if (eyeOpen) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                contentDescription = if (eyeOpen) "关闭相机预览" else "打开相机预览",
+                                contentDescription = if (eyeOpen) I18n.t("关闭相机预览") else I18n.t("打开相机预览"),
                                 tint = com.engcamera.ui.theme.ChromeIcon,
                                 modifier = Modifier.size(22.dp),
                             )
@@ -487,7 +507,7 @@ fun EditorScreen(onBack: () -> Unit) {
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
-                    Text("添加字段")
+                    Text(I18n.t("添加字段"))
                 }
             }
 
@@ -533,24 +553,24 @@ fun EditorScreen(onBack: () -> Unit) {
     }
 
     if (showResetConfirm) {
-        val tplName = com.engcamera.data.WatermarkTemplates.find(state.templateId)?.name ?: "当前模板"
+        val tplName = com.engcamera.data.WatermarkTemplates.find(state.templateId)?.name ?: I18n.t("当前模板")
         AlertDialog(
             onDismissRequest = { showResetConfirm = false },
-            title = { Text("重置当前模板") },
+            title = { Text(I18n.t("重置当前模板")) },
             text = {
                 Text(
-                    "将把字段值恢复为默认（标题/计数/备注等回默认文字），并把模板样式（颜色、记录点等选项）" +
-                        "还原为「$tplName」的初始状态；不会切换模板，水印位置与重力设置保留。",
+                    I18n.t("将把字段值恢复为默认（标题/计数/备注等回默认文字），并把模板样式（颜色、记录点等选项）") +
+                        I18n.t("还原为「{t}」的初始状态；不会切换模板，水印位置与重力设置保留。").replace("{t}", tplName),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     vm.resetToTemplate()
                     showResetConfirm = false
-                }) { Text("确认重置") }
+                }) { Text(I18n.t("确认重置")) }
             },
             dismissButton = {
-                TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
+                TextButton(onClick = { showResetConfirm = false }) { Text(I18n.t("取消")) }
             },
         )
     }
@@ -601,7 +621,7 @@ private fun FieldRow(
             Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.DragHandle, contentDescription = "排序手柄（长按拖动）")
+            Icon(Icons.Default.DragHandle, contentDescription = I18n.t("排序手柄（长按拖动）"))
             Switch(checked = field.enabled, onCheckedChange = { onToggle() })
             Spacer(Modifier.width(8.dp))
             Column(
@@ -611,11 +631,11 @@ private fun FieldRow(
                     .pointerInput(field.id) { detectTapGestures { currentOnEdit() } },
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(field.label, fontWeight = FontWeight.Medium)
+                    Text(I18n.t(field.label), fontWeight = FontWeight.Medium)
                     if (field.isTitle) {
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            "标题",
+                            I18n.t("标题"),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -626,7 +646,7 @@ private fun FieldRow(
                     ) {
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            "自定义",
+                            I18n.t("自定义"),
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFFFFB300),
                         )
@@ -635,11 +655,11 @@ private fun FieldRow(
                 Text(
                     field.value.ifBlank {
                         when (field.type) {
-                            FieldType.DATETIME -> "拍照时自动填写时间"
-                            FieldType.LOCATION -> "自动定位（可点此处手动编辑）"
-                            FieldType.COUNT -> "每次拍照自动 +1"
-                            FieldType.WEATHER -> "自动获取天气（可手动填写）"
-                            else -> "未填写"
+                            FieldType.DATETIME -> I18n.t("拍照时自动填写时间")
+                            FieldType.LOCATION -> I18n.t("自动定位（可点此处手动编辑）")
+                            FieldType.COUNT -> I18n.t("每次拍照自动 +1")
+                            FieldType.WEATHER -> I18n.t("自动获取天气（可手动填写）")
+                            else -> I18n.t("未填写")
                         }
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -651,7 +671,7 @@ private fun FieldRow(
             // 仅可删除字段（deletable 由模板定义；旧数据已按类型规则迁移）显示删除按钮
             if (field.deletable) {
                 IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = "删除字段")
+                    Icon(Icons.Default.Delete, contentDescription = I18n.t("删除字段"))
                 }
             }
         }
@@ -677,17 +697,33 @@ private fun EditFieldDialog(
     // key 用 field 本身（data class 结构相等），确保字段更新后重开对话框显示最新值
     var label by remember(field) { mutableStateOf(field.label) }
     // 时间/位置为空时预填当前值方便编辑（只在打开瞬间取值，不会随每秒刷新重置用户输入）
-    var value by remember(field) {
+    val initialValue = remember(field) {
+        when {
+            field.type == FieldType.DATETIME && field.value.isBlank() -> currentTime
+            field.type == FieldType.LOCATION && field.value.isBlank() ->
+                autoLocation.takeIf { it.isNotBlank() && !it.startsWith(I18n.t("未获取")) && it != I18n.t("定位中…") }
+                    ?: field.value
+            field.type == FieldType.WEATHER && field.value.isBlank() ->
+                autoWeather.takeIf { it.isNotBlank() } ?: field.value
+            else -> field.value
+        }
+    }
+    var value by remember(field) { mutableStateOf(initialValue) }
+    // 内容框用 TextFieldValue：光标/选区可控——自动聚焦时光标落在文字末尾而非最前
+    // （用户反馈 2026-10-16）；程序赋值（跟随刷新）也始终把光标放到末尾
+    var valueTfv by remember(field) {
         mutableStateOf(
-            when {
-                field.type == FieldType.DATETIME && field.value.isBlank() -> currentTime
-                field.type == FieldType.LOCATION && field.value.isBlank() ->
-                    autoLocation.takeIf { it.isNotBlank() && !it.startsWith("未获取") && it != "定位中…" }
-                        ?: field.value
-                field.type == FieldType.WEATHER && field.value.isBlank() ->
-                    autoWeather.takeIf { it.isNotBlank() } ?: field.value
-                else -> field.value
-            },
+            androidx.compose.ui.text.input.TextFieldValue(
+                initialValue,
+                androidx.compose.ui.text.TextRange(initialValue.length),
+            ),
+        )
+    }
+    fun setValueText(t: String) {
+        value = t
+        valueTfv = androidx.compose.ui.text.input.TextFieldValue(
+            t,
+            androidx.compose.ui.text.TextRange(t.length),
         )
     }
     var isTitle by remember(field) { mutableStateOf(field.isTitle) }
@@ -700,13 +736,13 @@ private fun EditFieldDialog(
     LaunchedEffect(followLocation, autoLocation) {
         if (followLocation) {
             autoLocation.takeIf {
-                it.isNotBlank() && !it.startsWith("未获取") && it != "定位中…"
-            }?.let { value = it }
+                it.isNotBlank() && !it.startsWith(I18n.t("未获取")) && it != I18n.t("定位中…")
+            }?.let { setValueText(it) }
         }
     }
     LaunchedEffect(followWeather, autoWeather) {
         if (followWeather && autoWeather.isNotBlank()) {
-            value = autoWeather
+            setValueText(autoWeather)
         }
     }
     val isCount = field.type == FieldType.COUNT
@@ -726,15 +762,16 @@ private fun EditFieldDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("编辑字段") },
+        title = { Text(I18n.t("编辑字段")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text("标签") }, singleLine = true)
+                OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text(I18n.t("标签")) }, singleLine = true)
                 OutlinedTextField(
-                    value = value,
+                    value = valueTfv,
                     onValueChange = { v ->
                         // 计数只允许纯数字；手动输入即停止跟随刷新值
-                        value = if (isCount) v.filter { it.isDigit() }.take(6) else v
+                        valueTfv = v
+                        value = if (isCount) v.text.filter { it.isDigit() }.take(6) else v.text
                         followLocation = false
                         followWeather = false
                     },
@@ -742,11 +779,11 @@ private fun EditFieldDialog(
                     label = {
                         Text(
                             when {
-                                isCount -> "数值（纯数字，每次拍照保存后自动 +1）"
-                                isDateTime -> "时间（留空 = 拍照时自动填写当前时间）"
-                                isLocation -> "位置（留空 = 拍照时自动定位）"
-                                isWeather -> "天气（留空 = 拍照时自动获取）"
-                                else -> "内容"
+                                isCount -> I18n.t("数值（纯数字，每次拍照保存后自动 +1）")
+                                isDateTime -> I18n.t("时间（留空 = 拍照时自动填写当前时间）")
+                                isLocation -> I18n.t("位置（留空 = 拍照时自动定位）")
+                                isWeather -> I18n.t("天气（留空 = 拍照时自动获取）")
+                                else -> I18n.t("内容")
                             },
                         )
                     },
@@ -764,7 +801,7 @@ private fun EditFieldDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "天气 Emoji（如 ☀️ 晴 26℃）",
+                            I18n.t("天气 Emoji（如 ☀️ 晴 26℃）"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
@@ -775,7 +812,7 @@ private fun EditFieldDialog(
                         )
                     }
                     Text(
-                        "自动天气：${if (autoWeather.isBlank()) "未获取" else autoWeather}",
+                        I18n.t("自动天气：{w}").replace("{w}", if (autoWeather.isBlank()) I18n.t("未获取") else autoWeather),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -785,7 +822,7 @@ private fun EditFieldDialog(
                     }) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("刷新天气")
+                        Text(I18n.t("刷新天气"))
                     }
                 }
                 if (isLocation) {
@@ -796,7 +833,7 @@ private fun EditFieldDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "显示经纬度（地址后括号段）",
+                            I18n.t("显示经纬度（地址后括号段）"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
@@ -807,7 +844,7 @@ private fun EditFieldDialog(
                         )
                     }
                     Text(
-                        "自动定位：$autoLocation",
+                        I18n.t("自动定位：{loc}").replace("{loc}", autoLocation),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -817,13 +854,13 @@ private fun EditFieldDialog(
                     }) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("刷新定位")
+                        Text(I18n.t("刷新定位"))
                     }
                 }
                 // 历史记录快速填充（按标签，最近在前）：最多显示 5 行可上下滚动，右侧滚动条
                 if (!isCount && !isLocation && !isDateTime && !isWeather && history.isNotEmpty()) {
                     Text(
-                        "最近使用（点击填充）",
+                        I18n.t("最近使用（点击填充）"),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -899,17 +936,17 @@ private fun EditFieldDialog(
                 } else {
                     onConfirm(label, value, isTitle)
                 }
-            }) { Text("确定") }
+            }) { Text(I18n.t("确定")) }
         },
         dismissButton = {
             Row {
                 // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。均关闭对话框
                 if (isDateTime || isLocation || isWeather) {
-                    TextButton(onClick = { onConfirm(label, "", isTitle) }) { Text("重置") }
+                    TextButton(onClick = { onConfirm(label, "", isTitle) }) { Text(I18n.t("重置")) }
                 } else if (isCount) {
-                    TextButton(onClick = { onConfirm(label, "1", isTitle) }) { Text("重置") }
+                    TextButton(onClick = { onConfirm(label, "1", isTitle) }) { Text(I18n.t("重置")) }
                 }
-                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = onDismiss) { Text(I18n.t("取消")) }
             }
         },
     )
@@ -918,18 +955,18 @@ private fun EditFieldDialog(
     if (confirmTimeFreeze) {
         AlertDialog(
             onDismissRequest = { confirmTimeFreeze = false },
-            title = { Text("时间将定格") },
+            title = { Text(I18n.t("时间将定格")) },
             text = {
-                Text("手动设置时间后，后续所有拍照都会使用这个固定时间（清空后恢复自动取当前时间）。确定要定格时间吗？")
+                Text(I18n.t("手动设置时间后，后续所有拍照都会使用这个固定时间（清空后恢复自动取当前时间）。确定要定格时间吗？"))
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmTimeFreeze = false
                     onConfirm(label, value, isTitle)
-                }) { Text("确定定格") }
+                }) { Text(I18n.t("确定定格")) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmTimeFreeze = false }) { Text("取消") }
+                TextButton(onClick = { confirmTimeFreeze = false }) { Text(I18n.t("取消")) }
             },
         )
     }
@@ -945,27 +982,27 @@ private fun AddFieldDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加字段") },
+        title = { Text(I18n.t("添加字段")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = label,
                     onValueChange = { label = it },
-                    label = { Text("标签（不填默认为备注）") },
+                    label = { Text(I18n.t("标签（不填默认为备注）")) },
                     singleLine = true,
                 )
                 OutlinedTextField(
                     value = value,
                     onValueChange = { value = it },
-                    label = { Text("内容（可不填）") },
+                    label = { Text(I18n.t("内容（可不填）")) },
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(FieldType.NOTE, label, value) }) { Text("添加") }
+            TextButton(onClick = { onConfirm(FieldType.NOTE, label, value) }) { Text(I18n.t("添加")) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(I18n.t("取消")) }
         },
     )
 }

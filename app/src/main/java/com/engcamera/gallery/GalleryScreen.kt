@@ -83,6 +83,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.engcamera.i18n.I18n
 
 /**
  * 相册页（计划书 3.3）：
@@ -283,19 +284,19 @@ fun GalleryScreen(
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
+                    contentDescription = I18n.t("返回"),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (state.mode == SelectionMode.MULTI_SELECT) "已选 ${state.selected.size} 项" else "照片与录像",
+                    if (state.mode == SelectionMode.MULTI_SELECT) I18n.t("已选 {n} 项").replace("{n}", "${state.selected.size}") else I18n.t("照片与录像"),
                     color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 if (state.mode == SelectionMode.BROWSE) {
                     Text(
-                        "共 ${entries.size} 项",
+                        I18n.t("共 {n} 项").replace("{n}", "${entries.size}"),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -305,7 +306,7 @@ fun GalleryScreen(
                 IconButton(onClick = { vm.clearSelection() }) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "取消多选",
+                        contentDescription = I18n.t("取消多选"),
                         tint = MaterialTheme.colorScheme.onSurface,
                     )
                 }
@@ -315,7 +316,7 @@ fun GalleryScreen(
                 ) {
                     Icon(
                         Icons.Default.Delete,
-                        contentDescription = "删除选中项",
+                        contentDescription = I18n.t("删除选中项"),
                         tint = if (state.selected.isEmpty()) {
                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                         } else {
@@ -335,7 +336,7 @@ fun GalleryScreen(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    "浏览手机相册需要存储权限",
+                    I18n.t("浏览手机相册需要存储权限"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
@@ -343,7 +344,7 @@ fun GalleryScreen(
                     onClick = { readPermLauncher.launch(readPermissions()) },
                     modifier = Modifier.padding(top = 16.dp),
                 ) {
-                    Text("授予权限")
+                    Text(I18n.t("授予权限"))
                 }
             }
         } else if (entries.isEmpty()) {
@@ -361,12 +362,12 @@ fun GalleryScreen(
                     modifier = Modifier.padding(16.dp),
                 )
                 Text(
-                    "相册里还没有照片\n去拍一张吧",
+                    I18n.t("相册里还没有照片\n去拍一张吧"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
                 Button(onClick = onGoShoot, modifier = Modifier.padding(top = 16.dp)) {
-                    Text("去拍照")
+                    Text(I18n.t("去拍照"))
                 }
             }
         } else {
@@ -567,7 +568,7 @@ private fun openViewer(context: android.content.Context, entry: MediaSaver.Media
     runCatching {
         context.startActivity(intent)
     }.onFailure {
-        android.widget.Toast.makeText(context, "未找到可以打开的系统图库应用", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(context, I18n.t("未找到可以打开的系统图库应用"), android.widget.Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -612,7 +613,7 @@ private fun MediaCell(
                 ) {
                     Icon(
                         Icons.Default.Check,
-                        contentDescription = "已选中",
+                        contentDescription = I18n.t("已选中"),
                         tint = Color.White,
                         modifier = Modifier.size(16.dp),
                     )

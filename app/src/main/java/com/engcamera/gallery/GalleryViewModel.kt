@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.engcamera.i18n.I18n
 
 /**
  * 多选模式枚举
@@ -202,7 +203,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(mode = SelectionMode.BROWSE, selected = emptySet()) }
             refresh()
             _state.update {
-                it.copy(toast = if (failed == 0) "已删除 ${uris.size} 项" else "有 $failed 项删除失败")
+                it.copy(toast = if (failed == 0) I18n.t("已删除 {n} 项").replace("{n}", "${uris.size}") else I18n.t("有 {n} 项删除失败").replace("{n}", "$failed"))
             }
         }
     }

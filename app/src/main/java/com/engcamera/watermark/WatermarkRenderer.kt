@@ -150,7 +150,9 @@ object WatermarkRenderer {
         val title = enabled.firstOrNull { it.isTitle }
             ?.let { newLayout(displayText(it, dynamic, style), titlePaint, textWidth, if (titleCenter) Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_NORMAL) }
         val rows = enabled.filter { !it.isTitle }.map { f ->
-            val text = if (f.label.isBlank()) displayText(f, dynamic, style) else "${f.label}：${displayText(f, dynamic, style)}"
+            // 字段标签随界面语言（显示点翻译，存量数据不动；自定义标签词典未命中回退原文）
+            val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
+            val text = if (labelTxt.isBlank()) displayText(f, dynamic, style) else "$labelTxt：${displayText(f, dynamic, style)}"
             newLayout(text, bodyPaint, textWidth)
         }
         return Texts(title, rows, titlePaint, bodyPaint, pad, blockWidth, corner)

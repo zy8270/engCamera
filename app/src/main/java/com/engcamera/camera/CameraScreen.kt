@@ -44,6 +44,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.NorthEast
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
@@ -55,9 +61,9 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -72,13 +78,17 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.ContentTransform
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -128,6 +138,7 @@ import com.engcamera.ui.ProjectGroupGlyph
 import com.engcamera.ui.theme.ChromeScrim
 import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkOverlay
+import com.engcamera.i18n.I18n
 
 /**
  * 相机主页（计划书 3.2）。
@@ -300,7 +311,7 @@ fun CameraScreen(
                         t.printStackTrace()
                         vm.engine = null
                         vm.rebind = null
-                        vm.showToast("相机初始化失败：${t.message ?: "未知错误"}")
+                        vm.showToast(I18n.t("相机初始化失败：{msg}").replace("{msg}", t.message ?: I18n.t("未知错误")))
                     },
                 )
                 val observer = LifecycleEventObserver { _, event ->
@@ -336,37 +347,54 @@ fun CameraScreen(
             val rot = ui.uiRotation
 
             Column(Modifier.fillMaxSize()) {
-                // 顶部控制条：闪光灯左、设置右；图标角度随重力，位置不变
-                Row(
+                // 顶部控制条：闪光灯左、设置右；图标角度随重力，位置不变；
+                // 文字工具提示水平居中覆盖在整条上（用户拍板 2026-10-16）
+                Box(
                     Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
                         .padding(horizontal = 8.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = { vm.cycleFlash() }) {
-                        Icon(
-                            imageVector = when (ui.flashIndex) {
-                                1 -> Icons.Default.FlashOn
-                                2 -> Icons.Default.FlashAuto
-                                else -> Icons.Default.FlashOff
-                            },
-                            contentDescription = "闪光灯",
-                            tint = if (ui.flashIndex == 0) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                            modifier = Modifier.rotate(rot.toFloat()),
-                        )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = { vm.cycleFlash() }) {
+                            Icon(
+                                imageVector = when (ui.flashIndex) {
+                                    1 -> Icons.Default.FlashOn
+                                    2 -> Icons.Default.FlashAuto
+                                    else -> Icons.Default.FlashOff
+                                },
+                                contentDescription = I18n.t("闪光灯"),
+                                tint = if (ui.flashIndex == 0) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
+                                modifier = Modifier.rotate(rot.toFloat()),
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = I18n.t("设置"),
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.rotate(rot.toFloat()),
+                            )
+                        }
                     }
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = "设置",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.rotate(rot.toFloat()),
+                    if (ui.confirming && ui.annotationTool == 3) {
+                        Text(
+                            I18n.t("点击图片任意位置添加文字"),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x88000000))
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
                         )
                     }
                 }
@@ -392,6 +420,14 @@ fun CameraScreen(
                                 ),
                             )
                         },
+                    )
+                } else if (ui.confirming) {
+                    ConfirmArea(
+                        modifier = Modifier.fillMaxWidth(),
+                        vm = vm,
+                        ui = ui,
+                        effective = effective,
+                        dynamic = dynamic,
                     )
                 } else {
                     PreviewArea(
@@ -462,6 +498,8 @@ private fun SettingsDrawer(
     val volumeShutter by vm.volumeShutter.collectAsState()
     val watermark by vm.watermark.collectAsState()
     val themeMode by vm.themeMode.collectAsState()
+    val languageMode by vm.languageMode.collectAsState()
+    val showLangPicker = remember { mutableStateOf(false) }
     val saveTree by vm.saveTree.collectAsState()
     val showSavePathDialog = remember { mutableStateOf(false) }
     val saveTreeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -472,32 +510,72 @@ private fun SettingsDrawer(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                 )
             }
-            val path = android.provider.DocumentsContract.getTreeDocumentId(uri).substringAfter(':', "所选目录")
+            val path = android.provider.DocumentsContract.getTreeDocumentId(uri).substringAfter(':', I18n.t("所选目录"))
             vm.setSaveTree(uri, path)
-            android.widget.Toast.makeText(context, "保存路径已设为 $path", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, I18n.t("保存路径已设为 {p}").replace("{p}", path), android.widget.Toast.LENGTH_SHORT).show()
             showSavePathDialog.value = false
         }
+    }
+
+    if (showLangPicker.value) {
+        AlertDialog(
+            onDismissRequest = { showLangPicker.value = false },
+            title = { Text("语言 / Language") },
+            text = {
+                Column {
+                    listOf(
+                        com.engcamera.i18n.AppLanguageMode.SYSTEM to I18n.t("跟随系统语言"),
+                        com.engcamera.i18n.AppLanguageMode.ZH to "中文",
+                        com.engcamera.i18n.AppLanguageMode.EN to "English",
+                    ).forEach { (mode, label) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.setLanguageMode(mode)
+                                    showLangPicker.value = false
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = languageMode == mode,
+                                onClick = {
+                                    vm.setLanguageMode(mode)
+                                    showLangPicker.value = false
+                                },
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLangPicker.value = false }) { Text(I18n.t("确定")) }
+            },
+        )
     }
 
     if (showSavePathDialog.value) {
         AlertDialog(
             onDismissRequest = { showSavePathDialog.value = false },
-            title = { Text("文件保存路径") },
+            title = { Text(I18n.t("文件保存路径")) },
             text = {
                 Text(
-                    "当前：" + (saveTree?.second ?: "DCIM/Camera（默认）") +
-                        "\n\n选择文件夹后，照片和录像将保存到所选目录（系统将请求您授权访问该文件夹）。",
+                    I18n.t("当前：") + (saveTree?.second ?: I18n.t("DCIM/Camera（默认）")) +
+                        I18n.t("\n\n选择文件夹后，照片和录像将保存到所选目录（系统将请求您授权访问该文件夹）。"),
                 )
             },
             confirmButton = {
-                TextButton(onClick = { saveTreeLauncher.launch(null) }) { Text("选择文件夹") }
+                TextButton(onClick = { saveTreeLauncher.launch(null) }) { Text(I18n.t("选择文件夹")) }
             },
             dismissButton = {
                 TextButton(onClick = {
                     vm.setSaveTree(null, null)
                     showSavePathDialog.value = false
-                    android.widget.Toast.makeText(context, "已恢复默认 DCIM/Camera", android.widget.Toast.LENGTH_SHORT).show()
-                }) { Text("恢复默认") }
+                    android.widget.Toast.makeText(context, I18n.t("已恢复默认 DCIM/Camera"), android.widget.Toast.LENGTH_SHORT).show()
+                }) { Text(I18n.t("恢复默认")) }
             },
         )
     }
@@ -537,7 +615,7 @@ private fun SettingsDrawer(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
                 Text(
-                    "设置",
+                    I18n.t("设置"),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -546,12 +624,12 @@ private fun SettingsDrawer(
 
                 // 外观：跟随系统 / 日间 / 夜间（0.6.0 新增，DataStore 持久化）
                 Text(
-                    "外观",
+                    I18n.t("外观"),
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    "日间/夜间模式，或跟随系统",
+                    I18n.t("日间/夜间模式，或跟随系统"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -562,24 +640,31 @@ private fun SettingsDrawer(
                 )
                 Spacer(Modifier.height(16.dp))
 
+                // 界面语言（v191：跟随系统/中文/English，用户拍板全量中英）
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { showLangPicker.value = true }
+                        .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "保存原图原视频",
+                            "语言 / Language",
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）",
+                            when (languageMode) {
+                                com.engcamera.i18n.AppLanguageMode.SYSTEM -> I18n.t("跟随系统语言")
+                                com.engcamera.i18n.AppLanguageMode.ZH -> "中文"
+                                com.engcamera.i18n.AppLanguageMode.EN -> "English"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Switch(checked = saveOriginal, onCheckedChange = { vm.setSaveOriginal(it) })
                 }
                 Spacer(Modifier.height(16.dp))
 
@@ -589,12 +674,56 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "快门声音",
+                            I18n.t("保存原图原视频"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "拍照时播放系统快门音（部分地区的法律要求开启）",
+                            I18n.t("开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = saveOriginal, onCheckedChange = { vm.setSaveOriginal(it) })
+                }
+                Spacer(Modifier.height(16.dp))
+
+                // 拍照后确认（v193 默认开，用户拍板 2026-10-16）：开启时拍照闪黑不触发
+                val photoConfirm by vm.photoConfirm.collectAsState()
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            I18n.t("拍照后确认"),
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            I18n.t("拍摄后先进预览确认并支持标注（箭头/矩形/笔刷），点保存才入相册；开启时拍照不再闪黑"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = photoConfirm, onCheckedChange = { vm.setPhotoConfirm(it) })
+                }
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            I18n.t("快门声音"),
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            I18n.t("拍照时播放系统快门音（部分地区的法律要求开启）"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -610,12 +739,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "音量键拍照",
+                            I18n.t("音量键拍照"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "主界面按音量键视同按下快门",
+                            I18n.t("主界面按音量键视同按下快门"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -631,12 +760,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "水印跟随重力",
+                            I18n.t("水印跟随重力"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "开启后水印文字按重力 90° 旋转（跟随照片方向）；关闭后使用固定角度。水印位置（九宫格/拖动）始终以重力为准：选「下方」无论横竖屏都贴物理下方",
+                            I18n.t("开启后水印文字按重力 90° 旋转（跟随照片方向）；关闭后使用固定角度。水印位置（九宫格/拖动）始终以重力为准：选「下方」无论横竖屏都贴物理下方"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -651,7 +780,7 @@ private fun SettingsDrawer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "固定旋转角",
+                            I18n.t("固定旋转角"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
@@ -679,12 +808,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "取景器截帧背景",
+                            I18n.t("取景器截帧背景"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "进入水印编辑器时，截取取景器当前画面作为水印预览背景；关闭则使用几何图案背景",
+                            I18n.t("进入水印编辑器时，截取取景器当前画面作为水印预览背景；关闭则使用几何图案背景"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -701,12 +830,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "新建工程标题联动",
+                            I18n.t("新建工程标题联动"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "新建工程组时，输入的工程名自动填入该工程水印的标题",
+                            I18n.t("新建工程组时，输入的工程名自动填入该工程水印的标题"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -726,12 +855,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "文件保存路径",
+                            I18n.t("文件保存路径"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            saveTree?.second ?: "DCIM/Camera（默认）",
+                            saveTree?.second ?: I18n.t("DCIM/Camera（默认）"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1060,7 +1189,7 @@ private fun AnnotateArea(
                 }
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    "点击选择要加水印的图片",
+                    I18n.t("点击选择要加水印的图片"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                 )
@@ -1089,7 +1218,7 @@ private fun AnnotateArea(
                 ) {
                     coil.compose.AsyncImage(
                         model = item.uri,
-                        contentDescription = "待加水印图片",
+                        contentDescription = I18n.t("待加水印图片"),
                         contentScale = ContentScale.FillBounds,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -1210,7 +1339,7 @@ private fun BottomBar(
                 color = ChromeBrand,
             ) {
                 Text(
-                    "识别到二维码：${ui.bubble}",
+                    I18n.t("识别到二维码：{c}").replace("{c}", ui.bubble),
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1244,11 +1373,60 @@ private fun BottomBar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活 onSurfaceVariant、激活主色
-            Row(
-                Modifier.align(Alignment.Center),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活 onSurfaceVariant、激活主色。
+            // 确认态切换为三个标注工具（箭头/矩形/笔刷），带过渡动画（用户拍板 2026-10-16）
+            androidx.compose.animation.AnimatedContent(
+                targetState = ui.confirming,
+                transitionSpec = {
+                    ContentTransform(
+                        fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
+                        fadeOut(tween(150)),
+                    )
+                },
+                label = "modeTools",
+                modifier = Modifier.align(Alignment.Center),
+            ) { confirming ->
+                if (confirming) {
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        listOf(0, 1, 2, 3).forEach { tool ->
+                            IconButton(onClick = { vm.setAnnotationTool(tool) }) {
+                                val tint = if (ui.annotationTool == tool) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                when (tool) {
+                                    0 -> Icon(Icons.Default.NorthEast, contentDescription = I18n.t("箭头"), tint = tint)
+                                    1 -> Icon(Icons.Default.CheckBoxOutlineBlank, contentDescription = I18n.t("矩形"), tint = tint)
+                                    2 -> Icon(Icons.Default.Brush, contentDescription = I18n.t("画笔"), tint = tint)
+                                    else -> androidx.compose.foundation.Canvas(
+                                        Modifier.size(24.dp),
+                                    ) {
+                                        // 描边风格字母 A（对齐 Material outlined 图标：
+                                        // 24dp 画布、圆头描边 ~2dp，顶点+两脚+横杠）
+                                        val w = size.width
+                                        val sw = w * 0.085f
+                                        val apex = Offset(w * 0.50f, w * 0.17f)
+                                        val left = Offset(w * 0.26f, w * 0.83f)
+                                        val right = Offset(w * 0.74f, w * 0.83f)
+                                        drawLine(tint, apex, left, strokeWidth = sw)
+                                        drawLine(tint, apex, right, strokeWidth = sw)
+                                        drawLine(
+                                            tint,
+                                            Offset(w * 0.36f, w * 0.62f),
+                                            Offset(w * 0.64f, w * 0.62f),
+                                            strokeWidth = sw,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
                 Row(
                     Modifier
                         .clip(RoundedCornerShape(20.dp))
@@ -1260,7 +1438,7 @@ private fun BottomBar(
                     ) {
                         Icon(
                             Icons.Default.Draw,
-                            contentDescription = "给图片添加水印",
+                            contentDescription = I18n.t("给图片添加水印"),
                             tint = if (ui.annotating) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -1275,7 +1453,7 @@ private fun BottomBar(
                     ) {
                         Icon(
                             Icons.Default.PhotoCamera,
-                            contentDescription = "拍照模式",
+                            contentDescription = I18n.t("拍照模式"),
                             tint = if (!ui.annotating && !ui.videoMode) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -1290,7 +1468,7 @@ private fun BottomBar(
                     ) {
                         Icon(
                             Icons.Default.Videocam,
-                            contentDescription = "录像模式",
+                            contentDescription = I18n.t("录像模式"),
                             tint = if (!ui.annotating && ui.videoMode) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -1300,8 +1478,10 @@ private fun BottomBar(
                         )
                     }
                 }
-            }
+                } // else（模式胶囊）
+            } // AnimatedContent
             // 画质选择（靠右；录像/照片档位互斥显示，仅一档时无可选不显示）。入口=胶片+HD 图标
+            // 确认态切换为标注颜色选择器（默认红，用户拍板 2026-10-16）
             data class QOption(val label: String, val spec: String)
             val qualityList = if (ui.videoMode) {
                 ui.videoQualities.map { QOption(it.label, it.spec) }
@@ -1309,20 +1489,116 @@ private fun BottomBar(
                 ui.photoQualities.map { QOption(it.label, it.spec) }
             }
             val qualityIndex = if (ui.videoMode) ui.videoQualityIndex else ui.photoQualityIndex
-            if (!ui.annotating && qualityList.size > 1) {
+            var colorMenuOpen by remember { mutableStateOf(false) }
+            var showFreeColor by remember { mutableStateOf(false) }
+            if (!ui.annotating && (qualityList.size > 1 || ui.confirming)) {
                 Box(Modifier.align(Alignment.CenterEnd)) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable { vm.toggleQualityMenu() }
-                            .padding(8.dp),
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = ui.confirming,
+                        transitionSpec = {
+                            ContentTransform(
+                                fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
+                                fadeOut(tween(150)),
+                            )
+                        },
+                        label = "qualityColor",
+                    ) { confirming ->
+                        if (confirming) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable { colorMenuOpen = !colorMenuOpen }
+                                    .padding(8.dp),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(ui.annotationColor.toInt()))
+                                        .border(1.5.dp, MaterialTheme.colorScheme.onSurface, CircleShape),
+                                )
+                            }
+                        } else if (qualityList.size > 1) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable { vm.toggleQualityMenu() }
+                                    .padding(8.dp),
+                            ) {
+                                QualityGlyph(
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .rotate(rot.toFloat()),
+                                )
+                            }
+                        } else {
+                            Box(Modifier)
+                        }
+                    }
+                    // 标注颜色面板（默认红）
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = colorMenuOpen && ui.confirming,
+                        onDismissRequest = { colorMenuOpen = false },
                     ) {
-                        QualityGlyph(
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(22.dp)
-                                .rotate(rot.toFloat()),
+                        Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                            listOf(
+                                0xFFFF5252L, // 红（默认）
+                                0xFFFFD54FL, // 黄
+                                0xFF81C784L, // 绿
+                                0xFF64B5F6L, // 蓝
+                                0xFFFFFFFFL, // 白
+                                0xFF000000L, // 黑
+                            ).forEach { c ->
+                                Box(
+                                    Modifier
+                                        .padding(2.dp)
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(c.toInt()))
+                                        .border(
+                                            1.5.dp,
+                                            if (ui.annotationColor == c) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurface,
+                                            CircleShape,
+                                        )
+                                        .clickable {
+                                            vm.setAnnotationColor(c)
+                                            colorMenuOpen = false
+                                        },
+                                )
+                            }
+                            // 彩虹圆=自由选色（与水印编辑器同款取色器，用户拍板 2026-10-16）
+                            Box(
+                                Modifier
+                                    .padding(2.dp)
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.sweepGradient(
+                                            listOf(
+                                                Color(0xFFFF5252), Color(0xFFFFD54F), Color(0xFF81C784),
+                                                Color(0xFF64B5F6), Color(0xFFB388FF), Color(0xFFFF5252),
+                                            ),
+                                        ),
+                                    )
+                                    .border(1.5.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                                    .clickable { showFreeColor = true },
+                            )
+                        }
+                    }
+                    if (showFreeColor) {
+                        com.engcamera.editor.ColorPickerDialog(
+                            title = I18n.t("标注颜色"),
+                            initial = ui.annotationColor,
+                            onDismiss = { showFreeColor = false },
+                            onConfirm = { c ->
+                                vm.setAnnotationColor(c)
+                                showFreeColor = false
+                                colorMenuOpen = false
+                            },
                         )
                     }
                     // 展开的画质列表（向下弹出）
@@ -1386,14 +1662,14 @@ private fun BottomBar(
                 if (latest != null) {
                     AsyncImage(
                         model = latest.uri,
-                        contentDescription = "最近照片",
+                        contentDescription = I18n.t("最近照片"),
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
                         Icon(
                             Icons.Default.PhotoCamera,
-                            contentDescription = "相册",
+                            contentDescription = I18n.t("相册"),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                 }
@@ -1407,19 +1683,19 @@ private fun BottomBar(
                 modifier = Modifier.align(Alignment.Center),
             )
 
-            // 前后摄切换（右）：容器风格与工程组/画质按钮统一（surfaceVariant 圆角块）
+            // 前后摄切换（右）：确认态变 X=丢弃不保存（用户拍板 2026-10-16）
             Box(
                 Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 24.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { vm.flipCamera() }
+                    .clickable { if (ui.confirming) vm.confirmDiscard() else vm.flipCamera() }
                     .padding(8.dp),
             ) {
                 Icon(
-                    Icons.Default.Cameraswitch,
-                    contentDescription = "前后摄切换",
+                    if (ui.confirming) Icons.Default.Close else Icons.Default.Cameraswitch,
+                    contentDescription = if (ui.confirming) I18n.t("丢弃") else I18n.t("前后摄切换"),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .size(22.dp)
@@ -1439,6 +1715,25 @@ private fun Shutter(
     modifier: Modifier = Modifier,
 ) {
     val quickRecording = remember { mutableStateOf(false) }
+    // 确认态（v193）：快门=下载图标，点击保存入相册（用户拍板 2026-10-16）
+    if (ui.confirming) {
+        Box(
+            modifier
+                .size(78.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary)
+                .clickable { vm.confirmSave() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Download,
+                contentDescription = I18n.t("保存照片"),
+                tint = Color.White,
+                modifier = Modifier.size(34.dp),
+            )
+        }
+        return
+    }
     // 保存处理中：快门缩小表示"正在处理"，完成恢复（自定义目录保存有扫描等待，需要可见反馈）
     val shutterScale by animateFloatAsState(
         targetValue = if (ui.capturing) 0.82f else 1f,
@@ -1491,7 +1786,7 @@ private fun Shutter(
     ) {
         if (ui.annotating) {
             // 添加水印模式：快门变成"确认"
-            Text("确认", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(I18n.t("确认"), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         } else if (!ui.recording) {
             Box(
                 Modifier
@@ -1521,7 +1816,7 @@ private fun PermissionGate(onOpenSettings: () -> Unit) {
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            "需要相机权限才能拍照\n请在系统设置中授权",
+            I18n.t("需要相机权限才能拍照\n请在系统设置中授权"),
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
         )
@@ -1534,7 +1829,7 @@ private fun PermissionGate(onOpenSettings: () -> Unit) {
                 .clickable { onOpenSettings() },
         ) {
             Text(
-                "去设置",
+                I18n.t("去设置"),
                 color = Color.White,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
             )
@@ -1549,9 +1844,9 @@ private fun ThemeModeSelector(
     onSelect: (ThemeMode) -> Unit,
 ) {
     val options = listOf(
-        ThemeMode.SYSTEM to "跟随系统",
-        ThemeMode.LIGHT to "日间",
-        ThemeMode.DARK to "夜间",
+        ThemeMode.SYSTEM to I18n.t("跟随系统"),
+        ThemeMode.LIGHT to I18n.t("日间"),
+        ThemeMode.DARK to I18n.t("夜间"),
     )
     Row(
         Modifier
