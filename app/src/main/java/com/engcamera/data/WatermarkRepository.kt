@@ -344,7 +344,9 @@ class WatermarkRepository(private val context: Context) {
             )
         }
         if (st.style.layout != "LIQUID_GLASS") return st
-        if (st.style.glassCornerRadius < 1f || st.style.glassCornerRadius == 40f) {
+        // v236 圆角单位改百分比(0~100)后：只重置 v156/157 比例残留 (0,1) 开区间——
+        // 0%=直角、40%=合法档位，不再当旧默认重置
+        if (st.style.glassCornerRadius > 0f && st.style.glassCornerRadius < 1f) {
             st = st.copy(
                 style = st.style.copy(
                     glassCornerRadius = 15f,

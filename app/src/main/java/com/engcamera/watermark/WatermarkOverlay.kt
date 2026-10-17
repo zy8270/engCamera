@@ -266,9 +266,9 @@ fun WatermarkOverlay(
                         factory = { ctx -> LiquidGlassViewSafe(ctx) },
                         update = { v ->
                             v.bind(gs)
-                            // 圆角钳短边 4/5（与烧录同规则）
+                            // 圆角钳短边 4/5（与烧录同规则）；v236 起百分比 0~100
                             v.setCornerRadius(
-                                (st.glassCornerRadius * glassScale).coerceAtMost(minOf(gw, gh) * 0.8f),
+                                WatermarkRenderer.glassCornerPx(st.glassCornerRadius, gw, gh),
                             )
                             v.setRefractionHeight(st.glassRefractionHeight * glassScale)
                             v.setRefractionOffset(st.glassRefractionOffset * glassScale)

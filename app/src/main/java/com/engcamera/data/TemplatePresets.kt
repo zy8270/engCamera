@@ -101,7 +101,7 @@ object TemplatePresets {
                 TemplateOptionDef("recDotOffset", "记录点左边距", "slider", 0f, 0.2f),
                 TemplateOptionDef("recGlow", "光晕大小", "slider", 0f, 1.5f),
                 TemplateOptionDef("recDotColor", "记录点颜色", "color"),
-                TemplateOptionDef("glassCornerRadius", "圆角半径(dp)", "slider", 0f, 99f),
+                TemplateOptionDef("glassCornerRadius", "圆角", "slider", 0f, 100f),
                 TemplateOptionDef("glassRefractionHeight", "折射高度(dp)", "slider", 12f, 50f),
                 TemplateOptionDef("glassRefractionOffset", "折射偏移(dp)", "slider", 20f, 120f),
                 TemplateOptionDef("glassTintAlpha", "着色透明度", "slider", 0f, 1f),
