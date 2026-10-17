@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.7/engCamera-v0.6.7.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.8/engCamera-v0.6.8-233.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, and multiple **project profiles** switch the whole watermark set in one tap. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.7 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.8 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -31,7 +31,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 ### Capture
 
 - **Live watermark preview + burned output**: what you see before pressing the shutter is what gets burned into the file — no metadata tricks
-- **Shot confirm & gesture annotation** (setting, on by default): after the shutter you get a confirm page — arrow / rectangle / brush annotations (six colors, undo per stroke), tap-to-add text (drag to move, handle to rotate & scale, instant recolor); **pinch to zoom for fine annotation**: zoom stays after lifting your fingers, single finger keeps drawing, stroke width is locked to the zoom level at pen-down (strokes drawn zoomed-in stay thinner, matching the saved photo), and text handles keep a constant size; landscape / upside-down shots are centered at true aspect inside a fixed 3:4 confirm frame with the watermark gravity-corrected to its final position, and can be zoomed to fill the frame
+- **Shot confirm & gesture annotation** (setting, on by default): after the shutter you get a confirm page — arrow / rectangle / brush annotations (six colors, undo per stroke), tap-to-add text (drag to move, handle to rotate & scale, instant recolor), and **long-press the watermark block to drag it** (affects only this save, not the global position); **pinch to zoom for fine annotation**: zoom stays after lifting your fingers, single finger keeps drawing, stroke width is locked to the zoom level at pen-down (strokes drawn zoomed-in stay thinner, matching the saved photo), and text handles keep a constant size; landscape / upside-down shots are centered at true aspect inside a fixed 3:4 confirm frame with the watermark gravity-corrected to its final position, and can be zoomed to fill the frame
 - **Bilingual UI (Chinese / English)**: follow system / Chinese / English, switchable in settings — template names, field labels and prompts all switch instantly
 - **Video aspect matches the preview**: preview / photo / video are cropped to the same ratio; quality tiers are generated from the camera's real capabilities (showing actual output resolution & frame rate; no 4K on front cameras)
 - **Photo quality picker**: tiers follow the current lens' true capabilities, labeled with real output resolution and megapixels (e.g. 4624×3472 · ~16MP)
@@ -47,7 +47,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 
 ### Watermark
 
-- **Liquid Glass default template**: an iOS-style liquid glass card rendered live by the bundled [AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) (MIT) — edge refraction + dispersion sampled from the live camera feed, WYSIWYG in preview and burned with the same shader; **videos get true refraction too** (a custom GPU frame effect samples the video itself frame by frame); corner radius / refraction height & offset / tint / dispersion / blur are adjustable, as are text colors, shadow (size / spread / opacity / offset), watermark width and record point; all four orientations run the GPU path at full frame rate (requires Android 13+; older versions fall back to a translucent glass base)
+- **Liquid Glass default template**: an iOS-style liquid glass card rendered live by the bundled [AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) (MIT) — edge refraction + dispersion sampled from the live camera feed, WYSIWYG in preview and burned with the same shader; **videos get true refraction too** (a custom GPU frame effect samples the video itself frame by frame); **gallery-photo watermarking and the confirm page get true refraction as well** (full-resolution static rendering — it refracts wherever you drag it); corner radius / refraction height & offset / tint / dispersion / blur are adjustable, as are text colors, shadow (size / spread / opacity / offset), watermark width and record point; all four orientations run the GPU path at full frame rate (requires Android 13+; older versions fall back to a translucent glass base)
 - **Template system**: 9 built-in — 7 native (classic engineering blue / liquid glass / minimal white shadow / bordered card / single-line / gradient bar / note card, drawn directly on Canvas at zero cost) + 2 web (film slate / magazine card, offline HTML/CSS); each template exposes its own knobs (title/body/background colors, border, radius, gradient base, width, web scale…), saved per project; web templates export/import as HTML, and any template exports whole (fields/styles/position) to clipboard or file for another device
 - **9-grid position**: visually pick any of 9 slots (corners / edges / center), never reset by rotation, or fine-tune by dragging; directions are interpreted in the **physical gravity** frame — in landscape, "bottom" is the table side
 - **Editor live camera preview (eye toggle)**: tap the "eye" in the editor to swap the background for the live rear camera — liquid glass refracts it live; closed eye = viewfinder freeze-frame background (settings toggle; off = flat dual-mountain artwork, dark/light variants)
@@ -59,7 +59,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 
 ### Gallery & batch
 
-- **Watermark existing photos**: pencil icon → system multi-picker (up to 30) → per-photo edit & confirm → batch save
+- **Watermark existing photos**: pencil icon to enter (start picking via the empty-state + button or the download key), system multi-picker (up to 30), then the same annotation suite as shot-confirm — arrow / rectangle / brush / text tools, six colors + free picking, undo per stroke, pinch to zoom; annotations burn on top of the watermark and photos save one by one with an x/y progress; long-press the watermark block to drag it, and the watermark stays locked to the photo's orientation
 - **Gallery**: newest first, 4 columns by default (pinch 3–6), multi-select delete, tap opens the system viewer; auto-refresh on return
 
 ## Tech stack
