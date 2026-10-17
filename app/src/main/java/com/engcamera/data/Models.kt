@@ -55,7 +55,7 @@ data class WatermarkStyle(
     val webBgOpacity: Int = 85,               // 网页模板面板不透明度百分比（0-100；独立于原生 bgOpacity，互不串值）
     // ---- v158 液态玻璃：参数对齐 AndroidLiquidGlassView 库（预览用库视图实时渲染，
     //      成片用同款 AGSL 着色器的 CPU 移植；dp 值按 画面宽/360 等比换算成 px 保证预览/成片一致）----
-    val glassCornerRadius: Float = 15f,      // 圆角：占上限百分比 0~100（100%=短边4/5上限；v236 前为 dp 0~99，存量数值直通视觉近似；默认 15）
+    val glassCornerRadius: Float = 15f,      // 圆角：占上限百分比 0~100（100%=短边1/2 正半圆封顶；v236 前为 dp 0~99，存量数值直通视觉近似；默认 15）
     val glassRefractionHeight: Float = 20f,  // 折射高度 dp（库默认 20，12~50）
     val glassRefractionOffset: Float = 70f,  // 折射偏移 dp（库默认 70，20~120，渲染时取负）
     val glassTintAlpha: Float = 0f,          // 着色透明度 0~1（库默认 0）
