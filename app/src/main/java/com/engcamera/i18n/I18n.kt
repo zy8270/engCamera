@@ -59,9 +59,7 @@ private val EN_DICT: Map<String, String> = mapOf(
     "快门" to "Shutter",
     // —— 设置抽屉 ——
     "设置" to "Settings",
-    "保存原图原视频" to "Save originals",
-    "开启后拍照/录像同时保存无水印原片；相册排序为水印版在前、原图第二张" to
-        "Also save the unwatermarked original; watermarked version sorts first",
+    "同时保存原片" to "Also save originals",
     "快门声音" to "Shutter sound",
     "音量键拍照" to "Volume key shutter",
     "文件保存路径" to "Save location",
@@ -72,15 +70,15 @@ private val EN_DICT: Map<String, String> = mapOf(
     "恢复默认" to "Reset to default",
     "已恢复默认 DCIM/Camera" to "Restored to default DCIM/Camera",
     "文件保存路径已设为 {path}" to "Save location set to {path}",
-    "取景器截帧背景" to "Viewfinder still background",
-    "进入水印编辑器时，截取取景器当前画面作为水印预览背景；关闭则使用几何图案背景" to
-        "Capture the current viewfinder frame as the editor preview background; off uses a geometric pattern",
-    "新建工程标题联动" to "Project title link",
-    "新建工程组时，输入的工程名自动填入该工程水印的标题" to
-        "Auto-fill the watermark title with the new project group name",
+    "取景器截帧背景" to "Viewfinder backdrop",
+    "编辑器预览背景用取景器画面，关闭则用几何图案" to
+        "Use the viewfinder frame as the editor preview background; off = geometric pattern",
+    "工程名作水印标题" to "Project name as title",
+    "新建工程时，工程名自动填入水印标题" to
+        "New projects auto-fill the watermark title with their name",
     "水印跟随重力" to "Follow gravity",
-    "开启后水印文字按重力 90° 旋转（跟随照片方向）；关闭后使用固定角度。水印位置（九宫格/拖动）始终以重力为准：选「下方」无论横竖屏都贴物理下方" to
-        "Rotate watermark text with gravity; off uses a fixed angle. Position is always gravity-based",
+    "横拍、倒置时水印文字随重力保持正向；关闭则使用固定角度" to
+        "Keep watermark text upright in any orientation; off = fixed angle",
     "固定旋转角" to "Fixed rotation",
     "外观" to "Appearance",
     "跟随系统" to "System",
@@ -197,7 +195,7 @@ private val EN_DICT: Map<String, String> = mapOf(
     "DCIM/Camera（默认）" to "DCIM/Camera (default)",
     "MediaStore 插入失败" to "MediaStore insert failed",
     "当前：{cur}" to "Current: {cur}",
-    "主界面按音量键视同按下快门" to "Volume keys act as shutter",
+    "按音量键即可拍照" to "Take photos with the volume keys",
     "从文件选择…" to "Pick from file…",
     "保存路径已设为 {p}" to "Save location set to {p}",
     "共 {n} 项" to "{n} items",
@@ -224,8 +222,8 @@ private val EN_DICT: Map<String, String> = mapOf(
     "已导入：{name}" to "Imported: {name}",
     "已选 {n} 项" to "{n} selected",
     "已选中" to "Selected",
-    "开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）" to
-        "Also save the unwatermarked original alongside (two files per shot)",
+    "拍照/录像时额外保留一份无水印原片" to
+        "Keep an unwatermarked copy of every photo and video",
     "当前模板" to "Current template",
     "当前没有可导出的模板" to "Nothing to export",
     "当前：" to "Current: ",
@@ -237,8 +235,8 @@ private val EN_DICT: Map<String, String> = mapOf(
         "Freeze time? All later photos use this fixed time (clear to resume auto).",
     "确定定格" to "Freeze",
     "时间将定格" to "Time will be frozen",
-    "拍照时播放系统快门音（部分地区的法律要求开启）" to
-        "Play system shutter sound (required in some regions)",
+    "拍照时播放快门音（部分地区法规强制）" to
+        "Play a shutter sound (required by law in some regions)",
     "拍照时自动填写时间" to "Auto-fill time at capture",
     "授予权限" to "Grant permission",
     "排序手柄（长按拖动）" to "Drag handle (long-press to sort)",
@@ -283,9 +281,9 @@ private val EN_DICT: Map<String, String> = mapOf(
     "颜色" to "Color",
     "相机未就绪" to "Camera not ready",
     // —— 拍照后确认（v193） ——
-    "拍照后确认" to "Confirm after capture",
-    "拍摄后先进预览确认并支持标注（箭头/矩形/笔刷），点保存才入相册；开启时拍照不再闪黑" to
-        "Preview & annotate (arrow/rect/brush) before saving; no black flash while on",
+    "拍照后确认" to "Review after capture",
+    "拍完先预览，可标注后再决定是否保存" to
+        "Preview each shot — annotate before deciding to save",
     "保存照片" to "Save photo",
     "丢弃" to "Discard",
     "撤销标注" to "Undo annotation",

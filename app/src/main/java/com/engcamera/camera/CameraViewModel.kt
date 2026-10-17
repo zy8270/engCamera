@@ -163,6 +163,31 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     var engine: CameraEngine? = null
     var rebind: (() -> Unit)? = null
 
+    /** 带强制重绑的恢复通道（bindKey 未变时普通 rebind 会被去重跳过，标注态返回拍摄用） */
+    var rebindForce: (() -> Unit)? = null
+
+    /**
+     * 相机临时挂起（拍照确认标注 / 添加水印模式，用户需求 2026-10-17）：这两种
+     * 界面都不需要相机，挂着既耗电又让「常亮」闪光灯一直亮——unbindAll 后用例
+     * 全部解绑、相机设备关闭，torch 随之熄灭（本页此刻是唯一绑定方，无跨页互抢，
+     * 安全）。挂起标志必须让 bind 路径拒绑：从编辑器返回时 annotating 仍为 true，
+     * 新引擎 init 回调/生命周期恢复若照常重绑会把相机重新打开。
+     */
+    var cameraPaused = false
+        private set
+
+    fun pauseCameraForAnnotation() {
+        cameraPaused = true
+        engine?.unbind()
+    }
+
+    /** 返回拍摄（保存/丢弃/退出标注模式）：清挂起并强制重绑，onEngineBound 的
+     *  setFlashMode 会按 flashIndex 重新点亮常亮闪光灯 */
+    fun resumeCameraForShooting() {
+        cameraPaused = false
+        rebindForce?.invoke()
+    }
+
     private val analyzer = BarcodeAnalyzer { content -> onBarcode(content) }
     fun barcodeAnalyzer(): BarcodeAnalyzer = analyzer
 
@@ -417,15 +442,36 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     // ---------- 添加水印模式（给相册已有图片加水印） ----------
 
-    /** 进入/退出添加水印模式；录像或拍照处理中不允许进入 */
+    /** 进入/退出添加水印模式；录像或拍照处理中不允许进入。
+     *  v225：进出都清标注（选图后进标注态，标注随保存烧录，见 confirmAnnotate） */
     fun toggleAnnotate() {
         val st = _ui.value
         if (st.annotating) {
-            _ui.update { it.copy(annotating = false, annotateQueue = emptyList(), annotateIndex = 0) }
+            _ui.update {
+                it.copy(
+                    annotating = false, annotateQueue = emptyList(), annotateIndex = 0,
+                    annotations = emptyList(), textItems = emptyList(), selectedTextId = null,
+                )
+            }
             return
         }
         if (st.recording || st.capturing) return
-        _ui.update { it.copy(annotating = true, annotateQueue = emptyList(), annotateIndex = 0) }
+        _ui.update {
+            it.copy(
+                annotating = true, annotateQueue = emptyList(), annotateIndex = 0,
+                annotations = emptyList(), textItems = emptyList(), selectedTextId = null,
+            )
+        }
+    }
+
+    /** 标注态点 X：清空当前选择回到「+」选图态（仍在添加水印模式，相机保持关闭） */
+    fun clearAnnotateSelection() {
+        _ui.update {
+            it.copy(
+                annotateQueue = emptyList(), annotateIndex = 0,
+                annotations = emptyList(), textItems = emptyList(), selectedTextId = null,
+            )
+        }
     }
 
     /** 图片选择完成：读宽高比（含 EXIF 旋转换算）入队 */
@@ -443,15 +489,18 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
     }
 
-    /** 确认当前图片：烧录水印保存到相册，多张时切下一张，全部完成后回到空选择状态 */
+    /** 确认当前图片：烧录水印+标注保存到相册，多张时切下一张，全部完成后回到空选择状态。
+     *  v225：标注（笔画+文字）随保存烧录（层级与拍照确认一致：标注盖水印），提交即清 UI */
     fun confirmAnnotate() {
         val st = _ui.value
         if (!st.annotating || st.annotateWorking) return
         val item = st.annotateQueue.getOrNull(st.annotateIndex) ?: return
-        _ui.update { it.copy(annotateWorking = true) }
+        val anns = st.annotations
+        val texts = st.textItems
+        _ui.update { it.copy(annotateWorking = true, annotations = emptyList(), textItems = emptyList(), selectedTextId = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                burnAnnotateAndSave(item.uri)
+                burnAnnotateAndSave(item.uri, anns, texts)
                 val nextIdx = st.annotateIndex + 1
                 _ui.update { s ->
                     if (nextIdx >= s.annotateQueue.size) {
@@ -485,8 +534,13 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         else opts.outWidth.toFloat() / opts.outHeight
     }.getOrNull()
 
-    /** 给相册图片烧录水印：解码（按上限采样）→ EXIF 转正 → 烧录 → 存 DCIM/Camera */
-    private suspend fun burnAnnotateAndSave(uri: Uri) = withContext(Dispatchers.IO) {
+    /** 给相册图片烧录水印+标注：解码（按上限采样）→ EXIF 转正 → 烧录 → 存 DCIM/Camera。
+     *  标注归一化坐标×成片宽高与预览照片盒同构（v225，与 confirmSave 一致：标注盖水印） */
+    private suspend fun burnAnnotateAndSave(
+        uri: Uri,
+        annotations: List<CameraUiState.PhotoAnnotation> = emptyList(),
+        textItems: List<CameraUiState.TextItem> = emptyList(),
+    ) = withContext(Dispatchers.IO) {
         val deg = runCatching {
             context.contentResolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees } ?: 0
         }.getOrDefault(0)
@@ -511,7 +565,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val out = Bitmap.createBitmap(upright.width, upright.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawBitmap(upright, 0f, 0f, null)
-        val effective = effectiveWatermark.value
+        // 添加水印模式锁定纵向（v226）：用原始状态（rotationDeg 不随量化重力角
+        // 替换），与该模式预览一致——横持手机保存也不会把水印转 90°
+        val effective = watermark.value
         WatermarkRenderer.drawOnCanvas(
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, 0,
@@ -519,7 +575,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             gravityAnchor = true, // 待标注图片本身摆正显示，图片系=重力系，锚点直接落位
         )
         upright.recycle()
-        MediaSaver.saveBitmap(context, out, treeUri = saveTreeUri())
+        // 标注最后画（盖在水印上，与预览层级一致）；无标注时返回原件不拷贝
+        val final = drawAnnotations(out, annotations, textItems)
+        MediaSaver.saveBitmap(context, final, treeUri = saveTreeUri())
+        if (final !== out) final.recycle()
         out.recycle()
     }
 
@@ -571,6 +630,37 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         anchorPersistJob = viewModelScope.launch {
             delay(400)
             container.repository.persistStateToDisk()
+        }
+    }
+
+    /** 添加水印模式专用拖动（v226）：该模式锁定纵向、不受重力影响，屏幕增量
+     *  直接落锚（不走 S→G 的 −roll 旋转，横持手机拖动方向也跟手） */
+    fun onDragWatermarkLocked(dx: Float, dy: Float) {
+        container.repository.update(persist = false) { st ->
+            st.copy(
+                anchorX = (st.anchorX + dx).coerceIn(0f, 1f),
+                anchorY = (st.anchorY + dy).coerceIn(0f, 1f),
+            )
+        }
+        anchorPersistJob?.cancel()
+        anchorPersistJob = viewModelScope.launch {
+            delay(400)
+            container.repository.persistStateToDisk()
+        }
+    }
+
+    /** 拍照确认页长按拖水印（v232）：改的是快门瞬间冻结的 confirmWatermark——
+     *  保存正是用它烧录，返回拍摄/下一张后全局锚点不受影响（不动仓库状态）。
+     *  增量为照片盒归一化；确认页照片正立（图片系=重力系），直落锚 */
+    fun onDragConfirmWatermark(dx: Float, dy: Float) {
+        _ui.update { st ->
+            val cur = st.confirmWatermark ?: return@update st
+            st.copy(
+                confirmWatermark = cur.copy(
+                    anchorX = (cur.anchorX + dx).coerceIn(0f, 1f),
+                    anchorY = (cur.anchorY + dy).coerceIn(0f, 1f),
+                ),
+            )
         }
     }
 

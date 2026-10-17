@@ -562,7 +562,9 @@ class WatermarkRepository(private val context: Context) {
                 type = def.type,
                 label = def.label,
                 value = existing?.value.orEmpty(),
-                enabled = def.enabled,
+                // 字段开关跟随用户现状（用户需求 2026-10-17）：切模板不改数据和开关；
+                // 目标模板独有的新字段才用模板默认开关（模板特殊情况）
+                enabled = existing?.enabled ?: def.enabled,
                 isTitle = def.isTitle,
                 deletable = def.deletable,
             )

@@ -43,10 +43,12 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** 相机帧快照：等比缩到 ≤480 宽的自有位图。玻璃磨砂采样无需高分辨率——CPU 渲染走
- *  半分辨率卡片（480 恰好让其 1:1 采样），降采样越小后台管线每拍越轻（v168） */
-private fun snapshotBackdrop(src: android.graphics.Bitmap): android.graphics.Bitmap {
-    val s = if (src.width > 480) 480f / src.width else 1f
+/** 相机帧快照：等比缩到 ≤maxDim 宽的自有位图。玻璃磨砂采样无需高分辨率——CPU 渲染走
+ *  半分辨率卡片（480 恰好让其 1:1 采样），降采样越小后台管线每拍越轻（v168）。
+ *  v230：静态图（添加水印/编辑器/确认页）折射要跟烧录一致，走全分辨率（maxDim=1080），
+ *  半分辨率是相机实时帧时代的优化——CPU 路径如今只服务静态底，一次性渲染无需省。 */
+private fun snapshotBackdrop(src: android.graphics.Bitmap, maxDim: Int = 480): android.graphics.Bitmap {
+    val s = if (src.width > maxDim) maxDim.toFloat() / src.width else 1f
     if (s < 1f) {
         return android.graphics.Bitmap.createScaledBitmap(
             src,
@@ -88,6 +90,9 @@ fun WatermarkOverlay(
     // 标注/文字工具——否则水印块 down.consume() 会吞掉其覆盖区域的
     // 点按，文字工具点在水印上无法添加文字）
     interactive: Boolean = true,
+    // 水印块/齿轮占位在浮层坐标系内的包围盒回调（v226）：宿主（添加水印标注态）
+    // 据此做长按命中判定——按住水印块才接管拖动移动水印；不需要时传 null
+    onBlockBounds: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
@@ -157,6 +162,10 @@ fun WatermarkOverlay(
             val blockReady = block != null && block.width > 1
             if (state.fields.none { it.enabled } || !blockReady) {                // 全部字段关闭：齿轮占位图标替代水印块（仅预览不烧录），
                 // 位置=水印锚点（重新启用字段后水印出现在这里），点击进编辑器、可拖动
+                androidx.compose.runtime.SideEffect {
+                    // 零矩形=无可长按拖动的水印块（长按命中判定恒 false）
+                    onBlockBounds?.invoke(androidx.compose.ui.geometry.Rect.Zero)
+                }
                 val iconPx = with(density) { 52.dp.toPx() }.roundToInt()
                 val (gl, gt) = WatermarkRenderer.positionBlock(
                     widthPx, heightPx, iconPx, iconPx,
@@ -223,6 +232,20 @@ fun WatermarkOverlay(
                 rotationDeg,
                 edgeToEdge = WatermarkRenderer.isFullWidthBar(state),
             )
+            // 上报水印块包围盒（旋转后的视觉包围盒矩形，供宿主长按命中判定，v226）；
+            // ±90° 时卡片绕中心转了 90°，视觉包围盒宽高互换（v232 修：确认页横拍
+            // 冻结旋转 +90 时旧上报矩形偏向一侧，长按命中区与所见卡片错位）
+            androidx.compose.runtime.SideEffect {
+                val swapped = ((rotationDeg.roundToInt() % 180) + 180) % 180 == 90
+                val rect = if (swapped) {
+                    val l = left + (dw - dh) / 2f
+                    val t = top + (dh - dw) / 2f
+                    androidx.compose.ui.geometry.Rect(l, t, l + dh, t + dw)
+                } else {
+                    androidx.compose.ui.geometry.Rect(left, top, left + dw, top + dh)
+                }
+                onBlockBounds?.invoke(rect)
+            }
             // 液态玻璃：文本块下面先铺玻璃卡——相机预览用库 LiquidGlassView（GPU 实时折射），
             // 标注模式/无源场景用 CPU 版（与库同公式）；编辑器缩略图等无采样时画占位示意
             if (isLiquid && dw > 1) {
@@ -261,13 +284,23 @@ fun WatermarkOverlay(
                             .requiredSize(with(density) { gw.toDp() }, with(density) { gh.toDp() }),
                     )
                 } else {
-                    // CPU 版玻璃卡（旋转方向/无采样源）：取帧必须在主线程（TextureView 离开
-                    // UI 线程取不到画面——v168 实测全黑，v167 在主线程取帧时玻璃正常渲染），
-                    // 主线程只做取帧一件事；降采样、逐像素渲染、位图回收全在后台线程，
-                    // 成品就绪才回主线程换一次位图。半分辨率渲染：磨砂无损观感、像素量 1/4。
+                    // CPU 版玻璃卡（旋转方向/无采样源）：v230 起全分辨率渲染——本路径
+                    // 只服务静态底（添加水印图片/编辑器图案/确认页照片），一次性渲染
+                    // 无需省；半分辨率+480 快照是相机实时帧时代的优化，会把折射带
+                    // 糊没（用户实测"预览没有扭曲衍射、成片却正确"）。取帧仍须主线程
+                    // （TextureView 离开 UI 线程取不到画面——v168），降采样、逐像素
+                    // 渲染、位图回收全在后台线程，成品就绪才回主线程换一次位图。
                     var glassBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+                    // v232：left/top 不再作为 LaunchedEffect key，经 rememberUpdatedState
+                    // 读最新值——拖动水印时锚点逐帧变化，作为 key 会每帧重启整条管线
+                    // （取消旧协程+起新协程+新 Channel，多个僵尸渲染并发写 glassBmp），
+                    // 真机表现为拖动后玻璃卡停在占位/陈旧帧、折射色散消失。现在管线按
+                    // （样式/尺寸/采样源）长存，轮询发现位置变化就在原协程里以当前
+                    // left/top 重渲一张（70ms 一拍 ≈14fps，静态底完全够跟手）
+                    val leftCur by androidx.compose.runtime.rememberUpdatedState(left)
+                    val topCur by androidx.compose.runtime.rememberUpdatedState(top)
                     LaunchedEffect(
-                        state.style, dw, dh, rotationDeg, left, top,
+                        state.style, block, dw, dh, rotationDeg,
                         widthPx, heightPx, scaleByShortSide, backdropProvider,
                     ) {
                         val provider = backdropProvider ?: return@LaunchedEffect
@@ -276,15 +309,24 @@ fun WatermarkOverlay(
                         )
                         launch {
                             try {
+                                var nullPolls = 0
                                 while (true) {
                                     val fresh = runCatching { provider.invoke() }.getOrNull()
                                     if (fresh != null && !fresh.isRecycled) {
+                                        if (nullPolls > 0) {
+                                            android.util.Log.w("GlassDbg", "provider recovered after $nullPolls null polls")
+                                        }
+                                        nullPolls = 0
                                         frames.trySend(fresh)
                                     } else if (glassBmp == null) {
+                                        nullPolls++
+                                        if (nullPolls == 1 || nullPolls % 50 == 0) {
+                                            android.util.Log.w("GlassDbg", "provider null x$nullPolls → placeholder card")
+                                        }
                                         // 无采样源：占位示意（淡底+描边），有图后自动换实采样
                                         glassBmp = runCatching {
                                             WatermarkRenderer.renderGlassCard(
-                                                state, scaleBasis / 2, dw / 2, dh / 2, null, placeholder = true,
+                                                state, scaleBasis, dw, dh, null, placeholder = true,
                                             )
                                         }.getOrNull()
                                     }
@@ -296,29 +338,49 @@ fun WatermarkOverlay(
                         }
                         withContext(kotlinx.coroutines.Dispatchers.Default) {
                             var lastFresh: android.graphics.Bitmap? = null
+                            var lastLeft = Float.NaN
+                            var lastTop = Float.NaN
                             var small: android.graphics.Bitmap? = null
                             try {
                                 for (fresh in frames) {
-                                    // 静态图（标注/编辑器截帧）同实例只处理一次；相机帧一拍一换
-                                    if (fresh.isRecycled || fresh === lastFresh) continue
-                                    val prev = lastFresh
+                                    if (fresh.isRecycled) continue
+                                    // 静态图（标注/编辑器/确认页）同实例只处理一次；相机帧一拍一换；
+                                    // 拖动水印改 left/top 也触发重渲（采样区随卡片挪动）
+                                    val posChanged = leftCur != lastLeft || topCur != lastTop
+                                    if (fresh === lastFresh && !posChanged) continue
                                     lastFresh = fresh
-                                    val s = snapshotBackdrop(fresh)
-                                    prev?.recycle() // 相机上一帧取完即还（~6MB/拍，不回收会 GC 风暴）
+                                    lastLeft = leftCur
+                                    lastTop = topCur
+                                    // v230：静态底全分辨率采样（上限 1080，与编辑器截帧同量级）。
+                                    // 快照包 runCatching：提供方位图可能被宿主并发回收（确认页
+                                    // 照片保存/丢弃即回收），失败跳过本拍等下一轮，不杀管线
+                                    val s = runCatching { snapshotBackdrop(fresh, maxDim = 1080) }
+                                        .getOrNull() ?: continue
+                                    // 提供方帧一律不在这里回收：静态图归提供方所有（跨图切换时
+                                    // 宿主已回收，重复回收无害但多余）；相机路径提供方自己在
+                                    // 下一次采样时回收上一帧（PreviewArea backdropProvider）
                                     small?.recycle()
                                     small = s
                                     val frame = WatermarkRenderer.FrameContext(
-                                        s, widthPx / 2, heightPx / 2, rotationDeg, left / 2, top / 2,
+                                        s, widthPx, heightPx, rotationDeg, leftCur, topCur,
                                     )
-                                    val out = runCatching {
+                                    val render = runCatching {
                                         WatermarkRenderer.renderGlassCard(
-                                            state, scaleBasis / 2, dw / 2, dh / 2, frame,
+                                            state, scaleBasis, dw, dh, frame,
                                         )
-                                    }.getOrNull()
+                                    }
+                                    if (render.isFailure) {
+                                        android.util.Log.w(
+                                            "GlassDbg",
+                                            "renderGlassCard failed card=${dw}x$dh",
+                                            render.exceptionOrNull(),
+                                        )
+                                    }
                                     // 玻璃卡成品不做任何手工回收（含替换与退出）：滑杆拖动会高频
                                     // 重启渲染效应，隔代回收会在主线程仍在绘制时把位图回收掉
                                     // （真机崩溃实锤 2026-10-16 "Canvas: trying to use a recycled
                                     // bitmap"）；成品位图量小，交给 GC
+                                    val out = render.getOrNull()
                                     if (out != null) glassBmp = out
                                 }
                             } finally {

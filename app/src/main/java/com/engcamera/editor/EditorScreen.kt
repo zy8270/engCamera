@@ -365,7 +365,9 @@ fun EditorScreen(onBack: () -> Unit) {
                             onTap = { showTemplates = true },
                             onDrag = { _, _ -> }, // 静态预览纯展示，禁止拖动
                             modifier = Modifier.fillMaxSize(),
-                            backdropProvider = if (useBackdrop) {
+                            backdropProvider = if (useBackdrop && frame != null) {
+                                // 采样源必须跟随实际显示的背景（v226）：截帧不可用时
+                                // 背景已回落几何图案，采样仍取 null 会让玻璃只剩占位底
                                 { frame }
                             } else {
                                 patternProvider
