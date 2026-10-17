@@ -755,7 +755,7 @@ private fun SliderOptionRow(
         // 倍率类（边框粗细/记录点大小/网页整体缩放/阴影大小·扩散·垂直偏移）按 ×N 显示
         "borderWidth", "recDotSize", "webScale", "textShadow", "shadowSpread", "shadowOffsetY" ->
             "×" + "%.1f".format(current)
-        // 液态玻璃圆角：百分比 0~100（v236 起单位改百分比，100%=短边 1/2 正半圆封顶）
+        // 液态玻璃圆角：占短边百分比 0~50（50%=正半圆封顶，默认 15%）
         "glassCornerRadius" -> "${current.roundToInt()}%"
         // 液态玻璃库参数：dp/半径类按原始数值显示（标签已带单位）
         "glassRefractionHeight", "glassRefractionOffset", "glassBlurRadius" ->
