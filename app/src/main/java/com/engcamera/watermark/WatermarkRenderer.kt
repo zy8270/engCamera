@@ -514,8 +514,7 @@ object WatermarkRenderer {
         val sep = if (titleHeight > 0 && t.rows.isNotEmpty()) (width * 0.014f).coerceAtLeast(4f) else 0f
         val blockHeight = (titleHeight + sep + bodyHeight + baseInset * 2).toInt().coerceAtLeast(1)
         val w = blockWidth.toFloat()
-        // 圆角=百分比 0~100 线性映射到上限（短边 1/2 正半圆，v237：超半圆 SDF
-        // 退化变尖；v236 起单位改百分比——dp 没有短边参照容易拉过头）
+        // 圆角=占短边百分比 0~50（50%=正半圆封顶，v238；超半圆 SDF 退化变尖）
         val cornerClamped = glassCornerPx(style.glassCornerRadius, blockWidth, blockHeight)
 
         val bitmap = Bitmap.createBitmap(blockWidth, blockHeight, Bitmap.Config.ARGB_8888)
@@ -599,11 +598,11 @@ object WatermarkRenderer {
     /** 库 dp 参数 → 当前画布 px */
     private fun glassDpToPx(dp: Float, canvasWidth: Int): Float = dp * canvasWidth / 360f
 
-    /** 液态玻璃圆角：百分比 0~100 线性映射到上限=卡片短边 1/2（正半圆/胶囊，
-     *  v237 用户拍板：超过半圆 SDF 退化、圆角反而变尖，100% 恰好拉满正半圆；
+    /** 液态玻璃圆角：占卡片短边的百分比，0~50（50%=正半圆/胶囊封顶，再大 SDF
+     *  退化变尖——v238 用户拍板：百分比即占短边比例、上限 50%、默认 15%；
      *  与短边比例恒定、分辨率无关） */
     fun glassCornerPx(pct: Float, cardW: Int, cardH: Int): Float =
-        (min(cardW, cardH) / 2f * pct.coerceIn(0f, 100f) / 100f).coerceAtLeast(1f)
+        (min(cardW, cardH) * pct.coerceIn(0f, 50f) / 100f).coerceAtLeast(1f)
 
     /**
      * 渲染液态玻璃卡（成片烧录/标注预览/占位示意）。公式逐行对齐库的
@@ -622,8 +621,7 @@ object WatermarkRenderer {
     ): Bitmap {
         val style = state.style
         val width = canvasWidth.coerceAtLeast(1)
-        // 圆角：百分比 0~100 线性映射到上限（短边 1/2 正半圆，v237——超半圆
-        // SDF 退化变尖；v236 起单位从 dp 改百分比，dp 没有短边参照容易拉过头）
+        // 圆角：占短边百分比 0~50（50%=正半圆封顶，v238；v236 起从 dp 改百分比）
         val corner = glassCornerPx(style.glassCornerRadius, cardW, cardH)
         val tintA = style.glassTintAlpha.coerceIn(0f, 1f)
         val tintR = style.glassTintRed.coerceIn(0f, 1f)

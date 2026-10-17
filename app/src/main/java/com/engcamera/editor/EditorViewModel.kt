@@ -127,7 +127,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 "borderWidth" -> s.style.copy(borderWidth = value)
                 "webScale" -> s.style.copy(webScale = value)
                 // 液态玻璃（AndroidLiquidGlassView 库参数）
-                "glassCornerRadius" -> s.style.copy(glassCornerRadius = value.coerceIn(0f, 100f)) // v236 百分比 0~100
+                "glassCornerRadius" -> s.style.copy(glassCornerRadius = value.coerceIn(0f, 50f)) // 占短边百分比 0~50
                 "glassRefractionHeight" -> s.style.copy(glassRefractionHeight = value.coerceIn(12f, 50f))
                 "glassRefractionOffset" -> s.style.copy(glassRefractionOffset = value.coerceIn(20f, 120f))
                 "glassTintAlpha" -> s.style.copy(glassTintAlpha = value.coerceIn(0f, 1f))

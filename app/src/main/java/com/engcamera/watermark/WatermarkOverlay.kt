@@ -266,7 +266,7 @@ fun WatermarkOverlay(
                         factory = { ctx -> LiquidGlassViewSafe(ctx) },
                         update = { v ->
                             v.bind(gs)
-                            // 圆角上限=短边 1/2 正半圆（v237，与烧录同规则）
+                            // 圆角=占短边百分比 0~50（50%=正半圆封顶，与烧录同规则）
                             v.setCornerRadius(
                                 WatermarkRenderer.glassCornerPx(st.glassCornerRadius, gw, gh),
                             )
