@@ -309,20 +309,11 @@ fun WatermarkOverlay(
                         )
                         launch {
                             try {
-                                var nullPolls = 0
                                 while (true) {
                                     val fresh = runCatching { provider.invoke() }.getOrNull()
                                     if (fresh != null && !fresh.isRecycled) {
-                                        if (nullPolls > 0) {
-                                            android.util.Log.w("GlassDbg", "provider recovered after $nullPolls null polls")
-                                        }
-                                        nullPolls = 0
                                         frames.trySend(fresh)
                                     } else if (glassBmp == null) {
-                                        nullPolls++
-                                        if (nullPolls == 1 || nullPolls % 50 == 0) {
-                                            android.util.Log.w("GlassDbg", "provider null x$nullPolls → placeholder card")
-                                        }
                                         // 无采样源：占位示意（淡底+描边），有图后自动换实采样
                                         glassBmp = runCatching {
                                             WatermarkRenderer.renderGlassCard(
@@ -364,23 +355,15 @@ fun WatermarkOverlay(
                                     val frame = WatermarkRenderer.FrameContext(
                                         s, widthPx, heightPx, rotationDeg, leftCur, topCur,
                                     )
-                                    val render = runCatching {
-                                        WatermarkRenderer.renderGlassCard(
-                                            state, scaleBasis, dw, dh, frame,
-                                        )
-                                    }
-                                    if (render.isFailure) {
-                                        android.util.Log.w(
-                                            "GlassDbg",
-                                            "renderGlassCard failed card=${dw}x$dh",
-                                            render.exceptionOrNull(),
-                                        )
-                                    }
                                     // 玻璃卡成品不做任何手工回收（含替换与退出）：滑杆拖动会高频
                                     // 重启渲染效应，隔代回收会在主线程仍在绘制时把位图回收掉
                                     // （真机崩溃实锤 2026-10-16 "Canvas: trying to use a recycled
                                     // bitmap"）；成品位图量小，交给 GC
-                                    val out = render.getOrNull()
+                                    val out = runCatching {
+                                        WatermarkRenderer.renderGlassCard(
+                                            state, scaleBasis, dw, dh, frame,
+                                        )
+                                    }.getOrNull()
                                     if (out != null) glassBmp = out
                                 }
                             } finally {
