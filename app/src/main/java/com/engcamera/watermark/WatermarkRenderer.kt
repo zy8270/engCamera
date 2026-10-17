@@ -330,10 +330,19 @@ object WatermarkRenderer {
         val canvas = Canvas(bitmap)
         val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withOpacity(style.bodyBgColor, style.bgOpacity).toInt() }
         canvas.drawRoundRect(RectF(0f, 0f, blockWidth.toFloat(), blockHeight.toFloat()), corner, corner, bg)
-        canvas.save()
-        canvas.translate(padH, padV)
-        layout.draw(canvas)
-        canvas.restore()
+        // 圆角内切行内缩（液态玻璃同款文字排列算法，用户需求 2026-10-17）：大圆角/
+        // 胶囊时行按其与圆弧的垂直距离水平内缩，文字不再压两端弧线。逐行绘制
+        // （长文本换行时各行按各自位置算内缩），条带 clip 只留本行
+        for (i in 0 until layout.lineCount) {
+            val top = layout.getLineTop(i)
+            val h = (layout.getLineBottom(i) - top).toFloat()
+            val inset = cornerLineInset(padV + top, h, blockHeight.toFloat(), corner)
+            canvas.save()
+            canvas.translate(padH + inset, padV)
+            canvas.clipRect(0f, top.toFloat(), blockWidth.toFloat(), top + h + 1f)
+            layout.draw(canvas)
+            canvas.restore()
+        }
         return Block(bitmap)
     }
 
@@ -485,16 +494,6 @@ object WatermarkRenderer {
         // 圆角钳制在长宽短边的 4/5：拉太大把文字拉出水印边缘（用户拍板 2026-10-16）
         val cornerClamped = cornerPx.coerceIn(1f, min(blockWidth, blockHeight) * 0.8f)
 
-        // 圆角内切几何的行水平内缩：inset = r − √(r² − (r−y)²)，
-        // y = 该行（含行高）距最近圆角边缘的垂直距离；y ≥ r（不在圆弧影响区）时为 0——
-        // 首尾行自动避开圆弧，中间行只留基础边距；标题不参与（恒居中，用户拍板 2026-10-16）
-        fun lineInset(y0: Float, lineH: Float): Float {
-            val y = min(y0, blockHeight - (y0 + lineH)).coerceAtLeast(0f)
-            if (y >= cornerClamped || cornerClamped <= 0f) return 0f
-            val d = (cornerClamped - y).coerceIn(0f, cornerClamped)
-            return cornerClamped - kotlin.math.sqrt(cornerClamped * cornerClamped - d * d)
-        }
-
         val bitmap = Bitmap.createBitmap(blockWidth, blockHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         // 阴影四参数可调（0=无阴影）：强度倍数×扩散（模糊半径）×透明度×垂直偏移
@@ -536,7 +535,7 @@ object WatermarkRenderer {
             y += it.height + sep * 0.5f
         }
         if (sep > 0f) {
-            val li = lineInset(y + sep * 0.5f, 1f)
+            val li = cornerLineInset(y + sep * 0.5f, 1f, blockHeight.toFloat(), cornerClamped)
             canvas.drawLine(
                 baseInset + li, y + sep * 0.5f, w - baseInset - li, y + sep * 0.5f,
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -552,10 +551,25 @@ object WatermarkRenderer {
             y += sep
         }
         t.rows.forEach { layout ->
-            drawWithShadow(layout, baseInset + lineInset(y, layout.height.toFloat()), y)
+            drawWithShadow(
+                layout,
+                baseInset + cornerLineInset(y, layout.height.toFloat(), blockHeight.toFloat(), cornerClamped),
+                y,
+            )
             y += layout.height
         }
         return Block(bitmap)
+    }
+
+    /** 圆角内切几何的行水平内缩（液态玻璃/单行横排共用文字排列算法）：
+     *  inset = r − √(r² − (r−y)²)，y = 该行（含行高）距最近圆角边缘的垂直距离；
+     *  y ≥ r（不在圆弧影响区）时 0——首尾行自动避开圆弧，中间行不受影响。
+     *  液态玻璃里标题不参与（恒居中，用户拍板 2026-10-16） */
+    private fun cornerLineInset(y0: Float, lineH: Float, blockH: Float, r: Float): Float {
+        val y = min(y0, blockH - (y0 + lineH)).coerceAtLeast(0f)
+        if (y >= r || r <= 0f) return 0f
+        val d = (r - y).coerceIn(0f, r)
+        return r - kotlin.math.sqrt(r * r - d * d)
     }
 
     /** 库 dp 参数 → 当前画布 px */
