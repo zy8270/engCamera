@@ -318,27 +318,51 @@ object WatermarkRenderer {
             val v = displayText(f, dynamic, style)
             if (f.label.isBlank()) v else "${f.label} $v"
         }
-        val textWidth = (blockWidth - width * style.paddingRatio * 2).toInt().coerceAtLeast(1)
-        val layout = newLayout(text, paint, textWidth)
         val padH = width * style.paddingRatio
-        // 上下留白收紧（此前 0.45 倍行高显得空旷，用户反馈 2026-10-13）
-        val padV = layout.height * 0.15f
-        val blockHeight = (layout.height + padV * 2).toInt().coerceAtLeast(1)
+        // 圆角内切行内缩（液态玻璃同款文字排列算法，用户需求 2026-10-17）：大圆角/
+        // 胶囊时行按其与圆弧的垂直距离水平内缩，文字不压两端弧线。v235 修右端溢出：
+        // v234 只把行向右平移了内缩量，测量宽度未变——文字填满时右端正好超出内缩
+        // 量压出弧线；现按最紧行的内缩量把测量宽度左右两侧收窄后重排（长文本宁可
+        // 换行不出界），几何随换行结果重算，最多迭代 3 轮防极端抖动
+        val baseTextWidth = (blockWidth - padH * 2).toInt().coerceAtLeast(1)
+        var measured = baseTextWidth
+        var layout = newLayout(text, paint, measured)
+        var padV = 0f
+        var blockHeight = 1
         // 圆角可调：cornerRatio 0..0.5，0.5=胶囊（原样式）
-        val corner = (blockHeight * style.cornerRatio).coerceAtMost(blockHeight / 2f)
+        var corner = 1f
+        var insets = FloatArray(1)
+        var iter = 0
+        while (true) {
+            // 上下留白收紧（此前 0.45 倍行高显得空旷，用户反馈 2026-10-13）
+            padV = layout.height * 0.15f
+            blockHeight = (layout.height + padV * 2).toInt().coerceAtLeast(1)
+            corner = (blockHeight * style.cornerRatio).coerceAtMost(blockHeight / 2f)
+            var worst = 0f
+            var maxLineW = 0f
+            insets = FloatArray(layout.lineCount)
+            for (i in insets.indices) {
+                val top = layout.getLineTop(i)
+                val h = (layout.getLineBottom(i) - top).toFloat()
+                insets[i] = cornerLineInset(padV + top, h, blockHeight.toFloat(), corner)
+                if (insets[i] > worst) worst = insets[i]
+                maxLineW = maxOf(maxLineW, layout.getLineWidth(i))
+            }
+            val avail = (baseTextWidth - worst * 2).toInt().coerceAtLeast(1)
+            if (maxLineW <= avail || ++iter >= 3) break
+            measured = avail
+            layout = newLayout(text, paint, measured)
+        }
         val bitmap = Bitmap.createBitmap(blockWidth, blockHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withOpacity(style.bodyBgColor, style.bgOpacity).toInt() }
         canvas.drawRoundRect(RectF(0f, 0f, blockWidth.toFloat(), blockHeight.toFloat()), corner, corner, bg)
-        // 圆角内切行内缩（液态玻璃同款文字排列算法，用户需求 2026-10-17）：大圆角/
-        // 胶囊时行按其与圆弧的垂直距离水平内缩，文字不再压两端弧线。逐行绘制
-        // （长文本换行时各行按各自位置算内缩），条带 clip 只留本行
+        // 逐行绘制（各行按各自与圆弧的垂直距离内缩），条带 clip 只留本行
         for (i in 0 until layout.lineCount) {
             val top = layout.getLineTop(i)
             val h = (layout.getLineBottom(i) - top).toFloat()
-            val inset = cornerLineInset(padV + top, h, blockHeight.toFloat(), corner)
             canvas.save()
-            canvas.translate(padH + inset, padV)
+            canvas.translate(padH + insets[i], padV)
             canvas.clipRect(0f, top.toFloat(), blockWidth.toFloat(), top + h + 1f)
             layout.draw(canvas)
             canvas.restore()
