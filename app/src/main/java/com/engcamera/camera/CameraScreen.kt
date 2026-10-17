@@ -1242,7 +1242,6 @@ private fun AnnotateArea(
                     loadAnnotateBackdrop(context, it2.uri)
                 }
             }
-            android.util.Log.w("GlassDbg", "annotate backdrop loaded=${bmp != null} ${bmp?.width}x${bmp?.height} uri=$item")
             val old = annotateBackdrop
             annotateBackdrop = bmp
             old?.recycle()
@@ -1391,8 +1390,6 @@ private suspend fun loadAnnotateBackdrop(context: android.content.Context, uri: 
             .build()
         val dr = coil.Coil.imageLoader(context).execute(req).drawable
         (dr as? android.graphics.drawable.BitmapDrawable)?.bitmap
-    }.onFailure {
-        android.util.Log.w("GlassDbg", "coil backdrop load failed", it)
     }.getOrNull()
 
 /** 添加水印空态的玻璃采样底（v232）：复刻空态可见内容（主题底+圆圈+/提示文字）
