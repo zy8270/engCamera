@@ -97,6 +97,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -108,10 +109,12 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -153,6 +156,8 @@ fun CameraScreen(
     val vm: CameraViewModel = viewModel()
     val context = LocalContext.current
     val effective by vm.effectiveWatermark.collectAsState()
+    // 原始水印状态（v226）：添加水印模式锁定纵向专用——不受量化重力角替换
+    val rawWatermark by vm.watermark.collectAsState()
     val dynamic by vm.dynamic.collectAsState()
     val ui by vm.ui.collectAsState()
 
@@ -271,6 +276,9 @@ fun CameraScreen(
                 // 查一次流状态，1.5s（3 查）仍无流才强制重绑（force 跳过同键去重），
                 // 最多再试 2 次；间隔足够宽不搅 HAL（vivo 热身窗口内密集重绑会卡死）
                 fun rebindWithWatchdog(attempt: Int) {
+                    // 相机挂起中（确认标注/添加水印）：一切重绑请求（init 回调/
+                    // 布局监听/模式切换）都不许把相机打开；恢复走 resumeCameraForShooting
+                    if (vm.cameraPaused) return
                     engine.bind(previewView, vm.barcodeAnalyzer(), force = attempt > 0)
                     vm.onEngineBound()
                     var checks = 0
@@ -296,6 +304,9 @@ fun CameraScreen(
                     check()
                 }
                 vm.rebind = { rebindWithWatchdog(0) }
+                // 确认标注返回拍摄用的强制重绑通道（attempt=1 首绑即 force，
+                // 绕过 bindKey 去重——unbind 后相机字段未清，普通 rebind 会被跳过）
+                vm.rebindForce = { rebindWithWatchdog(1) }
                 // 预览控件完成测量后重绑一次，让 ViewPort 拿到真实宽高（录像比例与预览一致的关键）
                 val layoutListener = android.view.View.OnLayoutChangeListener { v, _, _, _, _, oldL, oldT, oldR, oldB ->
                     if (v.width > 0 && v.height > 0 &&
@@ -322,6 +333,12 @@ fun CameraScreen(
                                 vm.startSensors()
                             }
                             vm.refreshLatest()
+                            // 确认标注/添加水印中从后台回来：bindToLifecycle 会自动
+                            // 重绑把相机打开（常亮闪光灯随要点亮），这两种界面仍不
+                            // 需要相机——再关一次（cameraPaused 本就为 true）
+                            if (vm.ui.value.confirming || vm.ui.value.annotating) {
+                                vm.pauseCameraForAnnotation()
+                            }
                         }
 
                         Lifecycle.Event.ON_PAUSE -> vm.stopEverything()
@@ -335,6 +352,7 @@ fun CameraScreen(
                     previewView.removeOnLayoutChangeListener(layoutListener)
                     vm.stopEverything()
                     vm.rebind = null
+                    vm.rebindForce = null
                     // 进编辑器前截取取景器一帧作静态预览背景（低配所见即所得，用户拍板 2026-10-16）
                     EditorBackdrop.capture(previewView)
                     // 释放闸门：先注册可用性回调再关相机——编辑器据此在真正释放完后
@@ -345,6 +363,30 @@ fun CameraScreen(
             }
 
             val rot = ui.uiRotation
+
+            // 拍照确认标注 / 添加水印（相册选图）两种界面都临时关闭相机（用户需求
+            // 2026-10-17）：界面上用不到相机，挂着既耗电又让「常亮」闪光灯整段亮着。
+            // 进态先关（unbindAll 即关相机设备，torch 随之熄灭，本页此刻是唯一绑定
+            // 方），退态（保存/丢弃/切模式）再强制重绑——onEngineBound 的 setFlashMode
+            // 按用户设定恢复常亮。wasIdle 只认「真⇄假」跳变：首次组合不凭空触发；
+            // 两态互换（理论不可能）不重绑。cameraPaused 挂起标志让 rebindWithWatchdog
+            // 拒绝一切重绑，堵住「从编辑器返回时 annotating 仍为 true，init 回调把
+            // 相机重开」的竞态
+            val previewIdle = ui.confirming || ui.annotating
+            var wasPreviewIdle by remember { mutableStateOf(false) }
+            LaunchedEffect(previewIdle) {
+                when {
+                    previewIdle && !wasPreviewIdle -> {
+                        wasPreviewIdle = true
+                        vm.pauseCameraForAnnotation()
+                    }
+
+                    !previewIdle && wasPreviewIdle -> {
+                        wasPreviewIdle = false
+                        vm.resumeCameraForShooting()
+                    }
+                }
+            }
 
             Column(Modifier.fillMaxSize()) {
                 // 顶部控制条：闪光灯左、设置右；图标角度随重力，位置不变；
@@ -385,7 +427,9 @@ fun CameraScreen(
                             )
                         }
                     }
-                    if (ui.confirming && ui.annotationTool == 3) {
+                    if ((ui.confirming || (ui.annotating && ui.annotateQueue.isNotEmpty())) &&
+                        ui.annotationTool == 3
+                    ) {
                         Text(
                             I18n.t("点击图片任意位置添加文字"),
                             color = Color.White,
@@ -400,26 +444,28 @@ fun CameraScreen(
                 }
 
                 // 预览区：3:4 填满宽度；添加水印模式下换成黑屏选图/图片预览
+                // 选图入口（空态 + 号与下载键共用，v232）
+                val launchAnnotatePicker = {
+                    annotatePicker.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageOnly,
+                        ),
+                    )
+                }
                 if (ui.annotating) {
                     AnnotateArea(
                         modifier = Modifier.fillMaxWidth(),
                         vm = vm,
-                        effective = effective,
+                        watermark = rawWatermark,
                         dynamic = dynamic,
                         ui = ui,
                         onOpenEditor = {
-                            // 进编辑器前截取取景器一帧（编辑器组合早于本页 dispose，
-                            // 必须在跳转动作时截，v188 在 dispose 里截导致读到空）
-                            EditorBackdrop.capture(previewView)
+                            // 相机在添加水印模式已关（v223），截帧只会拿到空/陈旧画面——
+                            // 清掉旧帧让编辑器走几何图案背景，液态玻璃采样图案位图（v226）
+                            EditorBackdrop.clear()
                             onOpenEditor()
                         },
-                        onPick = {
-                            annotatePicker.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                ),
-                            )
-                        },
+                        onPick = launchAnnotatePicker,
                     )
                 } else if (ui.confirming) {
                     ConfirmArea(
@@ -447,7 +493,11 @@ fun CameraScreen(
                 }
 
                 // 底部控制条紧贴预览下方，不推到屏幕底部
-                BottomBar(rot, ui, vm, ::startRecordingWithPermission, onOpenGallery, { showProjectGroups = true })
+                BottomBar(
+                    rot, ui, vm, ::startRecordingWithPermission, onOpenGallery,
+                    { showProjectGroups = true },
+                    onPickAnnotateImage = launchAnnotatePicker,
+                )
             }
 
             // 音量键→快门（设置开启时 Activity 转发；仅相机页组合期间注册）
@@ -674,12 +724,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            I18n.t("保存原图原视频"),
+                            I18n.t("同时保存原片"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("开启后拍照/录像同时保存无水印原片与水印成片（相册里每次出两个文件）"),
+                            I18n.t("拍照/录像时额外保留一份无水印原片"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -702,7 +752,7 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("拍摄后先进预览确认并支持标注（箭头/矩形/笔刷），点保存才入相册；开启时拍照不再闪黑"),
+                            I18n.t("拍完先预览，可标注后再决定是否保存"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -723,7 +773,7 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("拍照时播放系统快门音（部分地区的法律要求开启）"),
+                            I18n.t("拍照时播放快门音（部分地区法规强制）"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -744,7 +794,7 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("主界面按音量键视同按下快门"),
+                            I18n.t("按音量键即可拍照"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -765,7 +815,7 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("开启后水印文字按重力 90° 旋转（跟随照片方向）；关闭后使用固定角度。水印位置（九宫格/拖动）始终以重力为准：选「下方」无论横竖屏都贴物理下方"),
+                            I18n.t("横拍、倒置时水印文字随重力保持正向；关闭则使用固定角度"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -813,7 +863,7 @@ private fun SettingsDrawer(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("进入水印编辑器时，截取取景器当前画面作为水印预览背景；关闭则使用几何图案背景"),
+                            I18n.t("编辑器预览背景用取景器画面，关闭则用几何图案"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -830,12 +880,12 @@ private fun SettingsDrawer(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            I18n.t("新建工程标题联动"),
+                            I18n.t("工程名作水印标题"),
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            I18n.t("新建工程组时，输入的工程名自动填入该工程水印的标题"),
+                            I18n.t("新建工程时，工程名自动填入水印标题"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1155,17 +1205,90 @@ private fun FocusIndicator(center: Offset) {
 private fun AnnotateArea(
     modifier: Modifier,
     vm: CameraViewModel,
-    effective: com.engcamera.data.WatermarkState,
+    // 原始水印状态（v226 锁定纵向）：本模式不受重力影响——rotationDeg 不随量化
+    // 重力角替换（effectiveWatermark 会替换），以手机屏幕底部为底渲染与烧录
+    watermark: com.engcamera.data.WatermarkState,
     dynamic: com.engcamera.data.DynamicValues,
     ui: CameraUiState,
     onOpenEditor: () -> Unit,
     onPick: () -> Unit,
 ) {
     val context = LocalContext.current
-    Box(modifier.aspectRatio(3f / 4f).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        val item = ui.annotateQueue.getOrNull(ui.annotateIndex)
+    val item = ui.annotateQueue.getOrNull(ui.annotateIndex)
+    // 3:4 外框实际像素（空态玻璃采样底按内缩后尺寸合成，v232）
+    var frameWpx by remember { mutableStateOf(0) }
+    var frameHpx by remember { mutableStateOf(0) }
+    // 空态框内底色（用户需求 2026-10-17）：圆角边线范围内日间主题浅底（F8FAFD，
+    // 截图取色 F7F9FB）改 DFE3EB 更沉的灰蓝；框外一圈仍走主题背景（同快门区），
+    // 夜间框内也保持主题深底——只改本预览区不动全局主题
+    val emptyBase = if (com.engcamera.ui.theme.LocalAppDarkTheme.current) {
+        MaterialTheme.colorScheme.background
+    } else {
+        Color(0xFFDFE3EB)
+    }
+    // v225 与拍照确认共用 AnnotationFrame；v226 空态=主题底+可编辑水印浮层
+    Box(
+        modifier
+            .aspectRatio(3f / 4f)
+            .background(MaterialTheme.colorScheme.background)
+            .onSizeChanged { frameWpx = it.width; frameHpx = it.height },
+    ) {
+        // 液态玻璃采样源：当前图片的 EXIF 转正降采样位图（与烧录基准一致）。
+        // 解码走 IO 线程（大图主线程解码会卡帧）；结果带日志便于排查玻璃不显（v229）
+        var annotateBackdrop by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+        LaunchedEffect(item?.uri) {
+            val bmp = item?.let { it2 ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    loadAnnotateBackdrop(context, it2.uri)
+                }
+            }
+            android.util.Log.w("GlassDbg", "annotate backdrop loaded=${bmp != null} ${bmp?.width}x${bmp?.height} uri=$item")
+            val old = annotateBackdrop
+            annotateBackdrop = bmp
+            old?.recycle()
+        }
+        val backdropProvider = remember { { annotateBackdrop } }
+        // 水印块包围盒（WatermarkOverlay 上报，长按命中判定用）
+        var wmBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+        AnnotationFrame(
+            hasPhoto = item != null,
+            photoAr = item?.aspect ?: (3f / 4f),
+            ui = ui,
+            vm = vm,
+            modifier = Modifier.fillMaxSize(),
+            // 选图前 DFE3EB 沉底（+号/提示文字在浅灰蓝上可读性更好，用户需求
+            // 2026-10-17），选图后换透明格
+            showChecker = item != null,
+            emptyBase = emptyBase,
+            watermarkBounds = { wmBounds },
+            onWatermarkDrag = { dx, dy -> vm.onDragWatermarkLocked(dx, dy) },
+        ) {
+            val cur = item
+            if (cur != null) {
+                coil.compose.AsyncImage(
+                    model = cur.uri,
+                    contentDescription = I18n.t("待加水印图片"),
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                WatermarkOverlay(
+                    state = watermark,
+                    dynamic = dynamic,
+                    rotationDeg = watermark.rotationDeg,
+                    onTap = { },
+                    onDrag = { _, _ -> },
+                    modifier = Modifier.fillMaxSize(),
+                    scaleByShortSide = true, // 烧录按图片短边缩放，横图预览须一致
+                    backdropProvider = backdropProvider,
+                    // gravityRollDeg 保持默认 0：图片摆正显示且本模式锁定纵向，锚点直接落位；
+                    // 手势全让给标注层（长按水印块拖动走 AnnotationFrame 的接管通道）
+                    interactive = false,
+                    onBlockBounds = { wmBounds = it },
+                )
+            }
+        }
         if (item == null) {
-            // 空状态：素色屏 + 大圆圈 +，点击打开图片选择器
+            // 空状态：主题底画框中央大圆圈 +，点击打开图片选择器
             Column(
                 Modifier
                     .fillMaxSize()
@@ -1194,47 +1317,51 @@ private fun AnnotateArea(
                     fontSize = 13.sp,
                 )
             }
-        } else {
-            // 图片按原比例居中（等比缩放），水印浮层铺在图片实际显示区上（所见即所得）
-            // 液态玻璃采样源：当前图片的 EXIF 转正降采样位图（与烧录基准一致）
-            var annotateBackdrop by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-            LaunchedEffect(item.uri) {
-                val bmp = loadAnnotateBackdrop(context, item.uri)
-                val old = annotateBackdrop
-                annotateBackdrop = bmp
-                old?.recycle()
-            }
-            val backdropProvider = remember { { annotateBackdrop } }
-            Box(
-                Modifier
-                    .align(Alignment.Center)
-                    .fillMaxSize()
-                    .padding(vertical = 40.dp),
+            // 空态玻璃采样底（v232）：把空态可见内容（主题底+圆圈+/提示文字）复刻成
+            // 一张位图供液态玻璃采样——旧版空态采样源恒 null，玻璃只剩占位卡（拖到
+            // 中央盖住加号/文字时"折射色散消失"的直接原因）。内缩 26dp 与浮层
+            // padding(13.dp) 同几何，内容居中关系一致（对称内缩中心不变）
+            val density = LocalDensity.current
+            val insetPx = with(density) { 26.dp.toPx() }.roundToInt()
+            val bgArgb = emptyBase.toArgb()
+            val fgArgb = MaterialTheme.colorScheme.onSurface.toArgb()
+            val subArgb = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
+            val hint = I18n.t("点击选择要加水印的图片")
+            val emptyBackdrop = remember(
+                frameWpx, frameHpx, insetPx, bgArgb, fgArgb, subArgb, hint,
             ) {
-                Box(
-                    Modifier
-                        .align(Alignment.Center)
-                        .aspectRatio(item.aspect),
-                ) {
-                    coil.compose.AsyncImage(
-                        model = item.uri,
-                        contentDescription = I18n.t("待加水印图片"),
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    WatermarkOverlay(
-                        state = effective,
-                        dynamic = dynamic,
-                        rotationDeg = effective.rotationDeg,
-                        onTap = onOpenEditor,
-                        onDrag = { dx, dy -> vm.onDragWatermark(dx, dy) },
-                        modifier = Modifier.fillMaxSize(),
-                        scaleByShortSide = true, // 烧录按图片短边缩放，横图预览须一致
-                        backdropProvider = backdropProvider,
-                        // gravityRollDeg 保持默认 0：待标注图片本身摆正显示，图片系=重力系，锚点直接落位
-                    )
+                val w = frameWpx - insetPx
+                val h = frameHpx - insetPx
+                if (w > 0 && h > 0) {
+                    runCatching {
+                        renderAnnotateEmptyBackdrop(
+                            w, h, density.density, bgArgb, fgArgb, subArgb, hint,
+                        )
+                    }.getOrNull()
+                } else {
+                    null
                 }
             }
+            // provider 实例稳定（v232）：内联 lambda 每次重组都是新实例，会让玻璃
+            // 管线把 backdropProvider 当 key 逐帧重启（拖动期间重组频繁）
+            val emptyBackdropProvider = remember(emptyBackdrop) { { emptyBackdrop } }
+            // 实时水印浮层（声明在「+」之后=上层：块内点按进编辑器/拖动改位，
+            // 其余区域落到「+」的选图层）。同步锁定纵向，拖动不旋回重力系。
+            // 内缩与灰框一致（10dp padding+3dp 边框）：底部锚点的水印随框缩小
+            // 落回框内，不压边框（用户反馈 2026-10-17）
+            WatermarkOverlay(
+                state = watermark,
+                dynamic = dynamic,
+                rotationDeg = watermark.rotationDeg,
+                onTap = onOpenEditor,
+                onDrag = { dx, dy -> vm.onDragWatermarkLocked(dx, dy) },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(13.dp),
+                scaleByShortSide = true,
+                backdropProvider = emptyBackdropProvider,
+            )
+        } else if (ui.annotateQueue.size > 1) {
             // 顶部进度 x/y
             Text(
                 "${ui.annotateIndex + 1}/${ui.annotateQueue.size}",
@@ -1248,33 +1375,71 @@ private fun AnnotateArea(
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
-        // 退出添加水印模式：点底部的笔或拍照/录像按钮
     }
 }
 
-/** 标注图降采样位图（EXIF 转正，≤720 边长）：液态玻璃采样用，与烧录基准同一方向 */
-private fun loadAnnotateBackdrop(context: android.content.Context, uri: Uri): android.graphics.Bitmap? = runCatching {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        ?: return@runCatching null
-    var sample = 1
-    while (bounds.outWidth / (sample * 2) >= 720 || bounds.outHeight / (sample * 2) >= 720) sample *= 2
-    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-    val src = context.contentResolver.openInputStream(uri)?.use {
-        BitmapFactory.decodeStream(it, null, opts)
-    } ?: return@runCatching null
-    val deg = context.contentResolver.openInputStream(uri)?.use {
-        androidx.exifinterface.media.ExifInterface(it).rotationDegrees
-    } ?: 0
-    if (deg == 0) {
-        src
-    } else {
-        val m = android.graphics.Matrix().apply { postRotate(deg.toFloat()) }
-        Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).also {
-            if (it != src) src.recycle()
-        }
+/** 标注图降采样位图（EXIF 转正，≤720 边）：液态玻璃采样用，与烧录基准同一方向。
+ *  v231 改走 Coil：直连 BitmapFactory 在部分设备（vivo 实测 GlassDbg loaded=false）
+ *  对相册选择器 URI 加载失败，而 Coil 显示同一张图正常——采样与显示统一走同一
+ *  加载器（软件位图供玻璃 getPixels 采样，EXIF 方向自动转正） */
+private suspend fun loadAnnotateBackdrop(context: android.content.Context, uri: Uri): android.graphics.Bitmap? =
+    runCatching {
+        val req = coil.request.ImageRequest.Builder(context)
+            .data(uri)
+            .allowHardware(false) // 玻璃采样要读像素，禁硬件位图
+            .size(720, 720) // 等比压到最长边 ≤720（与旧解码上限一致）
+            .build()
+        val dr = coil.Coil.imageLoader(context).execute(req).drawable
+        (dr as? android.graphics.drawable.BitmapDrawable)?.bitmap
+    }.onFailure {
+        android.util.Log.w("GlassDbg", "coil backdrop load failed", it)
+    }.getOrNull()
+
+/** 添加水印空态的玻璃采样底（v232）：复刻空态可见内容（主题底+圆圈+/提示文字）
+ *  画进一张与浮层同尺寸的位图——液态玻璃盖在 +/文字上时有真实折射/色散。
+ *  只求视觉一致（内容静态简单），不与真实 UI 逐像素对齐；sp 按 dp 近似。
+ *  几何与真实布局同构：圆圈中心=画面中心（浮层对称内缩中心不变），文字在
+ *  圆下 14dp 处垂直居中 */
+private fun renderAnnotateEmptyBackdrop(
+    w: Int,
+    h: Int,
+    density: Float,
+    bgArgb: Int,
+    fgArgb: Int,
+    subArgb: Int,
+    hint: String,
+): android.graphics.Bitmap {
+    val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    canvas.drawColor(bgArgb)
+    fun dpx(v: Float) = v * density
+    val cx = w / 2f
+    val cy = h / 2f
+    val r = dpx(48f) // 圆圈 96dp 的半径
+    val circle = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = dpx(3f)
+        color = fgArgb
     }
-}.getOrNull()
+    canvas.drawCircle(cx, cy, r, circle)
+    val fmi = android.graphics.Paint.FontMetricsInt()
+    val plus = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = fgArgb
+        textSize = dpx(44f)
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        textAlign = android.graphics.Paint.Align.CENTER
+    }
+    plus.getFontMetricsInt(fmi)
+    canvas.drawText("+", cx, cy - (fmi.ascent + fmi.descent) / 2f, plus)
+    val hintPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = subArgb
+        textSize = dpx(13f)
+        textAlign = android.graphics.Paint.Align.CENTER
+    }
+    hintPaint.getFontMetricsInt(fmi)
+    canvas.drawText(hint, cx, cy + r + dpx(14f) - (fmi.ascent + fmi.descent) / 2f, hintPaint)
+    return bmp
+}
 
 /** 画质入口图标：方格胶片（圆角外框+四角齿孔）中央叠 HD 字样，单色线条风格对齐 material 图标 */@Composable
 private fun QualityGlyph(tint: Color, modifier: Modifier = Modifier) {
@@ -1324,6 +1489,7 @@ private fun BottomBar(
     startRecordingWithPermission: (Boolean) -> Unit,
     onOpenGallery: () -> Unit,
     onOpenProjectGroups: () -> Unit,
+    onPickAnnotateImage: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -1332,6 +1498,8 @@ private fun BottomBar(
             .padding(bottom = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // 标注态（添加水印模式已选图）：底栏与拍照确认同一套——工具/颜色/X/蓝色下载
+        val annotatingPhoto = ui.annotating && ui.annotateQueue.isNotEmpty()
         // 扫码结果气泡（快门键上方；文字保持横向便于阅读）
         if (ui.bubble != null) {
             Surface(
@@ -1374,9 +1542,10 @@ private fun BottomBar(
                 )
             }
             // 编辑（笔）/拍照/录像：同一胶囊容器、统一样式——未激活 onSurfaceVariant、激活主色。
-            // 确认态切换为三个标注工具（箭头/矩形/笔刷），带过渡动画（用户拍板 2026-10-16）
+            // 确认态与添加水印标注态切换为标注工具（箭头/矩形/笔刷/文字），带过渡动画
+            // （用户拍板 2026-10-16；v225 扩到添加水印）
             androidx.compose.animation.AnimatedContent(
-                targetState = ui.confirming,
+                targetState = ui.confirming || annotatingPhoto,
                 transitionSpec = {
                     ContentTransform(
                         fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
@@ -1385,8 +1554,8 @@ private fun BottomBar(
                 },
                 label = "modeTools",
                 modifier = Modifier.align(Alignment.Center),
-            ) { confirming ->
-                if (confirming) {
+            ) { annotUi ->
+                if (annotUi) {
                     Row(
                         Modifier
                             .clip(RoundedCornerShape(20.dp))
@@ -1481,7 +1650,7 @@ private fun BottomBar(
                 } // else（模式胶囊）
             } // AnimatedContent
             // 画质选择（靠右；录像/照片档位互斥显示，仅一档时无可选不显示）。入口=胶片+HD 图标
-            // 确认态切换为标注颜色选择器（默认红，用户拍板 2026-10-16）
+            // 确认态/添加水印标注态切换为标注颜色选择器（默认红，用户拍板 2026-10-16）
             data class QOption(val label: String, val spec: String)
             val qualityList = if (ui.videoMode) {
                 ui.videoQualities.map { QOption(it.label, it.spec) }
@@ -1491,10 +1660,10 @@ private fun BottomBar(
             val qualityIndex = if (ui.videoMode) ui.videoQualityIndex else ui.photoQualityIndex
             var colorMenuOpen by remember { mutableStateOf(false) }
             var showFreeColor by remember { mutableStateOf(false) }
-            if (!ui.annotating && (qualityList.size > 1 || ui.confirming)) {
+            if (qualityList.size > 1 || ui.confirming || annotatingPhoto) {
                 Box(Modifier.align(Alignment.CenterEnd)) {
                     androidx.compose.animation.AnimatedContent(
-                        targetState = ui.confirming,
+                        targetState = ui.confirming || annotatingPhoto,
                         transitionSpec = {
                             ContentTransform(
                                 fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
@@ -1502,8 +1671,8 @@ private fun BottomBar(
                             )
                         },
                         label = "qualityColor",
-                    ) { confirming ->
-                        if (confirming) {
+                    ) { annotUi ->
+                        if (annotUi) {
                             Box(
                                 Modifier
                                     .clip(RoundedCornerShape(10.dp))
@@ -1680,22 +1849,35 @@ private fun BottomBar(
                 ui = ui,
                 vm = vm,
                 startRecordingWithPermission = startRecordingWithPermission,
+                onPickAnnotateImage = onPickAnnotateImage,
                 modifier = Modifier.align(Alignment.Center),
             )
 
-            // 前后摄切换（右）：确认态变 X=丢弃不保存（用户拍板 2026-10-16）
+            // 前后摄切换（右）：确认态=X 丢弃不保存；添加水印标注态=X 返回选图态；
+            // 拍摄态=前后摄切换（用户拍板 2026-10-16，v225 扩）
             Box(
                 Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 24.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { if (ui.confirming) vm.confirmDiscard() else vm.flipCamera() }
+                    .clickable {
+                        when {
+                            ui.confirming -> vm.confirmDiscard()
+                            annotatingPhoto -> vm.clearAnnotateSelection()
+                            else -> vm.flipCamera()
+                        }
+                    }
                     .padding(8.dp),
             ) {
+                val annotX = ui.confirming || annotatingPhoto
                 Icon(
-                    if (ui.confirming) Icons.Default.Close else Icons.Default.Cameraswitch,
-                    contentDescription = if (ui.confirming) I18n.t("丢弃") else I18n.t("前后摄切换"),
+                    if (annotX) Icons.Default.Close else Icons.Default.Cameraswitch,
+                    contentDescription = when {
+                        ui.confirming -> I18n.t("丢弃")
+                        annotatingPhoto -> I18n.t("返回")
+                        else -> I18n.t("前后摄切换")
+                    },
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .size(22.dp)
@@ -1713,16 +1895,25 @@ private fun Shutter(
     vm: CameraViewModel,
     startRecordingWithPermission: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    // 添加水印空态点下载=发起选图（等于点 +，用户需求 2026-10-17）
+    onPickAnnotateImage: () -> Unit = {},
 ) {
     val quickRecording = remember { mutableStateOf(false) }
-    // 确认态（v193）：快门=下载图标，点击保存入相册（用户拍板 2026-10-16）
-    if (ui.confirming) {
+    // 确认态/添加水印标注态（v193/v225）：快门=下载图标，点击保存入相册（用户拍板 2026-10-16）
+    if (ui.confirming || ui.annotating) {
         Box(
             modifier
                 .size(78.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primary)
-                .clickable { vm.confirmSave() },
+                .clickable {
+                    when {
+                        ui.confirming -> vm.confirmSave()
+                        // 空态没东西可存：下载键复用为选图入口
+                        ui.annotateQueue.isEmpty() -> onPickAnnotateImage()
+                        else -> vm.confirmAnnotate()
+                    }
+                },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
