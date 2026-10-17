@@ -311,7 +311,6 @@ private val EN_DICT: Map<String, String> = mapOf(
     "光晕大小" to "Glow size",
     "卡片不透明度" to "Card opacity",
     "圆角" to "Corner",
-    "圆角半径(dp)" to "Corner radius (dp)",
     "底色不透明度" to "Background opacity",
     "强调色" to "Accent color",
     "折射偏移(dp)" to "Refraction offset (dp)",
