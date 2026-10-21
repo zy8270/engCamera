@@ -25,8 +25,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -79,6 +81,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -696,10 +700,10 @@ private fun EditFieldDialog(
     onDismiss: () -> Unit,
     onConfirm: (label: String, value: String, isTitle: Boolean) -> Unit,
 ) {
-    // key 用 field 本身（data class 结构相等），确保字段更新后重开对话框显示最新值
-    var label by remember(field) { mutableStateOf(field.label) }
+    // key 用 field.id（稳定标识），避免 field 对象在重组时被重建（如上层重组传了结构相等但不同实例）
+    var label by remember(field.id) { mutableStateOf(field.label) }
     // 时间/位置为空时预填当前值方便编辑（只在打开瞬间取值，不会随每秒刷新重置用户输入）
-    val initialValue = remember(field) {
+    val initialValue = remember(field.id) {
         when {
             field.type == FieldType.DATETIME && field.value.isBlank() -> currentTime
             field.type == FieldType.LOCATION && field.value.isBlank() ->
@@ -710,10 +714,10 @@ private fun EditFieldDialog(
             else -> field.value
         }
     }
-    var value by remember(field) { mutableStateOf(initialValue) }
+    var value by remember(field.id) { mutableStateOf(initialValue) }
     // 内容框用 TextFieldValue：光标/选区可控——自动聚焦时光标落在文字末尾而非最前
     // （用户反馈 2026-10-16）；程序赋值（跟随刷新）也始终把光标放到末尾
-    var valueTfv by remember(field) {
+    var valueTfv by remember(field.id) {
         mutableStateOf(
             androidx.compose.ui.text.input.TextFieldValue(
                 initialValue,
@@ -728,13 +732,13 @@ private fun EditFieldDialog(
             androidx.compose.ui.text.TextRange(t.length),
         )
     }
-    var isTitle by remember(field) { mutableStateOf(field.isTitle) }
+    var isTitle by remember(field.id) { mutableStateOf(field.isTitle) }
     // 时间字段手动值二次确认：非空时间会定格后续所有拍照，防误触（预填值+随手点确定）
-    var confirmTimeFreeze by remember(field) { mutableStateOf(false) }
+    var confirmTimeFreeze by remember(field.id) { mutableStateOf(false) }
     // 刷新定位/天气后，输入框跟随最新自动值——仅对话框本地状态：
     // 点"确定"才写入字段（进入自定义），点"取消"不留任何痕迹；一打字即停止跟随
-    var followLocation by remember(field) { mutableStateOf(false) }
-    var followWeather by remember(field) { mutableStateOf(false) }
+    var followLocation by remember(field.id) { mutableStateOf(false) }
+    var followWeather by remember(field.id) { mutableStateOf(false) }
     LaunchedEffect(followLocation, autoLocation) {
         if (followLocation) {
             autoLocation.takeIf {
@@ -756,7 +760,9 @@ private fun EditFieldDialog(
     // requestFocus 之外必须把对话框窗口 softInputMode 设为 ALWAYS_VISIBLE，否则部分系统不弹键盘
     val valueFocus = remember { FocusRequester() }
     val dialogView = LocalView.current
-    LaunchedEffect(field) {
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(field.id) {
         valueFocus.requestFocus()
         (dialogView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
             ?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
@@ -866,18 +872,18 @@ private fun EditFieldDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    val historyState = rememberLazyListState()
+                    val scrollState = rememberScrollState()
                     // 每行约 35dp；高度随条数动态（最多 5 行），条数少不撑空白
                     val historyRows = history.size.coerceAtMost(5)
-                    Box(Modifier.height((historyRows * 35).dp)) {
-                        LazyColumn(
-                            state = historyState,
+                    val trackDp = (historyRows * 35).dp
+                    Box(Modifier.height(trackDp)) {
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(end = 12.dp),
+                                .padding(end = 12.dp)
+                                .verticalScroll(scrollState),
                         ) {
-                            items(history.size) { idx ->
-                                val item = history[idx]
+                            history.forEach { item ->
                                 Text(
                                     item,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -886,35 +892,28 @@ private fun EditFieldDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(6.dp))
-                                        .clickable { value = item }
+                                        .clickable {
+                                            focusManager.clearFocus()
+                                            keyboard?.hide()
+                                            setValueText(item)
+                                        }
                                         .padding(horizontal = 8.dp, vertical = 6.dp),
                                 )
                             }
                         }
                         // 滚动条：滑块位置在绘制阶段更新（graphicsLayer 读派生状态），
                         // 不随滚动逐帧重组，避免抖动
-                        val trackDp = (historyRows * 35).dp
-                        val infoForSize = historyState.layoutInfo
-                        val totalItems = infoForSize.totalItemsCount
-                        val visibleItems = infoForSize.visibleItemsInfo.size
-                        if (totalItems > visibleItems && visibleItems > 0) {
-                            val thumbDp = (trackDp * visibleItems / totalItems).coerceAtLeast(24.dp)
-                            val fraction by remember {
-                                androidx.compose.runtime.derivedStateOf {
-                                    val info = historyState.layoutInfo
-                                    val total = info.totalItemsCount
-                                    val first = info.visibleItemsInfo.firstOrNull() ?: return@derivedStateOf 0f
-                                    val itemPx = first.size
-                                    val viewportPx = info.viewportEndOffset - info.viewportStartOffset
-                                    val contentPx = itemPx * total
-                                    if (contentPx <= viewportPx) return@derivedStateOf 0f
-                                    val scrolledPx = first.index * itemPx - first.offset
-                                    (scrolledPx.toFloat() / (contentPx - viewportPx)).coerceIn(0f, 1f)
-                                }
+                        val fraction by remember {
+                            androidx.compose.runtime.derivedStateOf {
+                                val max = scrollState.maxValue
+                                if (max <= 0) 0f else scrollState.value.toFloat() / max
                             }
-                            val density = LocalDensity.current
-                            val trackPx = with(density) { trackDp.toPx() }
-                            val thumbPx = with(density) { thumbDp.toPx() }
+                        }
+                        val density = LocalDensity.current
+                        val trackPx = with(density) { trackDp.toPx() }
+                        val thumbDp = (trackDp * historyRows / history.size).coerceAtLeast(24.dp)
+                        val thumbPx = with(density) { thumbDp.toPx() }
+                        if (history.size > historyRows) {
                             Box(
                                 Modifier
                                     .align(Alignment.TopEnd)

@@ -12,7 +12,7 @@
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, and multiple **project profiles** switch the whole watermark set in one tap. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.9 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.10 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -42,6 +42,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Video watermark: ticking time + rotation sync**: in videos the watermark clock ticks with the recording; rotating mid-recording keeps position and angle in sync with what the preview showed (ticking time applies to native templates; web templates freeze at record start)
 - **Gravity-rotating UI chrome**: zoom badge / focal capsule / REC badge / flash icon rotate with device orientation without overflowing
 - **Save originals** (setting, off by default): keep an un-watermarked copy alongside; both galleries order watermarked-newest first, original second
+- **Project name in the file name**: saved as `engCamera_<project>_<time>.jpg` (videos: `.mp4`), so shots from different projects stay distinguishable; illegal characters are stripped, whitespace becomes `_`, capped at 24 chars, and an empty project name falls back to `engCamera_<time>`
 - **Custom save location** (setting): default `DCIM/Camera`, or any SAF folder you pick
 - **Shutter sound / volume-key shutter** (settings): shutter sound off by default (enable where local law requires); volume keys act as shutter, on by default
 
@@ -88,7 +89,7 @@ Or open the project in Android Studio. Release signing uses a project-local keys
 
 ## Save location
 
-Defaults to `DCIM/Camera/` with the `engCamera_` prefix (e.g. `engCamera_20261011_153000.jpg`; with "save originals" the watermarked copy keeps the base name and the original gets "(1)"); a custom folder (SAF) can be chosen in settings.
+Defaults to `DCIM/Camera/` with the `engCamera_` prefix plus the current project name (e.g. `engCamera_SiteA_20261021_102019.jpg`, or `engCamera_20261021_102019.jpg` when the project name is empty; with "save originals" the watermarked copy keeps the base name and the original gets "(1)"); a custom folder (SAF) can be chosen in settings.
 
 ## Verified devices
 

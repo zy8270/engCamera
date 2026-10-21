@@ -45,9 +45,19 @@ object MediaSaver {
     /** 排序键：优先拍摄时间，缺失回退入库时间（相册从新到旧） */
     private fun MediaEntry.sortKey(): Long = if (takenAtMs > 0) takenAtMs else dateAdded * 1000
 
-    fun timeStampName(ext: String): String {
+    /** 工程组名进文件名前先清理：去掉文件系统非法字符，空白转下划线，限长避免超长文件名 */
+    private fun sanitizeProjectName(raw: String): String =
+        raw.trim()
+            .replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]"), "")
+            .replace(Regex("\\s+"), "_")
+            .trim('_')
+            .take(24)
+
+    /** engCamera_工程组名称_yyyyMMdd_HHmmss.ext；工程组名为空时退回 engCamera_yyyyMMdd_HHmmss.ext */
+    fun timeStampName(ext: String, projectName: String? = null): String {
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return "$FILE_PREFIX$ts.$ext"
+        val group = sanitizeProjectName(projectName.orEmpty())
+        return if (group.isEmpty()) "$FILE_PREFIX$ts.$ext" else "$FILE_PREFIX${group}_$ts.$ext"
     }
 
     /** 保存水印成片 JPEG，返回 Uri。takenAtMs 显式写入 DATE_TAKEN（不写则由系统猜，双张保存时排序不稳定） */
@@ -56,15 +66,16 @@ object MediaSaver {
         bitmap: Bitmap,
         takenAtMs: Long? = null,
         treeUri: Uri? = null,
+        projectName: String? = null,
     ): Uri = withContext(Dispatchers.IO) {
         if (treeUri != null) {
-            return@withContext saveToTree(context, treeUri, "image/jpeg", takenAtMs) { out ->
+            return@withContext saveToTree(context, treeUri, "image/jpeg", takenAtMs, projectName) { out ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
             }
         }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("jpg"))
+            put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("jpg", projectName))
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
             takenAtMs?.let { put(MediaStore.MediaColumns.DATE_TAKEN, it) }
             if (Build.VERSION.SDK_INT >= 29) {
@@ -90,9 +101,10 @@ object MediaSaver {
         src: File,
         takenAtMs: Long? = null,
         treeUri: Uri? = null,
+        projectName: String? = null,
     ): Uri = withContext(Dispatchers.IO) {
         if (treeUri != null) {
-            val doc = saveToTree(context, treeUri, "video/mp4", takenAtMs) { out ->
+            val doc = saveToTree(context, treeUri, "video/mp4", takenAtMs, projectName) { out ->
                 src.inputStream().use { it.copyTo(out) }
             }
             src.delete()
@@ -100,7 +112,7 @@ object MediaSaver {
         }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("mp4"))
+            put(MediaStore.MediaColumns.DISPLAY_NAME, timeStampName("mp4", projectName))
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
             takenAtMs?.let { put(MediaStore.MediaColumns.DATE_TAKEN, it) }
             if (Build.VERSION.SDK_INT >= 29) {
@@ -128,6 +140,7 @@ object MediaSaver {
         treeUri: Uri,
         mime: String,
         takenAtMs: Long?,
+        projectName: String?,
         write: (java.io.OutputStream) -> Unit,
     ): Uri = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
@@ -135,7 +148,7 @@ object MediaSaver {
             treeUri,
             DocumentsContract.getTreeDocumentId(treeUri),
         )
-        val doc = DocumentsContract.createDocument(resolver, treeDoc, mime, timeStampName(mime.substringAfterLast('/')))
+        val doc = DocumentsContract.createDocument(resolver, treeDoc, mime, timeStampName(mime.substringAfterLast('/'), projectName))
             ?: error(I18n.t("无法在所选目录创建文件"))
         resolver.openOutputStream(doc)?.use { out -> write(out) } ?: error(I18n.t("无法写入所选目录"))
         // 等媒体扫描完成拿到 MediaStore Uri（缩略图/相册立即可见）；3 秒超时回退 document uri

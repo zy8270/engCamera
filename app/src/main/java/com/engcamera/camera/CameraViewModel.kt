@@ -374,6 +374,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     // ---------- 工程组（相机页快捷切换） ----------
     override val projects: StateFlow<com.engcamera.data.ProjectGroups> = container.repository.projects
 
+    /** 当前工程组名称：嵌入成片文件名（engCamera_工程组_时间），方便按工程区分 */
+    private fun currentProjectName(): String? =
+        container.repository.projects.value.let { g ->
+            g.projects.firstOrNull { it.id == g.current }?.name
+        }
+
     override fun selectProject(id: String) = container.repository.selectProject(id)
 
     override fun createProject(name: String, nameEdited: Boolean) = container.repository.createProject(name, nameEdited)
@@ -577,7 +583,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         upright.recycle()
         // 标注最后画（盖在水印上，与预览层级一致）；无标注时返回原件不拷贝
         val final = drawAnnotations(out, annotations, textItems)
-        MediaSaver.saveBitmap(context, final, treeUri = saveTreeUri())
+        MediaSaver.saveBitmap(context, final, treeUri = saveTreeUri(), projectName = currentProjectName())
         if (final !== out) final.recycle()
         out.recycle()
     }
@@ -1065,23 +1071,24 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             return out
         }
         val saveOriginal = container.repository.saveOriginal.value
+        val pName = currentProjectName()
         if (saveOriginal) {
-            runCatching { MediaSaver.saveBitmap(context, photo, takenAt, treeUri = saveTreeUri()) }
+            runCatching { MediaSaver.saveBitmap(context, photo, takenAt, treeUri = saveTreeUri(), projectName = pName) }
         }
         if (noWatermark) {
             // 水印全关：成片=画面本身；存标注版一张（+可选原图）
-            MediaSaver.saveBitmap(context, annotated, takenAt + 1000, treeUri = saveTreeUri())
+            MediaSaver.saveBitmap(context, annotated, takenAt + 1000, treeUri = saveTreeUri(), projectName = pName)
             tempFile.delete()
             return
         }
         val wmOnPhoto = burn(photo)
-        MediaSaver.saveBitmap(context, wmOnPhoto, takenAt + 1000, treeUri = saveTreeUri())
+        MediaSaver.saveBitmap(context, wmOnPhoto, takenAt + 1000, treeUri = saveTreeUri(), projectName = pName)
         wmOnPhoto.recycle()
         // 标注+水印版：先烧水印，再在**水印之上**画标注（与确认预览层级一致，用户拍板 2026-10-16）
         if (anns.isNotEmpty() || texts.isNotEmpty()) {
             val wmBase = burn(photo)
             val overlay = drawAnnotations(wmBase, anns, texts)
-            MediaSaver.saveBitmap(context, overlay, takenAt + 2000, treeUri = saveTreeUri())
+            MediaSaver.saveBitmap(context, overlay, takenAt + 2000, treeUri = saveTreeUri(), projectName = pName)
             overlay.recycle()
             if (wmBase !== overlay) wmBase.recycle()
         }
@@ -1097,7 +1104,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）
         val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
         if (noWatermark) {
-            MediaSaver.saveBitmap(context, upright, System.currentTimeMillis(), treeUri = saveTreeUri())
+            MediaSaver.saveBitmap(context, upright, System.currentTimeMillis(), treeUri = saveTreeUri(), projectName = currentProjectName())
             upright.recycle()
             tempFile.delete()
             return
@@ -1120,10 +1127,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // ① 原图先插入占主文件名（系统相册实测把 (1) 排最前，维持该行为）
         // ② 水印版 DATE_TAKEN 晚 1 秒（MIUI 未覆盖时间时按时间排也是水印在前）
         val takenAt = System.currentTimeMillis()
+        val pName = currentProjectName()
         if (container.repository.saveOriginal.value) {
-            runCatching { MediaSaver.saveBitmap(context, upright, takenAt, treeUri = saveTreeUri()) }
+            runCatching { MediaSaver.saveBitmap(context, upright, takenAt, treeUri = saveTreeUri(), projectName = pName) }
         }
-        MediaSaver.saveBitmap(context, out, takenAt + 1000, treeUri = saveTreeUri())
+        MediaSaver.saveBitmap(context, out, takenAt + 1000, treeUri = saveTreeUri(), projectName = pName)
         out.recycle()
         upright.recycle()
         tempFile.delete()
@@ -1238,14 +1246,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 .getOrNull()
             if (burned != null) {
                 val takenAt = System.currentTimeMillis()
+                val pName = currentProjectName()
                 // 原图先存（主文件名）；水印版 DATE_TAKEN 晚 1 秒（水印=最新，与照片语义一致）
                 var originalSaved = false
                 if (container.repository.saveOriginal.value) {
                     originalSaved = runCatching {
-                        MediaSaver.saveVideoFile(context, source, takenAt, treeUri = saveTreeUri())
+                        MediaSaver.saveVideoFile(context, source, takenAt, treeUri = saveTreeUri(), projectName = pName)
                     }.isSuccess
                 }
-                saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt + 1000, treeUri = saveTreeUri()) }.getOrNull()
+                saved = runCatching { MediaSaver.saveVideoFile(context, burned, takenAt + 1000, treeUri = saveTreeUri(), projectName = pName) }.getOrNull()
                 watermarked = saved != null
                 if (saved == null && originalSaved) {
                     _ui.update { it.copy(toast = I18n.t("水印视频保存失败，已保留原片")) }
@@ -1256,7 +1265,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             }
         }
         if (saved == null) {
-            saved = runCatching { MediaSaver.saveVideoFile(context, source, treeUri = saveTreeUri()) }.getOrNull()
+            saved = runCatching { MediaSaver.saveVideoFile(context, source, treeUri = saveTreeUri(), projectName = currentProjectName()) }.getOrNull()
         }
 
         if (saved != null) {
