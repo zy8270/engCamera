@@ -545,6 +545,11 @@ fun EditorScreen(onBack: () -> Unit) {
                 vm.updateField(field.id, label, value, isTitle)
                 editingField = null
             },
+            onConfirmAndSave = { label, value, isTitle ->
+                vm.updateField(field.id, label, value, isTitle)
+                editingField = null
+                onBack()
+            },
         )
     }
 
@@ -699,6 +704,7 @@ private fun EditFieldDialog(
     onRefreshWeather: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (label: String, value: String, isTitle: Boolean) -> Unit,
+    onConfirmAndSave: (label: String, value: String, isTitle: Boolean) -> Unit,
 ) {
     // key 用 field.id（稳定标识），避免 field 对象在重组时被重建（如上层重组传了结构相等但不同实例）
     var label by remember(field.id) { mutableStateOf(field.label) }
@@ -735,6 +741,8 @@ private fun EditFieldDialog(
     var isTitle by remember(field.id) { mutableStateOf(field.isTitle) }
     // 时间字段手动值二次确认：非空时间会定格后续所有拍照，防误触（预填值+随手点确定）
     var confirmTimeFreeze by remember(field.id) { mutableStateOf(false) }
+    // 定格确认后是否要保存并返回相机页（"确定并保存"入口）
+    var saveAndBackAfterFreeze by remember(field.id) { mutableStateOf(false) }
     // 刷新定位/天气后，输入框跟随最新自动值——仅对话框本地状态：
     // 点"确定"才写入字段（进入自定义），点"取消"不留任何痕迹；一打字即停止跟随
     var followLocation by remember(field.id) { mutableStateOf(false) }
@@ -931,13 +939,25 @@ private fun EditFieldDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                if (isDateTime && value.isNotBlank()) {
-                    confirmTimeFreeze = true
-                } else {
-                    onConfirm(label, value, isTitle)
-                }
-            }) { Text(I18n.t("确定")) }
+            Row {
+                TextButton(onClick = {
+                    if (isDateTime && value.isNotBlank()) {
+                        saveAndBackAfterFreeze = false
+                        confirmTimeFreeze = true
+                    } else {
+                        onConfirm(label, value, isTitle)
+                    }
+                }) { Text(I18n.t("确定")) }
+                // 确定并保存：保存字段后直接回相机拍照页，便于快速拍下一张
+                TextButton(onClick = {
+                    if (isDateTime && value.isNotBlank()) {
+                        saveAndBackAfterFreeze = true
+                        confirmTimeFreeze = true
+                    } else {
+                        onConfirmAndSave(label, value, isTitle)
+                    }
+                }) { Text(I18n.t("确定并保存")) }
+            }
         },
         dismissButton = {
             Row {
@@ -963,11 +983,18 @@ private fun EditFieldDialog(
             confirmButton = {
                 TextButton(onClick = {
                     confirmTimeFreeze = false
-                    onConfirm(label, value, isTitle)
+                    if (saveAndBackAfterFreeze) {
+                        saveAndBackAfterFreeze = false
+                        onConfirmAndSave(label, value, isTitle)
+                    } else {
+                        onConfirm(label, value, isTitle)
+                    }
                 }) { Text(I18n.t("确定定格")) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmTimeFreeze = false }) { Text(I18n.t("取消")) }
+                TextButton(onClick = { confirmTimeFreeze = false; saveAndBackAfterFreeze = false }) {
+                    Text(I18n.t("取消"))
+                }
             },
         )
     }

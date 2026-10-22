@@ -39,6 +39,7 @@ private val EN_DICT: Map<String, String> = mapOf(
     // —— 相机主界面 ——
     "闪光灯" to "Flash",
     "设置" to "Settings",
+    "发现新版本 {v}，点击查看更新" to "New version {v} — tap to view",
     "点击选择要加水印的图片" to "Tap to pick photos to watermark",
     "水印" to "Watermark",
     "水印设置" to "Watermark settings",
@@ -112,6 +113,7 @@ private val EN_DICT: Map<String, String> = mapOf(
     "显示经纬度" to "Show coordinates",
     "位置文本尾部附 (纬度, 经度) 括号段" to "Append (lat, lng) to location text",
     "确定" to "OK",
+    "确定并保存" to "OK & Save",
     "取消" to "Cancel",
     "删除字段" to "Delete field",
     "删除后不可恢复，确定删除「{label}」？" to "Delete “{label}”? This cannot be undone.",

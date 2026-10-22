@@ -133,6 +133,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private val container = (app as EngCameraApp).container
     private val context = app
 
+    /** 每日检查 GitHub Release 的结果（非空 = 有新版本，设置页展示更新提示 + 红点） */
+    private val _updateInfo = MutableStateFlow<com.engcamera.update.UpdateInfo?>(null)
+    val updateInfo: StateFlow<com.engcamera.update.UpdateInfo?> = _updateInfo.asStateFlow()
+
     val watermark: StateFlow<WatermarkState> = container.repository.state
 
     private val _dynamic = MutableStateFlow(DynamicValues())
@@ -220,6 +224,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private var rollTimelineJob: Job? = null
 
     init {
+        // 启动时每天核对一次 GitHub Release 最新版本（用户需求 2026-10-22）：
+        // 当天已查过直接用 DataStore 缓存，联网失败下次启动重试
+        viewModelScope.launch {
+            val current = runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }.getOrNull() ?: ""
+            _updateInfo.value = com.engcamera.update.UpdateChecker.checkIfNeeded(context, current)
+        }
         // 动态时间/位置每秒刷新（位置用于【位置】标签值为空时的拍照瞬间自动填充）
         viewModelScope.launch {
             val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)

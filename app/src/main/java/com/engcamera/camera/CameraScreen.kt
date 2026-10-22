@@ -160,6 +160,8 @@ fun CameraScreen(
     val rawWatermark by vm.watermark.collectAsState()
     val dynamic by vm.dynamic.collectAsState()
     val ui by vm.ui.collectAsState()
+    // 每日更新检查结果：非空时设置入口带红点、设置页底部显示更新提示
+    val updateInfo by vm.updateInfo.collectAsState()
 
     // 主界面跟随主题（0.6.0 用户拍板：日间浅色背景+深色快门按键）；系统栏图标随主题。
     // 仅取景画面上的小浮层（镜头胶囊/录像角标/对焦圈/工程组快捷钮）保持深色半透明，
@@ -419,12 +421,25 @@ fun CameraScreen(
                         }
                         Spacer(Modifier.weight(1f))
                         IconButton(onClick = { showSettings = true }) {
-                            Icon(
-                                Icons.Default.Settings,
-                                contentDescription = I18n.t("设置"),
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.rotate(rot.toFloat()),
-                            )
+                            Box {
+                                Icon(
+                                    Icons.Default.Settings,
+                                    contentDescription = I18n.t("设置"),
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.rotate(rot.toFloat()),
+                                )
+                                // 有新版本：设置入口右上角红点（用户需求 2026-10-22）
+                                if (updateInfo != null) {
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopEnd)
+                                            .offset(x = (-4).dp, y = 4.dp)
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(ChromeDanger),
+                                    )
+                                }
+                            }
                         }
                     }
                     if ((ui.confirming || (ui.annotating && ui.annotateQueue.isNotEmpty())) &&
@@ -549,6 +564,7 @@ private fun SettingsDrawer(
     val watermark by vm.watermark.collectAsState()
     val themeMode by vm.themeMode.collectAsState()
     val languageMode by vm.languageMode.collectAsState()
+    val updateInfo by vm.updateInfo.collectAsState()
     val showLangPicker = remember { mutableStateOf(false) }
     val saveTree by vm.saveTree.collectAsState()
     val showSavePathDialog = remember { mutableStateOf(false) }
@@ -919,29 +935,61 @@ private fun SettingsDrawer(
                 Spacer(Modifier.height(16.dp))
                 }
 
-                // 署名固定置底（不随设置内容滚动；发布日期随版本更新）
+                // 署名固定置底（不随设置内容滚动；发布日期随版本更新）；
+                // 有新版本时此处改为更新提示（带红点，点击打开 Release 页，用户需求 2026-10-22）
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                // versionCode 运行时读取（发布日期随版本手更）
-                val versionCode = runCatching {
-                    context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
-                }.getOrDefault(0L)
-                Text(
-                    "Rnzhy 2026.10.16 $versionCode engCamera MIT",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/zy8270/engCamera")),
-                                )
+                val update = updateInfo
+                if (update != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.url)))
+                                }
                             }
-                        }
-                        .padding(vertical = 10.dp),
-                )
+                            .padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(ChromeDanger),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            I18n.t("发现新版本 {v}，点击查看更新").replace("{v}", update.version),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                } else {
+                    // versionCode 运行时读取（发布日期随版本手更）
+                    val versionCode = runCatching {
+                        context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+                    }.getOrDefault(0L)
+                    Text(
+                        "Rnzhy 2026.10.16 $versionCode engCamera MIT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/zy8270/engCamera")),
+                                    )
+                                }
+                            }
+                            .padding(vertical = 10.dp),
+                    )
+                }
             }
         }
     }
