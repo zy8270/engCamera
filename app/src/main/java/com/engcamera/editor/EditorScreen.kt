@@ -84,6 +84,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -939,35 +940,35 @@ private fun EditFieldDialog(
             }
         },
         confirmButton = {
-            Row {
-                TextButton(onClick = {
+            // 四个按钮统一放进同一个 Row（用户拍板 2026-10-22）：AlertDialog 原生把
+            // dismiss/confirm 两组分别塞进 FlowRow，空间稍紧就折成两排；统一为一排后
+            // 用等内边距的文字按钮（TextButton 有 58dp 最小宽度，短文字会被撑开导致
+            // 文字间距不等），顺序固定：重置 → 取消 → 确定 → 确定并保存
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。均关闭对话框
+                if (isDateTime || isLocation || isWeather) {
+                    DialogActionText(I18n.t("重置")) { onConfirm(label, "", isTitle) }
+                } else if (isCount) {
+                    DialogActionText(I18n.t("重置")) { onConfirm(label, "1", isTitle) }
+                }
+                DialogActionText(I18n.t("取消"), onDismiss)
+                DialogActionText(I18n.t("确定")) {
                     if (isDateTime && value.isNotBlank()) {
                         saveAndBackAfterFreeze = false
                         confirmTimeFreeze = true
                     } else {
                         onConfirm(label, value, isTitle)
                     }
-                }) { Text(I18n.t("确定")) }
+                }
                 // 确定并保存：保存字段后直接回相机拍照页，便于快速拍下一张
-                TextButton(onClick = {
+                DialogActionText(I18n.t("确定并保存")) {
                     if (isDateTime && value.isNotBlank()) {
                         saveAndBackAfterFreeze = true
                         confirmTimeFreeze = true
                     } else {
                         onConfirmAndSave(label, value, isTitle)
                     }
-                }) { Text(I18n.t("确定并保存")) }
-            }
-        },
-        dismissButton = {
-            Row {
-                // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。均关闭对话框
-                if (isDateTime || isLocation || isWeather) {
-                    TextButton(onClick = { onConfirm(label, "", isTitle) }) { Text(I18n.t("重置")) }
-                } else if (isCount) {
-                    TextButton(onClick = { onConfirm(label, "1", isTitle) }) { Text(I18n.t("重置")) }
                 }
-                TextButton(onClick = onDismiss) { Text(I18n.t("取消")) }
             }
         },
     )
@@ -998,6 +999,19 @@ private fun EditFieldDialog(
             },
         )
     }
+}
+
+@Composable
+private fun DialogActionText(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+    )
 }
 
 @Composable

@@ -263,23 +263,25 @@ class WatermarkRepository(private val context: Context) {
             s
         }
 
-    /** 存量数据迁移：旧默认字段顺序（v0.6.2 前：备注在时间前）重排为新默认（标题/时间/位置/天气/计数/备注）。
-     *  仅当字段 id 序列恰好等于旧默认六件套时触发——用户手动调过顺序或加过自定义字段的不动；重排后特征消失，天然幂等。 */
+    /** 存量数据迁移：默认字段顺序统一为 标题/时间/位置/天气/备注/计数（2026-10-22 用户拍板计数移到备注下方）。
+     *  仅当字段 id 序列恰好等于某一版旧默认顺序时触发——用户手动调过顺序或加过自定义字段的不动；重排后特征消失，天然幂等。 */
     private fun migrateFieldOrder(s: WatermarkState): WatermarkState {
-        val oldOrder = listOf("f_project", "f_note", "f_time", "f_location", "f_weather", "f_count")
-        if (s.fields.map { it.id } != oldOrder) return s
-        val byId = s.fields.associateBy { it.id }
-        return s.copy(
-            fields = listOf("f_project", "f_time", "f_location", "f_weather", "f_count", "f_note")
-                .map { byId.getValue(it) },
+        val newOrder = listOf("f_project", "f_time", "f_location", "f_weather", "f_note", "f_count")
+        val legacyOrders = listOf(
+            listOf("f_project", "f_note", "f_time", "f_location", "f_weather", "f_count"), // v0.6.2 前
+            listOf("f_project", "f_time", "f_location", "f_weather", "f_count", "f_note"), // v0.6.2 ~ v0.6.11
         )
+        if (s.fields.map { it.id } !in legacyOrders) return s
+        val byId = s.fields.associateBy { it.id }
+        return s.copy(fields = newOrder.map { byId.getValue(it) })
     }
 
     /** 存量数据补齐天气字段（固定项不可删除，只可关闭） */
     private fun ensureWeatherField(s: WatermarkState): WatermarkState =
         if (s.fields.none { it.type == FieldType.WEATHER }) {
-            // 插在计数之前，与默认字段顺序一致
-            val idx = s.fields.indexOfFirst { it.type == FieldType.COUNT }.let { if (it < 0) s.fields.size else it }
+            // 插在备注/计数之前，与默认字段顺序一致
+            val idx = s.fields.indexOfFirst { it.type == FieldType.NOTE || it.type == FieldType.COUNT }
+                .let { if (it < 0) s.fields.size else it }
             s.copy(fields = s.fields.toMutableList().apply add@{ add(idx, WatermarkField("f_weather", FieldType.WEATHER, "天气", "")) })
         } else {
             s

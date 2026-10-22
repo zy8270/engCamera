@@ -12,9 +12,9 @@ object TemplatePresets {
         TemplateFieldDef(FieldType.DATETIME, "时间"),
         TemplateFieldDef(FieldType.LOCATION, "位置"),
         TemplateFieldDef(FieldType.WEATHER, "天气"),
+        TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
         // 计数入标准字段（与 defaultFields 一致）：此前缺失导致切换模板后计数丢失
         TemplateFieldDef(FieldType.COUNT, "计数", enabled = false),
-        TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
     )
 
     private fun style(layout: String, build: WatermarkStyle.() -> WatermarkStyle = { this }): WatermarkStyle =

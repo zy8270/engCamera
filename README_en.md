@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.11/engCamera-v0.6.11-240.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.12/engCamera-v0.6.12-241.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, and multiple **project profiles** switch the whole watermark set in one tap. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.11 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.12 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -54,7 +54,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **9-grid position**: visually pick any of 9 slots (corners / edges / center), never reset by rotation, or fine-tune by dragging; directions are interpreted in the **physical gravity** frame — in landscape, "bottom" is the table side
 - **Editor live camera preview (eye toggle)**: tap the "eye" in the editor to swap the background for the live rear camera — liquid glass refracts it live; closed eye = viewfinder freeze-frame background (settings toggle; off = flat dual-mountain artwork, dark/light variants)
 - **Project groups**: one-tap switch between complete watermark configs (create = copy current, rename, bulk delete, reset), current project shown in the editor title; a persistent quick entry sits left of the bottom mode switch so multi-site users never open the editor just to swap; a new group's name can auto-fill its watermark title (setting)
-- **Configurable fields**: project name (title), time, location, weather, counter, note, custom fields; add/remove/reorder/enable per field; time/location/weather support manual freeze (marked "custom") with one-tap reset; location text can append lat/lng (off by default); field editing offers "OK & Save" — saves and returns straight to the camera to shoot the next shot
+- **Configurable fields**: project name (title), time, location, weather, note, counter, custom fields; add/remove/reorder/enable per field; time/location/weather support manual freeze (marked "custom") with one-tap reset; location text can append lat/lng (off by default); field editing offers "OK & Save" — saves and returns straight to the camera to shoot the next shot
 - **Auto location + Chinese addresses**: multi-device fallback chain (system Geocoder → structured province/city/district/road/place join → online reverse-geocode), degrades to coordinates offline; address/weather cached across restarts
 - **Auto weather + emoji**: fetched with location (e.g. "☀️ 晴 26℃"), flat emoji per condition (sunny/cloudy/overcast/rain/snow/storm/fog…), toggleable, manual entry & refresh supported
 - **Counter field**: auto +1 per saved photo (off by default, enable in settings)

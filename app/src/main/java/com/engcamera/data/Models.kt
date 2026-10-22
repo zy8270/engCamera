@@ -164,18 +164,18 @@ fun defaultFields(): List<WatermarkField> = listOf(
         deletable = false,
     ),
     WatermarkField(
+        id = "f_note",
+        type = FieldType.NOTE,
+        label = "备注",
+        value = "三层梁板钢筋绑扎完成",
+    ),
+    WatermarkField(
         id = "f_count",
         type = FieldType.COUNT,
         label = "计数",
         value = "1",
         enabled = false, // 计数默认关闭（用户确认 2026-10-11）
         deletable = false,
-    ),
-    WatermarkField(
-        id = "f_note",
-        type = FieldType.NOTE,
-        label = "备注",
-        value = "三层梁板钢筋绑扎完成",
     ),
 )
 
