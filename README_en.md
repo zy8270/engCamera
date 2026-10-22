@@ -45,7 +45,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Project name in the file name**: saved as `engCamera_<project>_<time>.jpg` (videos: `.mp4`), so shots from different projects stay distinguishable; illegal characters are stripped, whitespace becomes `_`, capped at 24 chars, and an empty project name falls back to `engCamera_<time>`
 - **Custom save location** (setting): default `DCIM/Camera`, or any SAF folder you pick
 - **Shutter sound / volume-key shutter** (settings): shutter sound off by default (enable where local law requires); volume keys act as shutter, on by default
-- **Daily update check**: every launch compares the app version with the latest GitHub Release once a day; when a newer version exists the settings entry shows a red dot and the settings footer links straight to the download page
+- **Daily update check**: every launch compares the app version with the latest GitHub Release once a day; when a newer version exists the settings footer shows an update notice with a red dot that links straight to the download page
 
 ### Watermark
 

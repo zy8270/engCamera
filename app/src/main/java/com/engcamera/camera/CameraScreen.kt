@@ -421,25 +421,12 @@ fun CameraScreen(
                         }
                         Spacer(Modifier.weight(1f))
                         IconButton(onClick = { showSettings = true }) {
-                            Box {
-                                Icon(
-                                    Icons.Default.Settings,
-                                    contentDescription = I18n.t("设置"),
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.rotate(rot.toFloat()),
-                                )
-                                // 有新版本：设置入口右上角红点（用户需求 2026-10-22）
-                                if (updateInfo != null) {
-                                    Box(
-                                        Modifier
-                                            .align(Alignment.TopEnd)
-                                            .offset(x = (-4).dp, y = 4.dp)
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(ChromeDanger),
-                                    )
-                                }
-                            }
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = I18n.t("设置"),
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.rotate(rot.toFloat()),
+                            )
                         }
                     }
                     if ((ui.confirming || (ui.annotating && ui.annotateQueue.isNotEmpty())) &&
