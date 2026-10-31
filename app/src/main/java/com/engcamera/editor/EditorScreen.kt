@@ -850,7 +850,7 @@ private fun EditFieldDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            I18n.t("显示经纬度（地址后括号段）"),
+                            I18n.t("显示经纬度（经纬度字段）"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),

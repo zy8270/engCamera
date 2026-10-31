@@ -355,9 +355,10 @@ private fun TemplateThumb(template: WatermarkTemplate, modifier: Modifier) {
             // 不再强制 maxWidthRatio=1f：缩略图宽度占比须与实际设置一致（用户反馈 2026-10-14）
             template.snapshot ?: WatermarkState(
                 templateId = template.id,
-                fields = template.fields.map {
+                // id 带索引：今日·打卡1 有两个 CUSTOM 字段，裸类型 id 会重复
+                fields = template.fields.mapIndexed { idx, it ->
                     WatermarkField(
-                        id = "f_${it.type.name.lowercase()}",
+                        id = "f_${it.type.name.lowercase()}_$idx",
                         type = it.type,
                         label = it.label,
                         value = if (it.type == FieldType.PROJECT_NAME) I18n.t("示例工程") else "",
@@ -459,6 +460,7 @@ private fun styleColor(key: String, style: WatermarkStyle): Long = when (key) {
     "borderColor" -> style.borderColor
     "recDotColor" -> style.recDotColor
     "gradientColor" -> style.gradientColor
+    "softShadowColor" -> style.softShadowColor
     else -> 0xFF000000L
 }
 
@@ -528,6 +530,9 @@ fun TemplateOptionsCard(
                     val recSubKeys = setOf("recDotSize", "recDotOffset", "recGlow", "recDotColor")
                     // 阴影四拉杆（大小/扩散/透明度/垂直偏移）收进"文字阴影"折叠组（v171）
                     val shadowSubKeys = setOf("textShadow", "shadowSpread", "shadowAlpha", "shadowOffsetY")
+                    // 放射阴影五拉杆（今日·打卡/打卡1）收进"背景阴影"折叠组（v251 用户需求）
+                    val softShadowSubKeys =
+                        setOf("softShadowW", "softShadowH", "softShadowAlpha", "softShadowSpread", "softShadowColor")
                     var recGroupOpen by remember(template.id) { mutableStateOf(false) }
                     template.options.forEach { opt ->
                         when {
@@ -535,6 +540,7 @@ fun TemplateOptionsCard(
                             opt.key.startsWith("glass") -> Unit
                             opt.key in recSubKeys -> Unit
                             opt.key in shadowSubKeys -> Unit
+                            opt.key in softShadowSubKeys -> Unit
                             opt.key == "recDot" -> {
                                 Row(
                                     Modifier.fillMaxWidth(),
@@ -609,7 +615,8 @@ fun TemplateOptionsCard(
                         }
                         // 记录点/阴影子选项收进组内不渲染，间隔也不留（否则下方空出一截）
                         if (opt.key !in recSubKeys && !opt.key.startsWith("glass") &&
-                            opt.key !in shadowSubKeys
+                            opt.key !in shadowSubKeys &&
+                                opt.key !in softShadowSubKeys
                         ) Spacer(Modifier.height(6.dp))
                     }
                     // 液态玻璃库背景参数折叠组（默认收起，用户拍板 2026-10-16）
@@ -636,6 +643,30 @@ fun TemplateOptionsCard(
                             Column {
                                 shadowOpts.forEach { shOpt ->
                                     SliderOptionRow(shOpt, style, onScalar)
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                            }
+                        }
+                    }
+                    // 背景放射阴影五拉杆折叠组（今日·打卡/打卡1，默认收起，用户需求 2026-10-31 v251）
+                    val softOpts = template.options.filter { it.key in softShadowSubKeys }
+                    if (softOpts.isNotEmpty()) {
+                        var softOpen by remember(template.id) { mutableStateOf(false) }
+                        Spacer(Modifier.height(6.dp))
+                        GroupHeader(I18n.t("背景阴影"), softOpen) { softOpen = !softOpen }
+                        androidx.compose.animation.AnimatedVisibility(visible = softOpen) {
+                            Column {
+                                softOpts.forEach { soOpt ->
+                                    when (soOpt.kind) {
+                                        "color" -> ColorOptionRow(
+                                            label = I18n.t(soOpt.label),
+                                            current = styleColor(soOpt.key, style),
+                                            original = styleColor(soOpt.key, template.style),
+                                            isBackground = false,
+                                            onColor = { onColor(soOpt.key, it) },
+                                        )
+                                        else -> SliderOptionRow(soOpt, style, onScalar)
+                                    }
                                     Spacer(Modifier.height(6.dp))
                                 }
                             }
@@ -748,6 +779,11 @@ private fun SliderOptionRow(
         "shadowSpread" -> style.shadowSpread
         "shadowAlpha" -> style.shadowAlpha
         "shadowOffsetY" -> style.shadowOffsetY
+        // 今日·打卡/打卡1 椭圆放射阴影（v249）
+        "softShadowW" -> style.softShadowW
+        "softShadowH" -> style.softShadowH
+        "softShadowAlpha" -> style.softShadowAlpha
+        "softShadowSpread" -> style.softShadowSpread
         else -> opt.min
     }
     val display = when (opt.key) {

@@ -184,6 +184,17 @@ object MediaSaver {
         val out = mutableListOf<MediaEntry>()
         val resolver = context.contentResolver
 
+        // 安卓9及以下（旧权限模型）：无 READ_EXTERNAL_STORAGE 时查外部媒体直接抛
+        // SecurityException（安卓10+ 分区存储允许无权限读自己贡献的媒体，不抛）——
+        // 无权限返回空列表降级：启动预加载「最新」为空不闪退（安卓9 用户反馈 2026-10-31）；
+        // 相册页有自己的授权流程，授权后照常查询
+        if (Build.VERSION.SDK_INT < 29 &&
+            context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return out
+        }
+
         fun queryCollection(collection: Uri, isVideo: Boolean) {
             val projection = mutableListOf(
                 MediaStore.MediaColumns._ID,
@@ -210,13 +221,16 @@ object MediaSaver {
                 selection = null
                 args = null
             }
-            resolver.query(
-                collection,
-                projection.toTypedArray(),
-                selection,
-                args,
-                "${MediaStore.MediaColumns.DATE_ADDED} DESC",
-            )?.use { c ->
+            // 个别 OEM 的 MediaProvider 在其他版本也可能拒查：失败按空集合处理不崩
+            runCatching {
+                resolver.query(
+                    collection,
+                    projection.toTypedArray(),
+                    selection,
+                    args,
+                    "${MediaStore.MediaColumns.DATE_ADDED} DESC",
+                )
+            }.getOrNull()?.use { c ->
                 val iId = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
                 val iName = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
                 val iDate = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)

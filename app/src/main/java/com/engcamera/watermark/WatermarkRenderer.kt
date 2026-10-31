@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -35,10 +36,14 @@ private const val EDGE_MARGIN_RATIO = 0.015f
  */
 object WatermarkRenderer {
 
-    /** 渲染好的整块水印 */
-    class Block(val bitmap: Bitmap) {
+    /** 渲染好的整块水印。带阴影外沿的布局（今日·打卡/打卡1）：位图四周含透明外沿，
+     *  offsetX/offsetY=内容区左上角在位图中的位置（两侧对称）——定位/钳位按内容区
+     *  算（contentW/H），阴影允许越出定位包围盒（v249：外沿参与定位会把水印顶离屏幕边） */
+    class Block(val bitmap: Bitmap, val offsetX: Int = 0, val offsetY: Int = 0) {
         val width: Int get() = bitmap.width
         val height: Int get() = bitmap.height
+        val contentW: Int get() = bitmap.width - offsetX * 2
+        val contentH: Int get() = bitmap.height - offsetY * 2
     }
 
     /**
@@ -107,6 +112,12 @@ object WatermarkRenderer {
             "GRADIENT" -> renderGradient(state, canvasWidth, dynamic, blockWidthOverride)
             "NOTE_CARD" -> renderNoteCard(state, canvasWidth, dynamic)
             "RECORDER" -> renderRecorder(state, canvasWidth, dynamic)
+            "TODAY_CARD" -> renderTodayCard(state, canvasWidth, dynamic)
+            "TODAY_CLOCK" -> renderTodayClock(state, canvasWidth, dynamic)
+            "TODAY_CLOCK1" -> renderTodayClock1(state, canvasWidth, dynamic)
+            "MARK_CARD" -> renderMarkCard(state, canvasWidth, dynamic, lightBody = false)
+            "MARK_CARD_LIGHT" -> renderMarkCard(state, canvasWidth, dynamic, lightBody = true)
+            "MARK_CLOCK" -> renderMarkClock(state, canvasWidth, dynamic)
             "LIQUID_GLASS" -> renderLiquidGlass(state, canvasWidth, dynamic)
             else -> renderClassic(state, canvasWidth, dynamic)
         }
@@ -440,6 +451,1135 @@ object WatermarkRenderer {
         }
         canvas.restore()
         return Block(bitmap)
+    }
+
+    // ================= 打卡/工程记录系列（2026-10-30：像素级仿参考图五款） =================
+    // 几何/配色常量 = 1920 宽参考图实测 px ÷ 1920；字体保持应用默认（不仿字体），
+    // 字号取参考字宽/字高估计中值。标签两端对齐（2~4 字 CJK 均布在固定字宽格）。
+
+    /** 正文行描述：label=已翻译标签（CJK 才走两端对齐）；value=值列布局（悬挂缩进在值列）；
+     *  natural=非 CJK 标签时"标签：值"整行自然布局 */
+    private data class LRow(val label: String, val value: StaticLayout, val natural: StaticLayout?)
+
+    /** 马克卡片条目：普通文字行或底部输入条（互斥） */
+    private data class MEntry(val row: LRow?, val noteBar: Boolean = false)
+
+    private val TIME_PATTERNS = listOf(
+        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd",
+        "yyyy/M/d HH:mm:ss", "yyyy/M/d HH:mm", "yyyy/M/d H:mm", "yyyy/M/d",
+    )
+
+    /** 解析出的时间部件（dateDash=2026-10-30 / dateDot=2026.10.30 / dateSlash=2026/10/30） */
+    private class TimeParts(
+        val dateDash: String,
+        val dateDot: String,
+        val dateSlash: String,
+        val hm: String,
+        val weekday: String,
+    )
+
+    private fun parseTimeParts(raw: String): TimeParts? {
+        if (raw.isBlank()) return null
+        for (pattern in TIME_PATTERNS) {
+            try {
+                val fmt = java.text.SimpleDateFormat(pattern, java.util.Locale.CHINA)
+                fmt.isLenient = false
+                val d = fmt.parse(raw.trim()) ?: continue
+                val cal = java.util.Calendar.getInstance(java.util.Locale.CHINA).apply { time = d }
+                val year = cal.get(java.util.Calendar.YEAR)
+                val month = cal.get(java.util.Calendar.MONTH) + 1
+                val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
+                val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                val minute = cal.get(java.util.Calendar.MINUTE)
+                val wd = when (cal.get(java.util.Calendar.DAY_OF_WEEK)) {
+                    java.util.Calendar.SUNDAY -> "星期日"
+                    java.util.Calendar.MONDAY -> "星期一"
+                    java.util.Calendar.TUESDAY -> "星期二"
+                    java.util.Calendar.WEDNESDAY -> "星期三"
+                    java.util.Calendar.THURSDAY -> "星期四"
+                    java.util.Calendar.FRIDAY -> "星期五"
+                    else -> "星期六"
+                }
+                return TimeParts(
+                    dateDash = String.format(java.util.Locale.US, "%04d-%02d-%02d", year, month, day),
+                    dateDot = String.format(java.util.Locale.US, "%04d.%02d.%02d", year, month, day),
+                    dateSlash = String.format(java.util.Locale.US, "%04d/%02d/%02d", year, month, day),
+                    hm = String.format(java.util.Locale.US, "%02d:%02d", hour, minute),
+                    weekday = wd,
+                )
+            } catch (_: Throwable) {
+                // 试下一个格式
+            }
+        }
+        return null
+    }
+
+    /** DATETIME 字段时间部件：手动值优先，空则拍照动态值；解析不了返回 null */
+    private fun timePartsOf(state: WatermarkState, dynamic: DynamicValues): TimeParts? {
+        val f = state.fields.firstOrNull { it.type == FieldType.DATETIME }
+        val raw = f?.value?.ifBlank { dynamic.time } ?: dynamic.time
+        return parseTimeParts(raw)
+    }
+
+    /** DATETIME 字段原文本（手动值优先，空则动态值） */
+    private fun timeRawOf(state: WatermarkState, dynamic: DynamicValues): String {
+        val f = state.fields.firstOrNull { it.type == FieldType.DATETIME }
+        return f?.value?.ifBlank { dynamic.time } ?: dynamic.time
+    }
+
+    /** 可两端对齐的标签：纯 CJK（可含数字，如"备注1"——用户反馈 2026-10-31 带数字字段也要
+     *  两端对齐）且 ≤4 字；其余（拉丁字母等）走自然排版 */
+    private fun isCjkLabel(label: String): Boolean =
+        label.isNotEmpty() && label.length <= 4 &&
+            label.all { it.code in 0x4E00..0x9FFF || it in '0'..'9' }
+
+    /** 标签两端对齐：2~4 字 CJK 在 cellW 格内均匀分布；不适合返回 false（调用方走自然排版） */
+    private fun drawJustifiedLabel(
+        canvas: Canvas,
+        label: String,
+        paint: TextPaint,
+        left: Float,
+        baseline: Float,
+        cellW: Float,
+    ): Boolean {
+        if (!isCjkLabel(label) || label.length > 4) return false
+        val chars = label.toCharArray()
+        val widths = FloatArray(chars.size)
+        var ink = 0f
+        for (i in chars.indices) {
+            // index/count 语义：第三个参数是个数不是结束索引
+            widths[i] = paint.measureText(chars, i, 1)
+            ink += widths[i]
+        }
+        val extra = cellW - ink
+        if (extra < 0f) return false
+        val gap = if (chars.size > 1) extra / (chars.size - 1) else 0f
+        var x = left
+        for (i in chars.indices) {
+            // 注意：index/count 语义——第三个参数是个数不是结束索引
+            canvas.drawText(chars, i, 1, x, baseline, paint)
+            x += widths[i] + gap
+        }
+        return true
+    }
+
+    /** 位置文本（"地址 (21.148223, 110.317905)" 或纯坐标）→ "21.148223°N,110.317905°E"；无坐标 null */
+    private fun coordsText(location: String): String? {
+        val m = Regex("([+-]?\\d+(?:\\.\\d+)?)\\s*,\\s*([+-]?\\d+(?:\\.\\d+)?)").find(location)
+            ?: return null
+        val latS = m.groupValues[1]
+        val lngS = m.groupValues[2]
+        val lat = latS.toFloatOrNull() ?: return null
+        val lng = lngS.toFloatOrNull() ?: return null
+        // 误命中防御：地址里普通数字对（无小数且数值小）不算坐标
+        fun plausible(s: String, v: Float) = s.contains('.') || kotlin.math.abs(v) >= 10f
+        if (!plausible(latS, lat) || !plausible(lngS, lng)) return null
+        if (kotlin.math.abs(lat) > 90f || kotlin.math.abs(lng) > 180f) return null
+        val ns = if (lat >= 0f) "N" else "S"
+        val ew = if (lng >= 0f) "E" else "W"
+        return String.format(
+            java.util.Locale.US, "%.6f°%s,%.6f°%s",
+            kotlin.math.abs(lat), ns, kotlin.math.abs(lng), ew,
+        )
+    }
+
+    /** 白字投影（无底色布局在亮背景上要保持可读） */
+    private fun TextPaint.textShadow(w: Float, alpha: Int = 0x99) {
+        setShadowLayer(w * 0.008f, w * 0.002f, w * 0.002f, (alpha shl 24) or 0x000000)
+    }
+
+    /** 水印内容背后的椭圆放射阴影（今日·打卡/今日·打卡1，模板选项拉杆可调 v249）：
+     *  长短轴半径=内容对应边×softShadowW/H，中心深浅=softShadowAlpha、中间档停靠
+     *  softShadowSpread，到半径处完全透明；marginX/marginY=位图四周预留外沿
+     *  （=(倍率-0.5)×内容边，由调用方按当前倍率预留）。
+     *  渐变中心必须挂平移后的原点(0,0)：挂未变换坐标会被画布矩阵再乘一次推到右下角 */
+    private fun drawSoftShadow(
+        canvas: Canvas,
+        blockW: Float,
+        blockH: Float,
+        marginX: Float,
+        marginY: Float,
+        style: WatermarkStyle,
+    ) {
+        val cw = blockW - marginX * 2f
+        val ch = blockH - marginY * 2f
+        if (cw <= 0f || ch <= 0f) return
+        val rx = cw * style.softShadowW.coerceIn(0.3f, 1.5f)
+        val ry = ch * style.softShadowH.coerceIn(0.3f, 1.5f)
+        val a = (style.softShadowAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
+        val mid = style.softShadowSpread.coerceIn(0.2f, 0.9f)
+        val rgb = (style.softShadowColor and 0x00FFFFFFL).toInt()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                0f, 0f, 1f,
+                intArrayOf(
+                    (a shl 24) or rgb,
+                    ((a * 0.31f).roundToInt() shl 24) or rgb,
+                    0,
+                ),
+                floatArrayOf(0f, mid, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        }
+        canvas.save()
+        canvas.translate(blockW / 2f, blockH / 2f)
+        canvas.scale(rx, ry)
+        canvas.drawCircle(0f, 0f, 1f, paint)
+        canvas.restore()
+    }
+
+    /** 小人图标（实心头+肩，马克·打卡"拍摄人"行） */
+    private fun drawPersonIcon(canvas: Canvas, left: Float, top: Float, height: Float, tint: Int) {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = tint }
+        val cx = left + height * 0.5f
+        canvas.drawCircle(cx, top + height * 0.26f, height * 0.21f, paint)
+        canvas.drawArc(
+            RectF(cx - height * 0.44f, top + height * 0.52f, cx + height * 0.44f, top + height * 1.16f),
+            180f, 180f, true, paint,
+        )
+    }
+
+    /** 今日·工程：蓝标题条（左圆点+居中标题）+ 半透明浅色正文、深色文字、标签两端对齐 */
+    private fun renderTodayCard(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
+        val style = state.style
+        val w = canvasWidth.coerceAtLeast(1).toFloat()
+        val blockW = (w * style.maxWidthRatio).toInt().coerceAtLeast(1)
+        // 实测（1920）：卡 1008、标题条 115、圆角 26、标题字 60、正文字 48、行距 86、左内边距 36
+        val barH = w * 0.0599f
+        val corner = (w * style.cornerRatio).coerceAtLeast(1f)
+        val padL = w * 0.0188f
+        val padR = w * 0.0188f
+        val padV = w * 0.0104f
+        val labelCell = w * 0.131f
+        val rowGap = w * 0.0146f
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.titleTextColor.toInt()
+            textSize = w * 0.0323f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val bodyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.bodyTextColor.toInt()
+            textSize = w * 0.026f
+        }
+        val enabled = state.fields.filter { it.enabled }
+        val titleText = enabled.firstOrNull { it.isTitle }?.let { displayText(it, dynamic, style) } ?: ""
+        val hasBar = titleText.isNotBlank()
+        val title = if (hasBar) {
+            newLayout(titleText, titlePaint, blockW, Layout.Alignment.ALIGN_CENTER)
+        } else null
+        val colonW = bodyPaint.measureText("：")
+        val valueX = padL + labelCell + colonW
+        val valueW = (blockW - valueX - padR).toInt().coerceAtLeast(1)
+        val naturalW = (blockW - padL - padR).toInt().coerceAtLeast(1)
+        val rows = enabled.filter { !it.isTitle }.map { f ->
+            val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
+            val value = newLayout(displayText(f, dynamic, style), bodyPaint, valueW)
+            val natural = if (labelTxt.isNotEmpty() && !isCjkLabel(labelTxt)) {
+                newLayout("${labelTxt}：${displayText(f, dynamic, style)}", bodyPaint, naturalW)
+            } else null
+            LRow(labelTxt, value, natural)
+        }
+        if (title == null && rows.isEmpty()) return emptyBlock()
+        val bodyH = padV * 2 + rows.sumOf { (it.natural ?: it.value).height } +
+            rowGap * (rows.size - 1).coerceAtLeast(0)
+        val blockH = ((if (hasBar) barH else 0f) + bodyH).toInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.save()
+        canvas.clipPath(roundPath(blockW.toFloat(), blockH.toFloat(), corner))
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG)
+        var top = 0f
+        if (hasBar) {
+            bg.color = style.titleBgColor.toInt()
+            canvas.drawRect(0f, 0f, blockW.toFloat(), barH, bg)
+            if (style.recDot) {
+                canvas.drawCircle(
+                    w * 0.0286f, barH / 2f, w * 0.0078f,
+                    Paint(Paint.ANTI_ALIAS_FLAG).apply { color = style.recDotColor.toInt() },
+                )
+            }
+            canvas.save()
+            canvas.translate(0f, (barH - title!!.height) / 2f)
+            title.draw(canvas)
+            canvas.restore()
+            top = barH
+        }
+        bg.color = withOpacity(style.bodyBgColor, style.bgOpacity).toInt()
+        canvas.drawRect(0f, top, blockW.toFloat(), blockH.toFloat(), bg)
+        var y = top + padV
+        rows.forEachIndexed { i, row ->
+            when {
+                row.natural != null -> {
+                    canvas.save(); canvas.translate(padL, y); row.natural.draw(canvas); canvas.restore()
+                    y += row.natural.height
+                }
+                row.label.isEmpty() -> {
+                    canvas.save(); canvas.translate(padL, y); row.value.draw(canvas); canvas.restore()
+                    y += row.value.height
+                }
+                else -> {
+                    val baseline = y + row.value.getLineBaseline(0)
+                    if (!drawJustifiedLabel(canvas, row.label, bodyPaint, padL, baseline, labelCell)) {
+                        canvas.drawText(row.label, padL, baseline, bodyPaint)
+                    }
+                    canvas.drawText("：", padL + labelCell, baseline, bodyPaint)
+                    canvas.save(); canvas.translate(valueX, y); row.value.draw(canvas); canvas.restore()
+                    y += row.value.height
+                }
+            }
+            if (i < rows.lastIndex) y += rowGap
+        }
+        canvas.restore()
+        return Block(bitmap)
+    }
+
+    /** 今日·打卡：无底色白字投影——大号时间 + 强调色竖条 + 日期/星期两行 + 地址 +
+     *  备注渐变条（白→透明底）；水印块背后浅色软阴影（参考图 2026-10-31） */
+    private fun renderTodayClock(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
+        val style = state.style
+        val w = canvasWidth.coerceAtLeast(1).toFloat()
+        val leftPad = w * 0.011f
+        val timePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.bodyTextColor.toInt()
+            textSize = w * 0.096f
+            typeface = Typeface.DEFAULT_BOLD
+            textShadow(w)
+        }
+        val datePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.bodyTextColor.toInt()
+            textSize = w * 0.0365f
+            typeface = Typeface.DEFAULT_BOLD
+            textShadow(w)
+        }
+        val addrPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.bodyTextColor.toInt()
+            textSize = w * 0.0323f
+            textShadow(w)
+        }
+        val notePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.bodyTextColor.toInt()
+            textSize = w * 0.0345f
+            typeface = Typeface.DEFAULT_BOLD
+            textShadow(w)
+        }
+        val parts = timePartsOf(state, dynamic)
+        val timeText = parts?.hm ?: timeRawOf(state, dynamic)
+        val timeW = timePaint.measureText(timeText).coerceAtLeast(1f)
+        val timeSpacing = timePaint.fontSpacing
+        // 右列（日期/星期）：实测条高 168 ≈ 日期+星期两行盒高，行盒间隙 17；
+        // 天气字段（默认关，用户需求 2026-10-31）开启时追加在星期行后（参考图"星期六 晴 30℃"）
+        val dateText = parts?.dateDash
+        val weatherText = state.fields
+            .firstOrNull { it.type == FieldType.WEATHER && it.enabled }
+            ?.let { displayText(it, dynamic, style) }
+            .orEmpty()
+        val weekdayText = parts?.weekday?.let { com.engcamera.i18n.I18n.t(it) }?.let { wd ->
+            if (weatherText.isBlank()) wd else "$wd $weatherText"
+        }
+        val hasCol = dateText != null
+        val colGap = w * 0.009f
+        val colSpacing = datePaint.fontSpacing
+        val dateW = if (hasCol) datePaint.measureText(dateText!!) else 0f
+        val weekW = if (weekdayText != null) datePaint.measureText(weekdayText) else 0f
+        val colW = maxOf(dateW, weekW)
+        val colH = if (hasCol) colSpacing * 2 + colGap else 0f
+        val barW = w * 0.0073f
+        val gapTimeBar = w * 0.023f
+        val gapBarDate = w * 0.022f
+        val row1W = leftPad + timeW + gapTimeBar + (if (hasCol) barW + gapBarDate + colW else 0f)
+        val row1H = maxOf(timeSpacing, colH)
+        val locField = state.fields.firstOrNull { it.type == FieldType.LOCATION && it.enabled }
+        val addrText = locField?.let { displayText(it, dynamic, style) } ?: ""
+        val hasAddr = addrText.isNotBlank()
+        // 地址宽度封顶 0.5W（过长换行，不撑爆画面）
+        val addrWanted = if (hasAddr) minOf(addrPaint.measureText(addrText), w * 0.5f - leftPad) else 0f
+        // 备注行：每个启用的备注字段一行「标签：值」，多条全展示（用户反馈 2026-10-31）；
+        // 共享一条 左→右「透白→透明」横向渐变圆角底（不再上→下，且整体更透），值空整行隐藏
+        val noteCapW = (w * 0.5f - leftPad).toInt().coerceAtLeast(1)
+        val noteLayouts = state.fields.filter { it.enabled && it.type == FieldType.NOTE }.mapNotNull { f ->
+            val v = displayText(f, dynamic, style)
+            if (v.isBlank()) return@mapNotNull null
+            val label = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
+            val text = if (label.isEmpty()) v else "$label：$v"
+            val probe = newLayout(text, notePaint, noteCapW)
+            val needed = (0 until probe.lineCount).maxOf { probe.getLineWidth(it) }.toInt() + 2
+            newLayout(text, notePaint, needed.coerceAtMost(noteCapW))
+        }
+        val noteMaxW = noteLayouts.maxOfOrNull { it.width } ?: 0
+        val noteLineGap = w * 0.004f
+        val notesH = noteLayouts.sumOf { it.height } + noteLineGap * (noteLayouts.size - 1).coerceAtLeast(0)
+        val notePadH = w * 0.009f
+        val notePadTop = w * 0.007f
+        val notePadBottom = w * 0.016f
+        val blockWContent = maxOf(
+            row1W,
+            if (hasAddr) leftPad + addrWanted else 0f,
+            if (noteLayouts.isNotEmpty()) leftPad + noteMaxW + notePadH * 2 else 0f,
+        )
+        val gapAddr = w * 0.02f
+        val gapNote = w * 0.016f
+        val addrLayout = if (hasAddr) {
+            newLayout(addrText, addrPaint, (blockWContent - leftPad).toInt().coerceAtLeast(1))
+        } else {
+            null
+        }
+        val blockHContent = row1H +
+            (if (addrLayout != null) gapAddr + addrLayout.height else 0f) +
+            (if (noteLayouts.isNotEmpty()) gapNote + notePadTop + notesH + notePadBottom else 0f)
+        // 阴影外沿：椭圆半径=内容边×倍率（模板选项可调），超出内容 (倍率-0.5)×边长
+        val mx = (blockWContent * (style.softShadowW.coerceIn(0.3f, 1.5f) - 0.5f))
+            .coerceAtLeast(w * 0.005f)
+        val my = (blockHContent * (style.softShadowH.coerceIn(0.3f, 1.5f) - 0.5f))
+            .coerceAtLeast(w * 0.005f)
+        val blockW = (blockWContent + mx * 2).toInt().coerceAtLeast(1)
+        val blockH = (blockHContent + my * 2).toInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawSoftShadow(canvas, blockW.toFloat(), blockH.toFloat(), mx, my, style)
+        canvas.save()
+        canvas.translate(mx, my)
+        val row1Center = row1H / 2f
+        // 时间（盒内垂直居中）
+        val timeFm = timePaint.fontMetrics
+        canvas.drawText(timeText, leftPad, row1Center + (timeFm.descent - timeFm.ascent) / 2f - timeFm.descent, timePaint)
+        if (hasCol) {
+            val barX = leftPad + timeW + gapTimeBar
+            val barTop = row1Center - colH / 2f
+            canvas.drawRect(barX, barTop, barX + barW, barTop + colH, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = style.accentColor.toInt()
+            })
+            val colX = barX + barW + gapBarDate
+            val colTop = row1Center - colH / 2f
+            val dateFm = datePaint.fontMetrics
+            canvas.drawText(dateText!!, colX, colTop - dateFm.ascent, datePaint)
+            if (weekdayText != null) {
+                canvas.drawText(weekdayText, colX, colTop + colSpacing + colGap - dateFm.ascent, datePaint)
+            }
+        }
+        var y = row1H
+        if (addrLayout != null) {
+            canvas.save()
+            canvas.translate(leftPad, y + gapAddr)
+            addrLayout.draw(canvas)
+            canvas.restore()
+            y += gapAddr + addrLayout.height
+        }
+        if (noteLayouts.isNotEmpty()) {
+            // 左→右「透白→透明」横向渐变圆角底（方向/透明度按用户反馈 2026-10-31 调整）
+            val bgTop = y + gapNote
+            val bgW = noteMaxW + notePadH * 2
+            val bgH = notePadTop + notesH + notePadBottom
+            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    leftPad, 0f, leftPad + bgW, 0f,
+                    0x59FFFFFF.toInt(), 0x00FFFFFF, Shader.TileMode.CLAMP,
+                )
+            }
+            canvas.drawRoundRect(
+                RectF(leftPad, bgTop, leftPad + bgW, bgTop + bgH),
+                w * 0.008f, w * 0.008f, bgPaint,
+            )
+            var ny = bgTop + notePadTop
+            noteLayouts.forEach { l ->
+                canvas.save()
+                canvas.translate(leftPad + notePadH, ny)
+                l.draw(canvas)
+                canvas.restore()
+                ny += l.height + noteLineGap
+            }
+        }
+        canvas.restore()
+        // 携带内容区偏移：定位/钳位按内容区算，阴影允许越出（v249 修"水印被顶离屏幕边"）
+        return Block(bitmap, mx.roundToInt(), my.roundToInt())
+    }
+
+    /**
+     * 今日·打卡1（参考图 2026-10-31）：纹章纹卡片「打卡」黄徽标+蓝黑渐变外发光时间、
+     * 强调色竖条+地点/日期组、透白渐变字段卡（拍摄人/备注/工作单位，空值整行隐藏、
+     * 全空收卡）、盾牌验证行；水印块背后椭圆放射阴影。
+     */
+    private fun renderTodayClock1(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
+        val style = state.style
+        val w = canvasWidth.coerceAtLeast(1).toFloat()
+        val leftPad = w * 0.011f
+        val accent = style.accentColor.toInt()
+        val white = style.bodyTextColor.toInt()
+        val timeBlue = 0xFF1E6FDB.toInt()
+        val timePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = timeBlue
+            textSize = w * 0.042f
+            typeface = Typeface.DEFAULT_BOLD
+            // 外发光（用户反馈 2026-10-31）：偏移 0 的浅蓝光晕；蓝→黑渐变在绘制处按文字盒再挂 shader
+            setShadowLayer(w * 0.012f, 0f, 0f, 0x7A82B4F0.toInt())
+        }
+        val badgeText = com.engcamera.i18n.I18n.t("打卡")
+        val badgePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF202328.toInt()
+            textSize = w * 0.030f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val groupPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = w * 0.0325f
+            typeface = Typeface.DEFAULT_BOLD
+            textShadow(w)
+        }
+        // 字段行无阴影（用户反馈 2026-10-31：参考图整体是干净的透白渐变底，无阴影）
+        val cardPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = w * 0.030f
+        }
+        val verifyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = (((0xBFL shl 24) or (style.bodyTextColor and 0x00FFFFFFL))).toInt()
+            textSize = w * 0.030f
+            textShadow(w)
+        }
+        // ---- 头部纹章卡：黄徽标 + 蓝时间（证件团花简化为浅蓝波浪细纹） ----
+        val parts = timePartsOf(state, dynamic)
+        val timeText = parts?.hm ?: timeRawOf(state, dynamic)
+        val badgePadH = w * 0.013f
+        val badgeH = w * 0.044f
+        val badgeR = w * 0.008f
+        val badgeW = badgePadH * 2 + badgePaint.measureText(badgeText)
+        val timeGap = w * 0.016f
+        val timeW = timePaint.measureText(timeText).coerceAtLeast(1f)
+        val cardPadL = w * 0.012f
+        val cardPadR = w * 0.016f
+        val cardH = w * 0.066f
+        val cardR = w * 0.010f
+        val headerW = cardPadL + badgeW + timeGap + timeW + cardPadR
+        // ---- 地点/日期组（左侧强调色竖条贯组） ----
+        val barW = w * 0.0065f
+        val gapBarText = w * 0.013f
+        val textX = leftPad + barW + gapBarText
+        val locField = state.fields.firstOrNull { it.type == FieldType.LOCATION && it.enabled }
+        val locText = locField?.let { displayText(it, dynamic, style) } ?: ""
+        val locCapW = (w * 0.55f - textX).toInt().coerceAtLeast(1)
+        val locLayout = if (locText.isNotBlank()) {
+            val wanted = minOf(groupPaint.measureText(locText).toInt() + 2, locCapW)
+            newLayout(locText, groupPaint, wanted)
+        } else {
+            null
+        }
+        // 天气字段（默认关，用户需求 2026-10-31 v248）：开启时追加在星期行后
+        val weatherText = state.fields
+            .firstOrNull { it.type == FieldType.WEATHER && it.enabled }
+            ?.let { displayText(it, dynamic, style) }
+            .orEmpty()
+        val dateText = parts?.let {
+            val wd = com.engcamera.i18n.I18n.t(it.weekday)
+            "${it.dateDot}$wd" + (if (weatherText.isBlank()) "" else " $weatherText")
+        } ?: timeRawOf(state, dynamic)
+        val gapLocDate = w * 0.010f
+        val groupH = (locLayout?.height ?: 0) + (if (locLayout != null) gapLocDate else 0f) +
+            groupPaint.fontSpacing
+        // ---- 字段卡行：拍摄人/工作单位=「标签：值」，备注=纯值；值空整行隐藏 ----
+        val cardCapW = (w * 0.5f).toInt().coerceAtLeast(1)
+        fun cardRowLayout(text: String, paint: TextPaint): StaticLayout {
+            // 收缩到实际行宽（卡片贴内容，不留大片空底）
+            val probe = newLayout(text, paint, cardCapW)
+            val needed = (0 until probe.lineCount).maxOf { probe.getLineWidth(it) }.toInt() + 2
+            return newLayout(text, paint, needed.coerceAtMost(cardCapW))
+        }
+        val cardRows = mutableListOf<StaticLayout>()
+        state.fields.filter { it.enabled }.forEach { f ->
+            when (f.type) {
+                // 天气已追加在日期行（v248），不再进字段卡（否则开关一开出现两份天气）
+                FieldType.DATETIME, FieldType.LOCATION, FieldType.PROJECT_NAME, FieldType.WEATHER -> Unit
+                FieldType.NOTE -> {
+                    val v = displayText(f, dynamic, style)
+                    if (v.isNotBlank()) cardRows += cardRowLayout(v, cardPaint)
+                }
+                else -> {
+                    val v = displayText(f, dynamic, style)
+                    if (v.isNotBlank()) {
+                        val label = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
+                        cardRows += cardRowLayout(if (label.isEmpty()) v else "$label：$v", cardPaint)
+                    }
+                }
+            }
+        }
+        val cardPadH = w * 0.018f
+        val cardPadV = w * 0.012f
+        val cardRowGap = w * 0.010f
+        val cardRowsW = cardRows.maxOfOrNull { it.width } ?: 0
+        val fieldCardW = if (cardRows.isEmpty()) 0f else cardRowsW + cardPadH * 2
+        val fieldCardH =
+            if (cardRows.isEmpty()) 0f else cardPadV * 2 + cardRows.sumOf { it.height } + cardRowGap * (cardRows.size - 1)
+        // ---- 盾牌验证行 ----
+        val verifyText = com.engcamera.i18n.I18n.t("已验证照片真实性")
+        val shieldW = w * 0.028f
+        val shieldH = w * 0.031f
+        val gapShieldText = w * 0.023f
+        val verifyW = leftPad + shieldW + gapShieldText + verifyPaint.measureText(verifyText)
+        val gapHeaderGroup = w * 0.016f
+        val gapGroupCard = w * 0.016f
+        val gapCardVerify = w * 0.016f
+        val contentW = maxOf(
+            headerW,
+            if (locLayout != null) textX + locLayout.width else textX + groupPaint.measureText(dateText),
+            fieldCardW,
+            verifyW,
+        )
+        val contentH = cardH + gapHeaderGroup + groupH +
+            (if (fieldCardH > 0f) gapGroupCard + fieldCardH else 0f) +
+            gapCardVerify + shieldH + w * 0.006f
+        // 阴影外沿：椭圆半径=内容边×倍率（模板选项可调），超出内容 (倍率-0.5)×边长
+        val mx = (contentW * (style.softShadowW.coerceIn(0.3f, 1.5f) - 0.5f))
+            .coerceAtLeast(w * 0.005f)
+        val my = (contentH * (style.softShadowH.coerceIn(0.3f, 1.5f) - 0.5f))
+            .coerceAtLeast(w * 0.005f)
+        val blockW = (contentW + mx * 2).toInt().coerceAtLeast(1)
+        val blockH = (contentH + my * 2).toInt().coerceAtLeast(1)
+        val out = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        drawSoftShadow(canvas, blockW.toFloat(), blockH.toFloat(), mx, my, style)
+        canvas.save()
+        canvas.translate(mx, my)
+        // 头部卡：白~白红~白蓝细微横向渐变底（用户反馈 2026-10-31）+ 波浪细纹（clip 圆角内画正弦线）
+        canvas.save()
+        canvas.clipPath(roundPath(headerW, cardH, cardR))
+        canvas.drawRect(
+            0f, 0f, headerW, cardH,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    0f, 0f, headerW, 0f,
+                    intArrayOf(0xFFFFFFFF.toInt(), 0xFFFFF1EE.toInt(), 0xFFEDF2FF.toInt()),
+                    floatArrayOf(0f, 0.5f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+            },
+        )
+        val wave = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x667EB3E8.toInt()
+            this.style = Paint.Style.STROKE
+            strokeWidth = w * 0.0016f
+        }
+        val waves = 4
+        val amp = cardH * 0.16f
+        for (i in 0 until waves) {
+            val baseY = cardH * (i + 1f) / (waves + 1f)
+            val path = Path()
+            path.moveTo(0f, baseY)
+            var x = 0f
+            var up = true
+            while (x <= headerW) {
+                val seg = w * 0.028f
+                path.quadTo(
+                    x + seg / 2f, baseY + (if (up) -amp else amp),
+                    x + seg, baseY,
+                )
+                x += seg
+                up = !up
+            }
+            canvas.drawPath(path, wave)
+        }
+        canvas.restore()
+        // 灰色外边框
+        canvas.drawRoundRect(
+            RectF(0f, 0f, headerW, cardH), cardR, cardR,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                this.style = Paint.Style.STROKE
+                strokeWidth = w * 0.0016f
+                color = 0x668A909B.toInt()
+            },
+        )
+        // 黄徽标 + 深色「打卡」
+        val badgeLeft = cardPadL
+        val badgeCy = cardH / 2f
+        canvas.drawRoundRect(
+            RectF(badgeLeft, badgeCy - badgeH / 2f, badgeLeft + badgeW, badgeCy + badgeH / 2f),
+            badgeR, badgeR, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent },
+        )
+        val badgeFm = badgePaint.fontMetrics
+        canvas.drawText(
+            badgeText, badgeLeft + badgePadH,
+            badgeCy + (badgeFm.descent - badgeFm.ascent) / 2f - badgeFm.descent, badgePaint,
+        )
+        // 时间：粗体 蓝→黑 上→下渐变（外发光在 paint 创建处已挂）
+        val timeFm = timePaint.fontMetrics
+        val timeX = badgeLeft + badgeW + timeGap
+        timePaint.shader = LinearGradient(
+            timeX, badgeCy + timeFm.ascent, timeX, badgeCy + timeFm.descent,
+            0xFF2E7BE8.toInt(), 0xFF14161C.toInt(), Shader.TileMode.CLAMP,
+        )
+        canvas.drawText(
+            timeText, timeX,
+            badgeCy + (timeFm.descent - timeFm.ascent) / 2f - timeFm.descent, timePaint,
+        )
+        // 地点/日期组（竖条贯组）
+        var y = cardH + gapHeaderGroup
+        val groupBottom = y + groupH
+        canvas.drawRect(leftPad, y, leftPad + barW, groupBottom, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent })
+        val groupFm = groupPaint.fontMetrics
+        if (locLayout != null) {
+            canvas.save()
+            canvas.translate(textX, y)
+            locLayout.draw(canvas)
+            canvas.restore()
+            y += locLayout.height + gapLocDate
+        }
+        canvas.drawText(dateText, textX, y - groupFm.ascent, groupPaint)
+        y = groupBottom
+        // 半透明字段卡
+        if (cardRows.isNotEmpty()) {
+            val cardTop = y + gapGroupCard
+            // 卡底：左→右「透白→完全透明」横向渐变（同今日·打卡备注底，再透一档；
+            // 用户反馈 2026-10-31 v247：不再是灰色半透明卡）
+            canvas.drawRoundRect(
+                RectF(leftPad, cardTop, leftPad + fieldCardW, cardTop + fieldCardH),
+                w * 0.010f, w * 0.010f,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = LinearGradient(
+                        leftPad, 0f, leftPad + fieldCardW, 0f,
+                        0x59FFFFFF.toInt(), 0x00FFFFFF, Shader.TileMode.CLAMP,
+                    )
+                },
+            )
+            var cy = cardTop + cardPadV
+            cardRows.forEachIndexed { i, row ->
+                canvas.save()
+                canvas.translate(leftPad + cardPadH, cy)
+                row.draw(canvas)
+                canvas.restore()
+                cy += row.height + (if (i < cardRows.lastIndex) cardRowGap else 0f)
+            }
+            y = cardTop + fieldCardH
+        }
+        // 盾牌验证行
+        val verifyTop = y + gapCardVerify
+        val verifyBaseline = verifyTop - verifyPaint.fontMetrics.ascent
+        val shieldCy = verifyBaseline - verifyPaint.textSize * 0.28f
+        val sy = shieldCy - shieldH / 2f
+        val shield = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            this.style = Paint.Style.STROKE
+            strokeWidth = w * 0.004f
+            strokeJoin = Paint.Join.ROUND
+        }
+        val shieldPath = Path().apply {
+            moveTo(leftPad, sy + shieldH * 0.1f)
+            quadTo(leftPad + shieldW / 2f, sy - shieldH * 0.04f, leftPad + shieldW, sy + shieldH * 0.1f)
+            lineTo(leftPad + shieldW, sy + shieldH * 0.52f)
+            quadTo(leftPad + shieldW, sy + shieldH * 0.84f, leftPad + shieldW / 2f, sy + shieldH)
+            quadTo(leftPad, sy + shieldH * 0.84f, leftPad, sy + shieldH * 0.52f)
+            close()
+        }
+        canvas.drawPath(shieldPath, shield)
+        canvas.drawPath(
+            Path().apply {
+                moveTo(leftPad + shieldW * 0.28f, shieldCy - shieldW * 0.02f)
+                lineTo(leftPad + shieldW * 0.44f, shieldCy + shieldW * 0.14f)
+                lineTo(leftPad + shieldW * 0.74f, shieldCy - shieldW * 0.18f)
+            },
+            Paint(shield).apply { strokeWidth = w * 0.0035f },
+        )
+        canvas.drawText(verifyText, leftPad + shieldW + gapShieldText, verifyBaseline, verifyPaint)
+        canvas.restore()
+        return Block(out, mx.roundToInt(), my.roundToInt())
+    }
+
+    /**
+     * 马克·工程 / 马克·工程白：蓝标题条 + 标签字段行（两端对齐、值列悬挂换行）。
+     * dark（工程）= 深色半透明正文白字 + 底部通栏"施工单位"输入条（accent 20%、空白显示占位）；
+     * light（工程白）= 白色半透明正文黑字 + 标题左侧橙方块 + 末尾经纬度行。
+     */
+    private fun renderMarkCard(
+        state: WatermarkState,
+        canvasWidth: Int,
+        dynamic: DynamicValues,
+        lightBody: Boolean,
+    ): Block {
+        val style = state.style
+        val w = canvasWidth.coerceAtLeast(1).toFloat()
+        val blockW = (w * style.maxWidthRatio).toInt().coerceAtLeast(1)
+        // 实测（1920）：卡 1066、标题条 148、圆角 22、标题字 65、正文字 62、行距 100、左内边距 45
+        val barH = w * 0.0771f
+        val corner = (w * style.cornerRatio).coerceAtLeast(1f)
+        val padL = w * 0.0234f
+        val padR = w * 0.0234f
+        val padTop = w * 0.0135f
+        val labelCell = w * 0.168f
+        val rowGap = w * 0.0155f
+        val square = w * 0.0214f
+        val squareX = w * 0.0255f
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.titleTextColor.toInt()
+            textSize = w * 0.0339f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val bodyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = style.bodyTextColor.toInt()
+            textSize = w * 0.0325f
+            if (!lightBody) textShadow(w, alpha = 0x66)
+        }
+        val enabled = state.fields.filter { it.enabled }
+        val titleText = enabled.firstOrNull { it.isTitle }?.let { displayText(it, dynamic, style) } ?: ""
+        val hasBar = titleText.isNotBlank()
+        val titleW = if (lightBody) blockW - (squareX + square) else blockW.toFloat()
+        val title = if (hasBar) {
+            newLayout(titleText, titlePaint, titleW.toInt().coerceAtLeast(1), Layout.Alignment.ALIGN_CENTER)
+        } else null
+        val colonW = bodyPaint.measureText("：")
+        val valueX = padL + labelCell + colonW
+        val valueW = (blockW - valueX - padR).toInt().coerceAtLeast(1)
+        val naturalW = (blockW - padL - padR).toInt().coerceAtLeast(1)
+        val parts = timePartsOf(state, dynamic)
+
+        val entries = mutableListOf<MEntry>()
+        enabled.filter { !it.isTitle }.forEach { f ->
+            when {
+                f.type == FieldType.DATETIME -> {
+                    // 日期行：dark 无标签"2026-10-30 星期五 00:01"；
+                    // light 带「时 间」两端对齐标签（参考实测：时/间分居标签格两端）
+                    val text = if (parts != null) {
+                        if (lightBody) "${parts.dateDot} ${parts.hm}"
+                        else "${parts.dateDash} ${com.engcamera.i18n.I18n.t(parts.weekday)} ${parts.hm}"
+                    } else {
+                        timeRawOf(state, dynamic)
+                    }
+                    val labelTxt = if (lightBody && f.label.isNotBlank()) {
+                        com.engcamera.i18n.I18n.t(f.label)
+                    } else ""
+                    if (labelTxt.isNotEmpty() && !isCjkLabel(labelTxt)) {
+                        entries += MEntry(LRow("", newLayout("${labelTxt}：$text", bodyPaint, naturalW), null))
+                    } else {
+                        entries += MEntry(
+                            LRow(
+                                labelTxt,
+                                newLayout(text, bodyPaint, if (labelTxt.isEmpty()) naturalW else valueW),
+                                null,
+                            ),
+                        )
+                    }
+                }
+                f.type == FieldType.CUSTOM && !lightBody -> entries += MEntry(null, noteBar = true)
+                else -> {
+                    val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
+                    // 工程白：经纬度独立成行，地址文本恒不带括号段（开关只控制独立行显隐）
+                    val disp = if (lightBody && f.type == FieldType.LOCATION) {
+                        stripLatLng(displayText(f, dynamic, style))
+                    } else {
+                        displayText(f, dynamic, style)
+                    }
+                    val value = newLayout(disp, bodyPaint, valueW)
+                    val natural = if (labelTxt.isNotEmpty() && !isCjkLabel(labelTxt)) {
+                        newLayout("${labelTxt}：$disp", bodyPaint, naturalW)
+                    } else null
+                    entries += MEntry(LRow(labelTxt, value, natural))
+                    // 工程白：位置字段后追加经纬度行（「显示经纬度」开关开才加行，
+                    // 从位置文本提取坐标，无坐标不加行）
+                    if (lightBody && f.type == FieldType.LOCATION && style.showLatLng) {
+                        val locText = f.value.ifBlank { dynamic.location }
+                        coordsText(locText)?.let { c ->
+                            entries += MEntry(
+                                LRow(
+                                    com.engcamera.i18n.I18n.t("经纬度"),
+                                    newLayout(c, bodyPaint, valueW),
+                                    null,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        // 施工单位输入条永远置底（字段被用户调序也不上浮）
+        val ordered = entries.filterNot { it.noteBar } + entries.filter { it.noteBar }
+        val rows = ordered.mapNotNull { it.row }
+        if (title == null && rows.isEmpty() && ordered.none { it.noteBar }) return emptyBlock()
+        val noteBarH = w * 0.0505f
+        val gapNoteBar = w * 0.008f
+        val hasNoteBar = ordered.any { it.noteBar }
+        // 输入条通栏贴卡片底（参考实测）；无输入条时末行下留 24/1920 底部内边距
+        val bodyH = padTop + rows.sumOf { (it.natural ?: it.value).height } +
+            rowGap * (rows.size - 1).coerceAtLeast(0) +
+            (if (hasNoteBar) gapNoteBar + noteBarH else w * 0.0125f)
+        val blockH = ((if (hasBar) barH else 0f) + bodyH).toInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.save()
+        canvas.clipPath(roundPath(blockW.toFloat(), blockH.toFloat(), corner))
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG)
+        var top = 0f
+        if (hasBar) {
+            bg.color = style.titleBgColor.toInt()
+            canvas.drawRect(0f, 0f, blockW.toFloat(), barH, bg)
+            if (lightBody) {
+                canvas.drawRect(
+                    squareX, (barH - square) / 2f, squareX + square, (barH + square) / 2f,
+                    Paint(Paint.ANTI_ALIAS_FLAG).apply { color = style.accentColor.toInt() },
+                )
+            }
+            canvas.save()
+            val tx = if (lightBody) squareX + square else 0f
+            canvas.translate(tx, (barH - title!!.height) / 2f)
+            title.draw(canvas)
+            canvas.restore()
+            top = barH
+        }
+        bg.color = withOpacity(style.bodyBgColor, style.bgOpacity).toInt()
+        canvas.drawRect(0f, top, blockW.toFloat(), blockH.toFloat(), bg)
+        var y = top + padTop
+        var rowIdx = 0
+        ordered.forEach { entry ->
+            val row = entry.row
+            when {
+                entry.noteBar -> {
+                    // 通栏输入条：accent 20% 底、标签两端对齐、空白显示占位文本（白 65%）
+                    val barTop = y + gapNoteBar
+                    val accent = style.accentColor
+                    canvas.drawRect(
+                        0f, barTop, blockW.toFloat(), barTop + noteBarH,
+                        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = ((0x33L shl 24) or (accent and 0x00FFFFFFL)).toInt()
+                        },
+                    )
+                    val noteField = enabled.firstOrNull { it.type == FieldType.CUSTOM }
+                    val noteValue = noteField?.value.orEmpty()
+                    val placeholder = noteValue.isBlank()
+                    val textPaint = TextPaint(bodyPaint)
+                    if (placeholder) {
+                        textPaint.color = ((0xA6L shl 24) or (style.bodyTextColor and 0x00FFFFFFL)).toInt()
+                    }
+                    val text = if (placeholder) com.engcamera.i18n.I18n.t("请输入施工单位") else noteValue
+                    val noteLayout = newLayout(text, textPaint, valueW)
+                    val labelTxt = noteField?.label?.let { l -> if (l.isBlank()) "" else com.engcamera.i18n.I18n.t(l) } ?: ""
+                    val baseline = barTop + noteBarH / 2f +
+                        (textPaint.fontMetrics.descent - textPaint.fontMetrics.ascent) / 2f -
+                        textPaint.fontMetrics.descent
+                    if (labelTxt.isNotEmpty()) {
+                        if (!drawJustifiedLabel(canvas, labelTxt, textPaint, padL, baseline, labelCell)) {
+                            canvas.drawText(labelTxt, padL, baseline, textPaint)
+                        }
+                        canvas.drawText("：", padL + labelCell, baseline, textPaint)
+                    }
+                    canvas.save()
+                    canvas.translate(valueX, baseline - (-textPaint.fontMetrics.ascent))
+                    noteLayout.draw(canvas)
+                    canvas.restore()
+                    y = barTop + noteBarH
+                }
+                row != null && row.natural != null -> {
+                    val layout = row.natural!!
+                    canvas.save(); canvas.translate(padL, y); layout.draw(canvas); canvas.restore()
+                    y += layout.height + (if (rowIdx < rows.lastIndex) rowGap else 0f)
+                    rowIdx++
+                }
+                row != null -> {
+                    val baseline = y + row.value.getLineBaseline(0)
+                    if (row.label.isNotEmpty()) {
+                        if (!drawJustifiedLabel(canvas, row.label, bodyPaint, padL, baseline, labelCell)) {
+                            canvas.drawText(row.label, padL, baseline, bodyPaint)
+                        }
+                        canvas.drawText("：", padL + labelCell, baseline, bodyPaint)
+                        canvas.save(); canvas.translate(valueX, y); row.value.draw(canvas); canvas.restore()
+                    } else {
+                        // 无标签行（日期行）从字段位（左缘）起排，不是值列（用户反馈 2026-10-31）
+                        canvas.save(); canvas.translate(padL, y); row.value.draw(canvas); canvas.restore()
+                    }
+                    y += row.value.height + (if (rowIdx < rows.lastIndex) rowGap else 0f)
+                    rowIdx++
+                }
+            }
+        }
+        canvas.restore()
+        return Block(bitmap)
+    }
+
+    /** 马克·打卡：白底圆角卡（绿徽标「✓打卡」+ 绿色时间）、白字日期/星期、
+     *  圆点地址/备注行、小人拍摄人行、盾牌验证行（参考图 2026-10-31） */
+    private fun renderMarkClock(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
+        val style = state.style
+        val w = canvasWidth.coerceAtLeast(1).toFloat()
+        val leftPad = w * 0.011f
+        val accent = style.accentColor.toInt()
+        val white = style.bodyTextColor.toInt()
+        val badgePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = w * 0.030f
+            typeface = Typeface.DEFAULT_BOLD
+            textShadow(w)
+        }
+        val timePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = accent
+            textSize = w * 0.039f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val datePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = w * 0.0344f
+            typeface = Typeface.DEFAULT_BOLD
+            textShadow(w)
+        }
+        val addrPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = w * 0.0323f
+            textShadow(w)
+        }
+        val verifyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = (((0xBFL shl 24) or (style.bodyTextColor and 0x00FFFFFFL))).toInt()
+            textSize = w * 0.030f
+            textShadow(w)
+        }
+        val parts = timePartsOf(state, dynamic)
+        val timeText = parts?.hm ?: timeRawOf(state, dynamic)
+        val badgeText = com.engcamera.i18n.I18n.t("打卡")
+        val checkW = w * 0.026f
+        val badgePadL = w * 0.0115f
+        val badgePadR = w * 0.0125f
+        val badgeH = w * 0.0495f
+        val badgeR = w * 0.0073f
+        val badgeW = badgePadL + checkW + w * 0.014f + badgePaint.measureText(badgeText) + badgePadR
+        val timeW = timePaint.measureText(timeText).coerceAtLeast(1f)
+        // 打卡时间部分：白色圆角卡包住徽标+时间（参考图 2026-10-31）
+        val cardLPad = w * 0.007f
+        val cardRPad = w * 0.014f
+        val cardVPad = w * 0.0085f
+        val cardR = w * 0.009f
+        val headerW = cardLPad + badgeW + w * 0.014f + timeW + cardRPad
+        val headerH = badgeH + cardVPad * 2
+        val row1W = leftPad + headerW
+        // 日期行：2026/10/30 星期五
+        val dateText = parts?.let { "${it.dateSlash} ${com.engcamera.i18n.I18n.t(it.weekday)}" }
+            ?: timeRawOf(state, dynamic)
+        // 图标行：圆点=地点/备注，小人=拍摄人；值空整行隐藏
+        val bulletCX = leftPad + w * 0.0161f
+        val bulletR = w * 0.0052f
+        val addrTextX = leftPad + w * 0.0458f
+        val addrMaxW = (w * 0.55f - addrTextX).toInt().coerceAtLeast(1)
+        fun iconRow(text: String, person: Boolean): Pair<StaticLayout, Boolean>? {
+            if (text.isBlank()) return null
+            val wd = minOf(addrPaint.measureText(text), addrMaxW.toFloat()).toInt().coerceAtLeast(1)
+            return newLayout(text, addrPaint, wd) to person
+        }
+        val locField = state.fields.firstOrNull { it.type == FieldType.LOCATION && it.enabled }
+        val iconRows = buildList {
+            locField?.let { f -> iconRow(displayText(f, dynamic, style), false)?.let { add(it) } }
+            state.fields.filter { it.enabled && it.type == FieldType.NOTE }.forEach { f ->
+                iconRow(displayText(f, dynamic, style), false)?.let { add(it) }
+            }
+            state.fields.filter { it.enabled && it.type == FieldType.CUSTOM }.forEach { f ->
+                iconRow(displayText(f, dynamic, style), true)?.let { add(it) }
+            }
+        }
+        val verifyText = com.engcamera.i18n.I18n.t("已验证照片真实性")
+        val shieldW = w * 0.028f
+        val shieldH = w * 0.031f
+        val gapShieldText = w * 0.023f
+        val verifyW = leftPad + shieldW + gapShieldText + verifyPaint.measureText(verifyText)
+        val rowsW = iconRows.maxOfOrNull { addrTextX + it.first.width } ?: 0f
+        val blockW = maxOf(row1W, rowsW, verifyW).toInt().coerceAtLeast(1)
+
+        val dateFm = datePaint.fontMetrics
+        val verifyFm = verifyPaint.fontMetrics
+        // 日期行上下边距放宽（用户反馈 2026-10-31 v254：卡片上移 8px、日期行上移 4px
+        // ——贴底钳位下，卡片段与日期行、日期行与下方字段各加 4px 空隙即为此效果）
+        val gapDate = w * 0.006f
+        val gapAfterDate = w * 0.034f
+        val gapRow = w * 0.011f
+        // 验证行与上方字段行再收紧（用户反馈 2026-10-31 v253：上移 5 像素）
+        val gapVerify = w * 0.006f
+        // 底部内边距收紧（v251：水印整体下移，底部视觉留白与左侧一致）
+        val bottomPad = w * 0.001f
+        val rowsH = iconRows.sumOf { it.first.height } + gapRow * (iconRows.size - 1).coerceAtLeast(0)
+        val blockH = (headerH + gapDate + (dateFm.descent - dateFm.ascent) +
+            (if (iconRows.isNotEmpty()) gapAfterDate + rowsH else 0f) + gapVerify +
+            (verifyFm.descent - verifyFm.ascent) + bottomPad)
+            .toInt().coerceAtLeast(1)
+        val out = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        // 白色圆角卡
+        canvas.drawRoundRect(
+            RectF(leftPad, 0f, leftPad + headerW, headerH), cardR, cardR,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() },
+        )
+        // 徽标行（卡内垂直居中）
+        val badgeTop = (headerH - badgeH) / 2f
+        val badgeCy = badgeTop + badgeH / 2f
+        val badgeLeft = leftPad + cardLPad
+        canvas.drawRoundRect(
+            RectF(badgeLeft, badgeTop, badgeLeft + badgeW, badgeTop + badgeH), badgeR, badgeR,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent },
+        )
+        // 白色对勾
+        val check = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            this.style = Paint.Style.STROKE
+            strokeWidth = w * 0.0045f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        val cx0 = badgeLeft + badgePadL
+        val checkPath = Path().apply {
+            moveTo(cx0 + checkW * 0.08f, badgeCy + checkW * 0.02f)
+            lineTo(cx0 + checkW * 0.4f, badgeCy + checkW * 0.3f)
+            lineTo(cx0 + checkW * 0.98f, badgeCy - checkW * 0.34f)
+        }
+        canvas.drawPath(checkPath, check)
+        val badgeFm = badgePaint.fontMetrics
+        canvas.drawText(
+            badgeText, cx0 + checkW + w * 0.014f,
+            badgeCy + (badgeFm.descent - badgeFm.ascent) / 2f - badgeFm.descent, badgePaint,
+        )
+        val timeFm = timePaint.fontMetrics
+        canvas.drawText(
+            timeText, badgeLeft + badgeW + w * 0.014f,
+            badgeCy + (timeFm.descent - timeFm.ascent) / 2f - timeFm.descent, timePaint,
+        )
+        // 日期行
+        val dateBaseline = headerH + gapDate - dateFm.ascent
+        canvas.drawText(dateText, leftPad, dateBaseline, datePaint)
+        // 图标行（圆点/小人 + 悬挂缩进）
+        var rowTop = headerH + gapDate + dateFm.descent + gapAfterDate
+        iconRows.forEach { (layout, person) ->
+            val baseline = rowTop - addrPaint.fontMetrics.ascent
+            if (person) {
+                val iconH = w * 0.030f
+                drawPersonIcon(canvas, bulletCX - iconH / 2f, baseline - iconH * 0.88f, iconH, white)
+            } else {
+                canvas.drawCircle(
+                    bulletCX, baseline - addrPaint.textSize * 0.32f, bulletR,
+                    Paint(Paint.ANTI_ALIAS_FLAG).apply { color = white },
+                )
+            }
+            canvas.save()
+            canvas.translate(addrTextX, rowTop)
+            layout.draw(canvas)
+            canvas.restore()
+            rowTop += layout.height + gapRow
+        }
+        // 验证行（盾牌 + 已验证照片真实性）
+        val verifyTop = rowTop - gapRow + gapVerify
+        val verifyBaseline = verifyTop - verifyFm.ascent
+        val shieldCy = verifyBaseline - verifyPaint.textSize * 0.28f
+        val sy = shieldCy - shieldH / 2f
+        val shield = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            this.style = Paint.Style.STROKE
+            strokeWidth = w * 0.004f
+            strokeJoin = Paint.Join.ROUND
+        }
+        val shieldPath = Path().apply {
+            moveTo(leftPad, sy + shieldH * 0.1f)
+            quadTo(leftPad + shieldW / 2f, sy - shieldH * 0.04f, leftPad + shieldW, sy + shieldH * 0.1f)
+            lineTo(leftPad + shieldW, sy + shieldH * 0.52f)
+            quadTo(leftPad + shieldW, sy + shieldH * 0.84f, leftPad + shieldW / 2f, sy + shieldH)
+            quadTo(leftPad, sy + shieldH * 0.84f, leftPad, sy + shieldH * 0.52f)
+            close()
+        }
+        canvas.drawPath(shieldPath, shield)
+        val check2 = Paint(check).apply { strokeWidth = w * 0.0035f }
+        canvas.drawPath(
+            Path().apply {
+                moveTo(leftPad + shieldW * 0.28f, shieldCy - shieldW * 0.02f)
+                lineTo(leftPad + shieldW * 0.44f, shieldCy + shieldW * 0.14f)
+                lineTo(leftPad + shieldW * 0.74f, shieldCy - shieldW * 0.18f)
+            },
+            check2,
+        )
+        canvas.drawText(verifyText, leftPad + shieldW + gapShieldText, verifyBaseline, verifyPaint)
+        return Block(out)
     }
 
     /** 记录仪：黑底等宽字体，红点 REC 标记，细边框 */
@@ -955,15 +2095,15 @@ object WatermarkRenderer {
         val block = render(state, basis, dynamic)
         if (block.width <= 1) return null
         val (left, top) = positionBlock(
-            canvasW, canvasH, block.width, block.height,
+            canvasW, canvasH, block.contentW, block.contentH,
             state.anchorX, state.anchorY, rotationDeg,
         )
         val st = state.style
         return GlassGeometry(
-            centerX = left + block.width / 2f,
-            centerY = top + block.height / 2f,
-            width = block.width.toFloat(),
-            height = block.height.toFloat(),
+            centerX = left + block.contentW / 2f,
+            centerY = top + block.contentH / 2f,
+            width = block.contentW.toFloat(),
+            height = block.contentH.toFloat(),
             rotationDeg = rotationDeg,
             cornerPx = glassCornerPx(st.glassCornerRadius, block.width, block.height),
             refractionHeightPx = glassDpToPx(st.glassRefractionHeight, basis).coerceAtLeast(1f),
@@ -1088,11 +2228,13 @@ object WatermarkRenderer {
             drawW = WebTemplateRenderer.webDrawFraction(renderState) * basis
             drawH = block.height * drawW / block.width
         } else {
-            drawW = block.width.toFloat()
-            drawH = block.height.toFloat()
+            // 定位按内容区（带阴影外沿的布局外沿不参与钳位，v249）
+            drawW = block.contentW.toFloat()
+            drawH = block.contentH.toFloat()
         }
         val (left, top) = positionBlock(
             canvasW, canvasH, drawW.roundToInt(), drawH.roundToInt(), ax, ay, rot, edgeToEdge = fullBar,
+            extraBottomMarginPx = -bottomMarginAllowance(renderState, canvasW),
         )
         // 液态玻璃：先画玻璃卡（CPU 版 AGSL 采样成片画面，公式与库一致），再画文本块
         // （视频 GPU 折射路径跳过玻璃卡，只出文字层）
@@ -1117,7 +2259,8 @@ object WatermarkRenderer {
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             canvas.drawBitmap(block.bitmap, null, RectF(left, top, left + drawW, top + drawH), paint)
         } else {
-            canvas.drawBitmap(block.bitmap, left, top, null)
+            // 位图整体（含阴影外沿）回退内容区左上角绘制：left/top 是内容区的定位点
+            canvas.drawBitmap(block.bitmap, left - block.offsetX, top - block.offsetY, null)
         }
         canvas.restore()
         // 网页模板的位图归 WebTemplateRenderer 缓存所有，不能回收
@@ -1127,6 +2270,11 @@ object WatermarkRenderer {
     /** 渐变底栏"拉满整张照片宽度"模式：水印宽度滑杆拉到最大（>=99.9%） */
     fun isFullWidthBar(state: WatermarkState): Boolean =
         state.style.layout == "GRADIENT" && state.style.maxWidthRatio >= 0.999f
+
+    /** 布局级底部安全边距放宽（v252 用户反馈：马克·打卡下安全边距视觉偏高；
+     *  v253 再加 10 像素）：该布局允许整体额外下沉的画面宽比例，预览/烧录共用。其他布局 0 */
+    fun bottomMarginAllowance(state: WatermarkState, canvasWidth: Int): Float =
+        if (state.style.layout == "MARK_CLOCK") canvasWidth * 0.020f else 0f
 
 
 /** 记录点光晕色：同 RGB、35% 透明 */

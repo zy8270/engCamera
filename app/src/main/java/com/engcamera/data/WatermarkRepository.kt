@@ -113,21 +113,25 @@ class WatermarkRepository(private val context: Context) {
             if (stored != null) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
                     .onSuccess {
-                        _state.value = ensureCountField(
-                            ensureWeatherField(
-                                migrateWidth(
-                                    migrateWebScale(
-                                        migrateWebOpacity(
-                                            migrateShadowAlpha(
-                                                migrateLiquidGlass(
-                                                    migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                    _state.value = enforceUniqueFieldIds(
+                        migrateSoftShadowDefaults(
+                            ensureCountField(
+                                ensureWeatherField(
+                                    migrateWidth(
+                                        migrateWebScale(
+                                            migrateWebOpacity(
+                                                migrateShadowAlpha(
+                                                    migrateLiquidGlass(
+                                                        migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                                                    ),
                                                 ),
                                             ),
                                         ),
                                     ),
                                 ),
                             ),
-                        )
+                        ),
+                    )
                     }
             }
             context.appDataStore.data.first()[historyKey]?.let { raw ->
@@ -186,11 +190,15 @@ class WatermarkRepository(private val context: Context) {
                     g.copy(
                         projects = g.projects.map { p ->
                             p.copy(
-                                state = migrateFieldOrder(
-                                    migrateWebScale(
-                                        migrateWebOpacity(
-                                            migrateShadowAlpha(
-                                                migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                state = enforceUniqueFieldIds(
+                                    migrateSoftShadowDefaults(
+                                        migrateFieldOrder(
+                                            migrateWebScale(
+                                                migrateWebOpacity(
+                                                    migrateShadowAlpha(
+                                                        migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                                    ),
+                                                ),
                                             ),
                                         ),
                                     ),
@@ -392,11 +400,11 @@ class WatermarkRepository(private val context: Context) {
     }
 
     /**
-     * 所有修改走这里：同步更新内存，按需落盘。isTitle 唯一性在这里统一保证（待确认 5）。
+     * 所有修改走这里：同步更新内存，按需落盘。isTitle 唯一性与字段 id 唯一性在这里统一保证。
      * persist=false 用于高频更新（如拖动水印每帧），调用方需自行 debounce 后 persistState()。
      */
     fun update(persist: Boolean = true, transform: (WatermarkState) -> WatermarkState) {
-        val next = enforceTitleUniqueness(transform(_state.value))
+        val next = enforceTitleUniqueness(enforceUniqueFieldIds(transform(_state.value)))
         _state.value = next
         syncCurrentProject(next)
         if (persist) {
@@ -559,16 +567,24 @@ class WatermarkRepository(private val context: Context) {
             return
         }
         val cur = _state.value
+        // 同类型多字段（如今日·打卡1 的拍摄人/工作单位都是 CUSTOM）按第 k 个出现位对位继承，
+        // 不能都用 firstOrNull（会拿到同一份值/同一个 id）
+        val seenCounts = mutableMapOf<FieldType, Int>()
         val newFields = tpl.fields.map { def ->
-            val existing = cur.fields.firstOrNull { it.type == def.type }
+            val k = seenCounts.getOrDefault(def.type, 0)
+            seenCounts[def.type] = k + 1
+            val existing = cur.fields.filter { it.type == def.type }.getOrNull(k)
             WatermarkField(
-                id = existing?.id ?: "f_${def.type.name.lowercase()}_${System.currentTimeMillis()}",
+                // 同类型多字段同一毫秒内生成会撞 id（v245 崩溃根因），带上第 k 位后缀
+                id = existing?.id ?: "f_${def.type.name.lowercase()}_${System.currentTimeMillis()}" +
+                    (if (k > 0) "_$k" else ""),
                 type = def.type,
                 label = def.label,
                 value = existing?.value.orEmpty(),
                 // 字段开关跟随用户现状（用户需求 2026-10-17）：切模板不改数据和开关；
-                // 目标模板独有的新字段才用模板默认开关（模板特殊情况）
-                enabled = existing?.enabled ?: def.enabled,
+                // 目标模板独有的新字段才用模板默认开关；forceEnabled 字段恒用模板默认
+                // （如今日·打卡的天气默认关，用户需求 2026-10-31）
+                enabled = if (def.forceEnabled) def.enabled else (existing?.enabled ?: def.enabled),
                 isTitle = def.isTitle,
                 deletable = def.deletable,
             )
@@ -751,10 +767,14 @@ class WatermarkRepository(private val context: Context) {
             return
         }
         val defaultValues = defaultFields().associateBy { it.type }
+        val seenCounts = mutableMapOf<FieldType, Int>()
         val newFields = tpl.fields.map { def ->
-            val existing = cur.fields.firstOrNull { it.type == def.type }
+            val k = seenCounts.getOrDefault(def.type, 0)
+            seenCounts[def.type] = k + 1
+            val existing = cur.fields.filter { it.type == def.type }.getOrNull(k)
             WatermarkField(
-                id = existing?.id ?: "f_${def.type.name.lowercase()}_${System.currentTimeMillis()}",
+                id = existing?.id ?: "f_${def.type.name.lowercase()}_${System.currentTimeMillis()}" +
+                    (if (k > 0) "_$k" else ""),
                 type = def.type,
                 label = def.label,
                 value = defaultValues[def.type]?.value.orEmpty(),
@@ -824,6 +844,45 @@ class WatermarkRepository(private val context: Context) {
                 } else {
                     f
                 }
+            },
+        )
+    }
+
+    /** 存量数据迁移：放射阴影默认值 v250→v251（用户拍板 宽高50%/深浅30%/扩散70%）。
+     *  仅恰好等于 v250 全套旧默认（0.8/0.8/0.24/0.5，即用户没动过拉杆）时替换；
+     *  替换后特征消失，幂等。 */
+    private fun migrateSoftShadowDefaults(s: WatermarkState): WatermarkState =
+        if (s.style.softShadowW == 0.8f && s.style.softShadowH == 0.8f &&
+            s.style.softShadowAlpha == 0.24f && s.style.softShadowSpread == 0.5f
+        ) {
+            s.copy(
+                style = s.style.copy(
+                    softShadowW = 0.5f,
+                    softShadowH = 0.5f,
+                    softShadowAlpha = 0.30f,
+                    softShadowSpread = 0.7f,
+                ),
+            )
+        } else {
+            s
+        }
+
+    /** 字段 id 去重（v245 修复）：今日·打卡1 的拍摄人/工作单位都是 CUSTOM，applyTemplate 曾在
+     *  同一毫秒生成两个相同 id——编辑器字段列表以 id 为 key 直接崩溃。首个保留原 id，
+     *  后续重复追加序号后缀；无重复原样返回（幂等）。挂在 update 与启动迁移双链上，
+     *  已带脏数据的存量状态在加载时即被修复 */
+    private fun enforceUniqueFieldIds(state: WatermarkState): WatermarkState {
+        if (state.fields.size == state.fields.map { it.id }.distinct().size) return state
+        val seen = mutableSetOf<String>()
+        return state.copy(
+            fields = state.fields.map { f ->
+                var id = f.id
+                var n = 1
+                while (!seen.add(id)) {
+                    id = "${f.id}_${n}"
+                    n++
+                }
+                if (id == f.id) f else f.copy(id = id)
             },
         )
     }

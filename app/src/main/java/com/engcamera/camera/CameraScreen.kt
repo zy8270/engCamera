@@ -230,13 +230,19 @@ fun CameraScreen(
     }
 
     LaunchedEffect(Unit) {
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ),
+        // 旧权限模型（安卓9及以下）：存储读/写都要运行时授权——READ 供启动「最新」
+        // 缩略图查询、WRITE 供 MediaStore 保存成片/录像；安卓10+ 分区存储不需要。
+        // 无授权时 queryMedia 返回空、保存走「保存失败」toast，均不闪退
+        val perms = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
         )
+        if (android.os.Build.VERSION.SDK_INT <= 28) {
+            perms += Manifest.permission.READ_EXTERNAL_STORAGE
+            perms += Manifest.permission.WRITE_EXTERNAL_STORAGE
+        }
+        permissionLauncher.launch(perms.toTypedArray())
     }
 
     // Toast 提示

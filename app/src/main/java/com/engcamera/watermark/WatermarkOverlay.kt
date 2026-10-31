@@ -217,13 +217,14 @@ fun WatermarkOverlay(
                     )
                 }
             } else if (block != null) {
-            // 网页位图按固定宽渲染，这里缩放到画面宽 × webScale 显示（与成片一致）
-            var dw = block.width
-            var dh = block.height
+            // 网页位图按固定宽渲染，这里缩放到画面宽 × webScale 显示（与成片一致）；
+            // 定位一律按内容区（带阴影外沿的布局外沿不参与钳位，v249）
+            var dw = block.contentW
+            var dh = block.contentH
             if (isWeb && block.width > 1 && scaleBasis > 0) {
                 val f = WebTemplateRenderer.webDrawFraction(state) * scaleBasis / block.width
-                dw = (block.width * f).roundToInt().coerceAtLeast(1)
-                dh = (block.height * f).roundToInt().coerceAtLeast(1)
+                dw = (block.contentW * f).roundToInt().coerceAtLeast(1)
+                dh = (block.contentH * f).roundToInt().coerceAtLeast(1)
             }
             val (left, top) = WatermarkRenderer.positionBlock(
                 widthPx, heightPx,
@@ -231,6 +232,8 @@ fun WatermarkOverlay(
                 anchorSx, anchorSy,
                 rotationDeg,
                 edgeToEdge = WatermarkRenderer.isFullWidthBar(state),
+                // 布局级底部放宽（马克·打卡整体下沉，v252）：负值=底部钳位额外放宽
+                extraBottomMarginPx = -WatermarkRenderer.bottomMarginAllowance(state, widthPx),
             )
             // 上报水印块包围盒（旋转后的视觉包围盒矩形，供宿主长按命中判定，v226）；
             // ±90° 时卡片绕中心转了 90°，视觉包围盒宽高互换（v232 修：确认页横拍
@@ -391,8 +394,18 @@ fun WatermarkOverlay(
                 bitmap = block.bitmap.asImageBitmap(),
                 contentDescription = "水印",
                 modifier = Modifier
-                    .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
-                    .requiredSize(with(density) { dw.toDp() }, with(density) { dh.toDp() })
+                    // 位图整体（含阴影外沿）回退内容区左上角摆放：left/top 是内容区定位点
+                    .offset {
+                        IntOffset(
+                            (left - block.offsetX).roundToInt(),
+                            (top - block.offsetY).roundToInt(),
+                        )
+                    }
+                    // 原生按位图自然尺寸（阴影外沿在位图内）；网页按缩放后尺寸显示
+                    .requiredSize(
+                        with(density) { (if (isWeb) dw else block.width).toDp() },
+                        with(density) { (if (isWeb) dh else block.height).toDp() },
+                    )
                     .graphicsLayer { rotationZ = rotationDeg }
                     // 单一手势源：位移超 slop 即拖动（本地增量按旋转角转回屏幕系，跟手方向不变），
                     // 未拖动抬手视为点击进入编辑器。避免 tap/drag 双检测器在旋转层互相干扰。

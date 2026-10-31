@@ -1,9 +1,9 @@
 package com.engcamera.data
 
 /**
- * 内置水印模板库（0.6.0）。
- * 原生 7 款：WatermarkRenderer 按 style.layout 绘制，拍照零额外开销；
- * 网页 3 款：完整 HTML/CSS，WebView 离线渲染成位图（导入的用户模板同机制）。
+ * 内置水印模板库。
+ * 原生 13 款：WatermarkRenderer 按 style.layout 绘制，拍照零额外开销；
+ * 网页 2 款：完整 HTML/CSS，WebView 离线渲染成位图（导入的用户模板同机制）。
  */
 object TemplatePresets {
 
@@ -110,6 +110,216 @@ object TemplatePresets {
                 TemplateOptionDef("glassTintBlue", "着色蓝", "slider", 0f, 1f),
                 TemplateOptionDef("glassDispersion", "色散", "slider", 0f, 1f),
                 TemplateOptionDef("glassBlurRadius", "模糊半径", "slider", 0f, 50f),
+            ),
+        ),
+        // ---------- 原生·打卡/工程记录系列（2026-10-30 像素级仿参考图五款；2026-10-31 修订并
+        //            新增今日·打卡1。排序在经典蓝/液态玻璃之后，原有内置模板顺延，网页模板仍殿后） ----------
+        WatermarkTemplate(
+            id = "today_card",
+            name = "今日·工程",
+            style = style("TODAY_CARD") {
+                copy(
+                    maxWidthRatio = 0.525f,
+                    cornerRatio = 0.0135f,
+                    titleBgColor = 0xFF6697E4,
+                    titleTextColor = 0xFFFFFFFF,
+                    bodyBgColor = 0xFFFFFFFF,
+                    bgOpacity = 58,
+                    bodyTextColor = 0xFF111111,
+                    recDot = true,
+                    recDotColor = 0xFFF5C44F,
+                    weatherEmoji = false,
+                )
+            },
+            fields = listOf(
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+                TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
+                TemplateFieldDef(FieldType.DATETIME, "拍摄时间"),
+                TemplateFieldDef(FieldType.WEATHER, "天气"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+                TemplateFieldDef(FieldType.COUNT, "计数", enabled = false),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
+                TemplateOptionDef("cornerRatio", "圆角", "slider", 0f, 0.05f),
+                TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
+                TemplateOptionDef("recDot", "记录点", "switch"),
+                TemplateOptionDef("recDotColor", "记录点颜色", "color"),
+                TemplateOptionDef("titleBgColor", "标题底色", "color"),
+                TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
+                TemplateOptionDef("bodyBgColor", "正文底色", "color"),
+                TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
+            ),
+        ),
+        WatermarkTemplate(
+            id = "today_clock",
+            name = "今日·打卡",
+            style = style("TODAY_CLOCK") {
+                copy(
+                    maxWidthRatio = 0.5f,
+                    accentColor = 0xFFFFC231,
+                    bodyTextColor = 0xFFFFFFFF,
+                    weatherEmoji = false,
+                )
+            },
+            fields = listOf(
+                TemplateFieldDef(FieldType.DATETIME, "时间"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+                // 备注：白→透明渐变背景条（参考图 2026-10-31，值空不显示），多条全展示
+                TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
+                // 天气：追加在星期行后（参考图"星期六 晴 30℃"），默认关（用户需求 2026-10-31）
+                TemplateFieldDef(FieldType.WEATHER, "天气", enabled = false, forceEnabled = true),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("accentColor", "分隔条颜色", "color"),
+                TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
+                // 椭圆放射阴影五拉杆（用户自调后定默认值 2026-10-31）
+                TemplateOptionDef("softShadowW", "阴影宽度", "slider", 0.3f, 1.5f),
+                TemplateOptionDef("softShadowH", "阴影高度", "slider", 0.3f, 1.5f),
+                TemplateOptionDef("softShadowAlpha", "阴影深浅", "slider", 0f, 1f),
+                TemplateOptionDef("softShadowSpread", "阴影扩散", "slider", 0.2f, 0.9f),
+                TemplateOptionDef("softShadowColor", "阴影颜色", "color"),
+            ),
+        ),
+        WatermarkTemplate(
+            id = "today_clock1",
+            name = "今日·打卡1",
+            // 参考 imgcache/今日-打卡1.jpg（2026-10-31）：纹章纹浅底卡「打卡」黄徽标+蓝色时间、
+            // 强调色竖条+地点/日期组、半透明灰字段卡（拍摄人/备注/工作单位，空值整行隐藏）、
+            // 盾牌验证行、水印背后浅色软阴影
+            style = style("TODAY_CLOCK1") {
+                copy(
+                    maxWidthRatio = 0.5f,
+                    accentColor = 0xFFFFC231,
+                    bodyTextColor = 0xFFFFFFFF,
+                    bodyBgColor = 0xFF000000,
+                    bgOpacity = 30,
+                    weatherEmoji = false,
+                )
+            },
+            fields = listOf(
+                TemplateFieldDef(FieldType.DATETIME, "时间"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+                TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
+                TemplateFieldDef(FieldType.CUSTOM, "拍摄人", deletable = true),
+                TemplateFieldDef(FieldType.CUSTOM, "工作单位", deletable = true),
+                // 天气：默认关，开启后追加在日期行后（用户需求 2026-10-31 v248）
+                TemplateFieldDef(FieldType.WEATHER, "天气", enabled = false, forceEnabled = true),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("accentColor", "打卡配色", "color"),
+                TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
+                // 椭圆放射阴影五拉杆（用户自调后定默认值 2026-10-31）
+                TemplateOptionDef("softShadowW", "阴影宽度", "slider", 0.3f, 1.5f),
+                TemplateOptionDef("softShadowH", "阴影高度", "slider", 0.3f, 1.5f),
+                TemplateOptionDef("softShadowAlpha", "阴影深浅", "slider", 0f, 1f),
+                TemplateOptionDef("softShadowSpread", "阴影扩散", "slider", 0.2f, 0.9f),
+                TemplateOptionDef("softShadowColor", "阴影颜色", "color"),
+            ),
+        ),
+        WatermarkTemplate(
+            id = "mark_card",
+            name = "马克·工程",
+            style = style("MARK_CARD") {
+                copy(
+                    maxWidthRatio = 0.555f,
+                    cornerRatio = 0.0115f,
+                    titleBgColor = 0xFF00A3FF,
+                    titleTextColor = 0xFFFFFFFF,
+                    bodyBgColor = 0xFF000000,
+                    bgOpacity = 12,
+                    bodyTextColor = 0xFFFFFFFF,
+                    accentColor = 0xFF00A3FF,
+                    weatherEmoji = false,
+                )
+            },
+            fields = listOf(
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+                TemplateFieldDef(FieldType.DATETIME, "时间"),
+                TemplateFieldDef(FieldType.WEATHER, "天气"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+                // 备注走 NOTE 共享值（地点下方灰底普通行）；施工单位=独立 CUSTOM 值，
+                // 不再吃备注默认值（"三层梁板…"），空白显示占位；渲染永远置底青色输入条
+                TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
+                TemplateFieldDef(FieldType.CUSTOM, "施工单位", deletable = true),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
+                TemplateOptionDef("cornerRatio", "圆角", "slider", 0f, 0.05f),
+                TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
+                TemplateOptionDef("accentColor", "输入条颜色", "color"),
+                TemplateOptionDef("titleBgColor", "标题底色", "color"),
+                TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
+                TemplateOptionDef("bodyBgColor", "正文底色", "color"),
+                TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
+            ),
+        ),
+        WatermarkTemplate(
+            id = "mark_card_light",
+            name = "马克·工程白",
+            style = style("MARK_CARD_LIGHT") {
+                copy(
+                    maxWidthRatio = 0.555f,
+                    cornerRatio = 0.0115f,
+                    titleBgColor = 0xFF216EEE,
+                    titleTextColor = 0xFFFFFFFF,
+                    bodyBgColor = 0xFFFFFFFF,
+                    bgOpacity = 70,
+                    bodyTextColor = 0xFF1A1A1A,
+                    accentColor = 0xFFFEB800,
+                    weatherEmoji = false,
+                )
+            },
+            fields = listOf(
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+                TemplateFieldDef(FieldType.DATETIME, "时间"),
+                TemplateFieldDef(FieldType.WEATHER, "天气"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
+                TemplateOptionDef("cornerRatio", "圆角", "slider", 0f, 0.05f),
+                TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
+                TemplateOptionDef("accentColor", "方块颜色", "color"),
+                TemplateOptionDef("titleBgColor", "标题底色", "color"),
+                TemplateOptionDef("titleTextColor", "标题文字颜色", "color"),
+                TemplateOptionDef("bodyBgColor", "正文底色", "color"),
+                TemplateOptionDef("bodyTextColor", "正文文字颜色", "color"),
+            ),
+        ),
+        WatermarkTemplate(
+            id = "mark_clock",
+            name = "马克·打卡",
+            style = style("MARK_CLOCK") {
+                copy(
+                    maxWidthRatio = 0.55f,
+                    accentColor = 0xFF00C0A0,
+                    bodyTextColor = 0xFFFFFFFF,
+                    weatherEmoji = false,
+                )
+            },
+            fields = listOf(
+                TemplateFieldDef(FieldType.DATETIME, "时间"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+                // 备注=圆点行；拍摄人=小人图标行（参考图 2026-10-31），值空整行隐藏
+                TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
+                TemplateFieldDef(FieldType.CUSTOM, "拍摄人", deletable = true),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            options = listOf(
+                TemplateOptionDef("accentColor", "打卡配色", "color"),
+                TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
             ),
         ),
         WatermarkTemplate(

@@ -71,6 +71,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
             "borderColor" -> s.style.copy(borderColor = color)
             "recDotColor" -> s.style.copy(recDotColor = color)
             "gradientColor" -> s.style.copy(gradientColor = color)
+            "softShadowColor" -> s.style.copy(softShadowColor = color)
             else -> s.style
         }
         s.copy(style = st)
@@ -141,6 +142,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 "shadowSpread" -> s.style.copy(shadowSpread = value.coerceIn(0f, 3f))
                 "shadowAlpha" -> s.style.copy(shadowAlpha = value.coerceIn(0f, 1f))
                 "shadowOffsetY" -> s.style.copy(shadowOffsetY = value.coerceIn(0f, 3f))
+                // v249 今日·打卡/打卡1 椭圆放射阴影拉杆
+                "softShadowW" -> s.style.copy(softShadowW = value.coerceIn(0.3f, 1.5f))
+                "softShadowH" -> s.style.copy(softShadowH = value.coerceIn(0.3f, 1.5f))
+                "softShadowAlpha" -> s.style.copy(softShadowAlpha = value.coerceIn(0f, 1f))
+                "softShadowSpread" -> s.style.copy(softShadowSpread = value.coerceIn(0.2f, 0.9f))
                 else -> s.style
             }
             s.copy(style = st)

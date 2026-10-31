@@ -20,3 +20,5 @@ app/keystore.properties
 base.apk
 /*.apk
 test/
+imgcache/
+.smoke/

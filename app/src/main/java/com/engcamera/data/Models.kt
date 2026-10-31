@@ -71,6 +71,12 @@ data class WatermarkStyle(
     val shadowOffsetY: Float = 1f,           // 阴影垂直偏移倍数（1=旧效果）
     // ---- v159 位置字段经纬度开关 ----
     val showLatLng: Boolean = false,         // 位置文本显示尾部经纬度括号段（默认关，用户拍板 2026-10-16）
+    // ---- v249 今日·打卡/打卡1 椭圆放射阴影（模板选项拉杆；默认值用户拍板 2026-10-31 v251） ----
+    val softShadowW: Float = 0.5f,           // 阴影长轴半径 = 内容长边 × 此倍率
+    val softShadowH: Float = 0.5f,           // 阴影短轴半径 = 内容短边 × 此倍率
+    val softShadowAlpha: Float = 0.30f,      // 中心深浅（0=全透 1=不透明）
+    val softShadowSpread: Float = 0.7f,      // 扩散：中间档停靠位置（越大越向外延展）
+    val softShadowColor: Long = 0xFF000000,  // 阴影颜色
 )
 
 /**
@@ -193,6 +199,8 @@ data class TemplateFieldDef(
     val enabled: Boolean = true,
     val deletable: Boolean = false,
     val isTitle: Boolean = false,
+    /** true=启用状态恒用模板默认、不跟随用户存量（如今日·打卡的天气默认关，用户需求 2026-10-31） */
+    val forceEnabled: Boolean = false,
 )
 
 /** 模板暴露的可调选项（编辑器内编辑；值写入 WatermarkStyle 对应键） */

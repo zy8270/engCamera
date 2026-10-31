@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.12/engCamera-v0.6.12-241.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.13/engCamera-v0.6.13-254.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, and multiple **project profiles** switch the whole watermark set in one tap. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.12 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.13 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -50,7 +50,8 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 ### Watermark
 
 - **Liquid Glass default template**: an iOS-style liquid glass card rendered live by the bundled [AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) (MIT) — edge refraction + dispersion sampled from the live camera feed, WYSIWYG in preview and burned with the same shader; **videos get true refraction too** (a custom GPU frame effect samples the video itself frame by frame); **gallery-photo watermarking and the confirm page get true refraction as well** (full-resolution static rendering — it refracts wherever you drag it); corner radius (percent of the short side, 50% = full semicircle) / refraction height & offset / tint / dispersion / blur are adjustable, as are text colors, shadow (size / spread / opacity / offset), watermark width and record point; all four orientations run the GPU path at full frame rate (requires Android 13+; older versions fall back to a translucent glass base)
-- **Template system**: 9 built-in — 7 native (classic engineering blue / liquid glass / minimal white shadow / bordered card / single-line / gradient bar / note card, drawn directly on Canvas at zero cost) + 2 web (film slate / magazine card, offline HTML/CSS); each template exposes its own knobs (title/body/background colors, border, radius, gradient base, width, web scale…), saved per project; web templates export/import as HTML, and any template exports whole (fields/styles/position) to clipboard or file for another device
+- **Template system**: 15 built-in — 13 native (classic engineering blue / liquid glass / Today Site / Today Clock-in / Today Clock-in 1 / Mark Site / Mark Site White / Mark Clock-in / minimal white shadow / bordered card / single-line / gradient bar / note card, drawn directly on Canvas at zero cost) + 2 web (film slate / magazine card, offline HTML/CSS); each template exposes its own knobs (title/body/background colors, border, radius, gradient base, width, web scale…), saved per project; web templates export/import as HTML, and any template exports whole (fields/styles/position) to clipboard or file for another device
+- **Clock-in / site-record template series**: Today Clock-in / Today Clock-in 1 / Mark Clock-in show a big time with date / weekday / weather and address notes, styled after mainstream clock-in cameras; Mark series adds a title bar with justified label columns; the radial backdrop shadow (width / height / strength / spread / color) has dedicated sliders, the Today series supports multiple note lines on a white-to-transparent fade, and Mark Site keeps a dedicated "contractor" field (placeholder when empty) pinned to the bottom
 - **9-grid position**: visually pick any of 9 slots (corners / edges / center), never reset by rotation, or fine-tune by dragging; directions are interpreted in the **physical gravity** frame — in landscape, "bottom" is the table side
 - **Editor live camera preview (eye toggle)**: tap the "eye" in the editor to swap the background for the live rear camera — liquid glass refracts it live; closed eye = viewfinder freeze-frame background (settings toggle; off = flat dual-mountain artwork, dark/light variants)
 - **Project groups**: one-tap switch between complete watermark configs (create = copy current, rename, bulk delete, reset), current project shown in the editor title; a persistent quick entry sits left of the bottom mode switch so multi-site users never open the editor just to swap; a new group's name can auto-fill its watermark title (setting)
