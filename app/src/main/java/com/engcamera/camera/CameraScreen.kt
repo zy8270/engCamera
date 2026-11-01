@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
@@ -192,6 +193,27 @@ fun CameraScreen(
             Uri.fromParts("package", context.packageName, null),
         ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
+    }
+
+    /** 打开系统「位置信息」总开关设置（权限与开关是两件事，用户反馈 2026-11-01） */
+    fun openLocationSettings() {
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
+
+    // 定位权限单独的再申请通道：首次申请被拒后系统不会再弹窗，只能引导用户点按钮
+    // 重新申请（用户仍选"拒绝"则只有去应用设置一条路）
+    val locationPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val ok = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (ok) {
+            vm.startSensors()
+        } else {
+            openAppSettings()
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -497,6 +519,27 @@ fun CameraScreen(
                             EditorBackdrop.capture(previewView)
                             onOpenEditor()
                         },
+                    )
+                }
+
+                // 定位异常提示条：权限与"定位总开关"是两件事，用户只授权了权限仍可能
+                // 拿不到点（用户反馈 2026-11-01）。这里给一句话+一键跳对应系统设置页
+                val locDisabled by vm.locationServiceDisabled.collectAsState()
+                val locDenied by vm.locationPermissionDenied.collectAsState()
+                if (!ui.confirming && !ui.annotating && (locDisabled || locDenied)) {
+                    LocationHintBar(
+                        permissionDenied = locDenied,
+                        onOpenLocationSettings = ::openLocationSettings,
+                        onRequestPermission = {
+                            locationPermLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                                ),
+                            )
+                        },
+                        onOpenAppSettings = ::openAppSettings,
+                        onDismiss = vm::dismissLocationHint,
                     )
                 }
 
@@ -2022,6 +2065,85 @@ private fun Shutter(
                     .size(58.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.onSurface),
+            )
+        }
+    }
+}
+
+/**
+ * 定位异常提示条（用户反馈 2026-11-01）：权限已授权但仍拿不到定位时，告诉用户到底
+ * 缺哪一步——"定位总开关没开"和"权限被系统收回"是两件完全不同的事，前者只需跳
+ * 系统位置设置，后者要重新授权/去应用设置。
+ */
+@Composable
+private fun LocationHintBar(
+    permissionDenied: Boolean,
+    onOpenLocationSettings: () -> Unit,
+    onRequestPermission: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val text = if (permissionDenied) {
+        I18n.t("未获得定位权限，水印位置将无法自动填写")
+    } else {
+        I18n.t("系统定位服务未开启，水印位置将无法自动填写")
+    }
+    val action = if (permissionDenied) I18n.t("去授权") else I18n.t("去开启")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f))
+            .clickable {
+                when {
+                    // 权限被系统收回：先重新申请；系统不再弹窗时用户可长按/点"去授权"
+                    // 反复无果，故申请回调里被拒就跳应用设置
+                    permissionDenied -> onRequestPermission()
+                    else -> onOpenLocationSettings()
+                }
+            }
+            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.LocationOff,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            action,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable {
+                    // 权限已"授权过但失效"时系统不再弹窗，这里给一条直达应用设置的退路
+                    if (permissionDenied) onOpenAppSettings() else onOpenLocationSettings()
+                }
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+        // 关闭按钮：提示条会一直占着预览下方一条（用户反馈太显眼），给 X 随时收起
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = I18n.t("关闭"),
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(16.dp),
             )
         }
     }

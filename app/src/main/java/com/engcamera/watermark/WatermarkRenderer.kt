@@ -21,6 +21,7 @@ import com.engcamera.data.WatermarkState
 import com.engcamera.data.WatermarkStyle
 import com.engcamera.data.WatermarkTemplates
 import com.engcamera.data.stripLatLng
+import com.engcamera.data.localizeDynamicPlaceholder
 import com.engcamera.data.weatherEmojiPrefix
 import kotlin.math.max
 import kotlin.math.min
@@ -2285,14 +2286,18 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
         val text = when (f.type) {
             FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
             FieldType.LOCATION -> f.value.ifBlank {
-                dynamic.location.ifBlank { "未获取定位" }
+                dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
             }
             FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
-            FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
+            FieldType.WEATHER -> f.value.ifBlank {
+                dynamic.weather.ifBlank { com.engcamera.i18n.I18n.t("未获取天气") }
+            }
             else -> f.value
         }
+        // LocationSource 的初始值/回退值是中文原文（如"未获取定位"），英文模式下要按当前语言显示
+        val localized = localizeDynamicPlaceholder(text)
         // 位置文本经纬度开关：关闭时剥离尾部 "(lat, lng)" 段（手动值/自动值同规则）
-        val located = if (f.type == FieldType.LOCATION && !style.showLatLng) stripLatLng(text) else text
+        val located = if (f.type == FieldType.LOCATION && !style.showLatLng) stripLatLng(localized) else localized
         // 天气 emoji 开关：命中天气词时在文本首位加扁平 emoji（原生/网页模板同规则）
         return if (f.type == FieldType.WEATHER && style.weatherEmoji) {
             weatherEmojiPrefix(located) + located

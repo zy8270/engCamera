@@ -5,6 +5,7 @@ import com.engcamera.data.FieldType
 import com.engcamera.data.WatermarkField
 import com.engcamera.data.WatermarkState
 import com.engcamera.data.WatermarkTemplate
+import com.engcamera.data.localizeDynamicPlaceholder
 import com.engcamera.data.stripLatLng
 import com.engcamera.data.weatherEmojiPrefix
 
@@ -30,14 +31,19 @@ object TemplateHtml {
     private fun fieldValue(f: WatermarkField, dynamic: DynamicValues, emoji: Boolean, showLatLng: Boolean): String {
         val text = when (f.type) {
             FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
-            FieldType.LOCATION -> f.value.ifBlank { dynamic.location.ifBlank { "未获取定位" } }
+            FieldType.LOCATION -> f.value.ifBlank {
+                dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
+            }
             FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
-            FieldType.WEATHER -> f.value.ifBlank { dynamic.weather.ifBlank { "未获取天气" } }
+            FieldType.WEATHER -> f.value.ifBlank {
+                dynamic.weather.ifBlank { com.engcamera.i18n.I18n.t("未获取天气") }
+            }
             else -> f.value
         }
         // 天气 emoji 开关：文本值随开关变化，cacheKey 的 values 部分自动失效触发重渲
         // 位置经纬度开关：与原生同规则剥离尾部 "(lat, lng)"（2026-10-16）
-        val located = if (f.type == FieldType.LOCATION && !showLatLng) stripLatLng(text) else text
+        val localized = localizeDynamicPlaceholder(text)
+        val located = if (f.type == FieldType.LOCATION && !showLatLng) stripLatLng(localized) else localized
         return if (f.type == FieldType.WEATHER && emoji) weatherEmojiPrefix(located) + located else located
     }
 

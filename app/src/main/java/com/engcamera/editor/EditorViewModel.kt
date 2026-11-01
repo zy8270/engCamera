@@ -39,6 +39,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     /** 自动天气文本（随定位联动获取） */
     val weatherText: StateFlow<String> = container.locationSource.weather
 
+    /** 定位总开关关闭 / 定位权限缺失：位置字段编辑对话框据此换成提示文案 */
+    val locationServiceDisabled: StateFlow<Boolean> = container.locationSource.serviceDisabled
+    val locationPermissionDenied: StateFlow<Boolean> = container.locationSource.permissionDenied
+
     /** 手动刷新天气（编辑器"刷新天气"按钮用） */
     fun refreshWeather() = container.locationSource.refreshWeather()
 

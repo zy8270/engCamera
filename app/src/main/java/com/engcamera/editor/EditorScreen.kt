@@ -1,8 +1,14 @@
 package com.engcamera.editor
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,6 +42,7 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Visibility
@@ -121,6 +128,59 @@ fun EditorScreen(onBack: () -> Unit) {
     val weatherText by vm.weatherText.collectAsState()
     val fieldHistory by vm.fieldHistory.collectAsState()
     val groups by vm.projects.collectAsState()
+    // 定位异常（与相机页同一份状态：用户在相机页点过提示条的 X，这里也不再提示）
+    val locDenied by vm.locationPermissionDenied.collectAsState()
+    val locDisabled by vm.locationServiceDisabled.collectAsState()
+
+    fun openAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
+
+    fun openLocationSettings() {
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
+
+    // 位置字段编辑里的"去授权"：先重新申请（首次拒绝后系统不再弹窗），仍拒绝就跳应用设置
+    val locationPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val ok = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (ok) vm.refreshLocation() else openAppSettings()
+    }
+
+    // 位置字段编辑对话框里的定位提示：与相机页提示条同一套判断，能定位就不显示
+    val locationHintText: String? = when {
+        locDenied -> I18n.t("未获得定位权限，水印位置将无法自动填写")
+        locDisabled -> I18n.t("系统定位服务未开启，水印位置将无法自动填写")
+        // 权限与开关都正常但拿不到点（室内/无 GMS/系统限制）：也给一行提示，
+        // 否则"自动定位：未获取定位"看起来像没做自动定位。
+        // 刷新中的"定位中…"不算失败（马上就有结果，别闪一下提示）
+        isLocationUnavailable(autoLocation) -> I18n.t("暂时无法获取定位，可点下方「刷新定位」重试")
+        else -> null
+    }
+    val locationHintAction: String? = when {
+        locDenied -> I18n.t("去授权")
+        locDisabled -> I18n.t("去开启")
+        else -> null
+    }
+    val onLocationHintAction: () -> Unit = {
+        when {
+            locDenied -> locationPermLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                ),
+            )
+            locDisabled -> openLocationSettings()
+        }
+    }
 
     var editingField by remember { mutableStateOf<WatermarkField?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -541,6 +601,9 @@ fun EditorScreen(onBack: () -> Unit) {
             onLatLngChange = { vm.setTemplateSwitch("showLatLng", it) },
             onRefreshLocation = { vm.refreshLocation() },
             onRefreshWeather = { vm.refreshWeather() },
+            locationHint = locationHintText,
+            locationHintAction = locationHintAction,
+            onLocationHintAction = onLocationHintAction,
             onDismiss = { editingField = null },
             onConfirm = { label, value, isTitle ->
                 vm.updateField(field.id, label, value, isTitle)
@@ -690,6 +753,72 @@ private fun FieldRow(
     }
 }
 
+/**
+ * 定位自动文本是否为"占位符"（未获取/定位中）：这类值不该预填进字段。
+ * 水印渲染侧写入的是 I18n.t("未获取定位")，所以必须按当前语言的译文比对，
+ * 只比中文原文在英文模式下永远不命中（v0.6.14 修）。
+ */
+private fun isLocationPlaceholder(text: String): Boolean {
+    val t = text.trim()
+    if (t.isEmpty()) return true
+    val unavailable = I18n.t("未获取定位")
+    return t.startsWith(unavailable) || t == I18n.t("定位中…") || t.startsWith("未获取定位")
+}
+
+/**
+ * 定位真的拿不到（区别于"定位中…"：刷新正在进行，马上可能有结果，不该闪提示）。
+ */
+private fun isLocationUnavailable(text: String): Boolean {
+    val t = text.trim()
+    if (t.isEmpty()) return true
+    return t.startsWith(I18n.t("未获取定位")) || t.startsWith("未获取定位")
+}
+
+/**
+ * 位置字段编辑对话框里的定位提示条（与相机页 LocationHintBar 同一套文案与动作）：
+ * 权限缺失/定位开关关闭时顶掉"自动定位：…"这一行，能定位时不显示。
+ */
+@Composable
+private fun LocationHintInline(
+    text: String,
+    action: String?,
+    onAction: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f))
+            .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.LocationOff,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
+        )
+        if (action != null) {
+            Text(
+                action,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onAction)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun EditFieldDialog(
     field: WatermarkField,
@@ -703,6 +832,9 @@ private fun EditFieldDialog(
     onLatLngChange: (Boolean) -> Unit,
     onRefreshLocation: () -> Unit,
     onRefreshWeather: () -> Unit,
+    locationHint: String?,
+    locationHintAction: String?,
+    onLocationHintAction: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (label: String, value: String, isTitle: Boolean) -> Unit,
     onConfirmAndSave: (label: String, value: String, isTitle: Boolean) -> Unit,
@@ -714,8 +846,7 @@ private fun EditFieldDialog(
         when {
             field.type == FieldType.DATETIME && field.value.isBlank() -> currentTime
             field.type == FieldType.LOCATION && field.value.isBlank() ->
-                autoLocation.takeIf { it.isNotBlank() && !it.startsWith(I18n.t("未获取")) && it != I18n.t("定位中…") }
-                    ?: field.value
+                autoLocation.takeIf { !isLocationPlaceholder(it) } ?: field.value
             field.type == FieldType.WEATHER && field.value.isBlank() ->
                 autoWeather.takeIf { it.isNotBlank() } ?: field.value
             else -> field.value
@@ -750,9 +881,7 @@ private fun EditFieldDialog(
     var followWeather by remember(field.id) { mutableStateOf(false) }
     LaunchedEffect(followLocation, autoLocation) {
         if (followLocation) {
-            autoLocation.takeIf {
-                it.isNotBlank() && !it.startsWith(I18n.t("未获取")) && it != I18n.t("定位中…")
-            }?.let { setValueText(it) }
+            autoLocation.takeIf { !isLocationPlaceholder(it) }?.let { setValueText(it) }
         }
     }
     LaunchedEffect(followWeather, autoWeather) {
@@ -860,11 +989,21 @@ private fun EditFieldDialog(
                             onCheckedChange = onLatLngChange,
                         )
                     }
-                    Text(
-                        I18n.t("自动定位：{loc}").replace("{loc}", autoLocation),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (locationHint != null) {
+                        // 定位拿不到时用提示顶掉"自动定位：…"（用户反馈 2026-11-01），
+                        // 能定位就不显示，恢复原来的自动定位文本
+                        LocationHintInline(
+                            text = locationHint,
+                            action = locationHintAction,
+                            onAction = onLocationHintAction,
+                        )
+                    } else {
+                        Text(
+                            I18n.t("自动定位：{loc}").replace("{loc}", autoLocation),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     TextButton(onClick = {
                         followLocation = true
                         onRefreshLocation()

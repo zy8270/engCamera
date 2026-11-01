@@ -145,6 +145,13 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     val gravitySensor = GravitySensor(app)
     val locationSource = container.locationSource
 
+    /** 定位总开关关闭 / 定位权限缺失：相机页据此显示可点击跳系统设置的提示条 */
+    val locationServiceDisabled: StateFlow<Boolean> = locationSource.serviceDisabled
+    val locationPermissionDenied: StateFlow<Boolean> = locationSource.permissionDenied
+
+    /** 用户关掉定位提示条：状态在 LocationSource 里，必须走它才不会下一轮巡检又亮 */
+    fun dismissLocationHint() = locationSource.dismissLocationHint()
+
     private val quantizedRoll = MutableStateFlow(0)
 
     /**

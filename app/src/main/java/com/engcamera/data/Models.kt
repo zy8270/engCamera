@@ -106,6 +106,17 @@ fun stripLatLng(text: String): String {
     return stripped.ifBlank { text }
 }
 
+/**
+ * 动态值占位符本地化：LocationSource 输出的"未获取定位"/"定位中…"是中文原文，
+ * 英文模式下直接烧进成片会是中文（v0.6.14）。原生/网页渲染共用。
+ */
+fun localizeDynamicPlaceholder(text: String): String = when (text) {
+    "未获取定位" -> com.engcamera.i18n.I18n.t("未获取定位")
+    "未获取天气" -> com.engcamera.i18n.I18n.t("未获取天气")
+    "定位中…" -> com.engcamera.i18n.I18n.t("定位中…")
+    else -> text
+}
+
 /** 水印整体状态（对应计划书 6.3） */
 @Serializable
 data class WatermarkState(
