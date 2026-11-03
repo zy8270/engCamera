@@ -504,6 +504,12 @@ fun CameraScreen(
                         ui = ui,
                         effective = effective,
                         dynamic = dynamic,
+                        // 标注期间进水印编辑器：确认态相机已关，截帧只会拿到空/陈旧
+                        // 画面——清掉旧帧让编辑器走几何图案背景（与添加水印同款，v226）
+                        onOpenEditor = {
+                            EditorBackdrop.clear()
+                            onOpenEditor()
+                        },
                     )
                 } else {
                     PreviewArea(
@@ -1009,7 +1015,7 @@ private fun SettingsDrawer(
                         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                     }.getOrDefault(0L)
                     Text(
-                        "Rnzhy 2026.10.16 $versionCode engCamera MIT",
+                        "Rnzhy 2026.11.03 $versionCode engCamera MIT",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -1345,6 +1351,10 @@ private fun AnnotateArea(
             emptyBase = emptyBase,
             watermarkBounds = { wmBounds },
             onWatermarkDrag = { dx, dy -> vm.onDragWatermarkLocked(dx, dy) },
+            // 标注期间进水印编辑器（用户需求 2026-11-03）：添加水印页读的是实时
+            // watermark（锁定纵向预览），编辑器保存=仓库更新，返回本页浮层自动生效，
+            // 无需重新冻结——批量多张时每张都能单独进去改水印
+            onEditWatermark = onOpenEditor,
         ) {
             val cur = item
             if (cur != null) {

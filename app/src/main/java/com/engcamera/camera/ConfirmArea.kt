@@ -11,10 +11,13 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
@@ -23,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
@@ -32,6 +36,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +93,8 @@ internal fun ConfirmArea(
     ui: CameraUiState,
     effective: WatermarkState,
     dynamic: DynamicValues,
+    // 标注期间进水印编辑器（用户需求 2026-11-03）：点左下角编辑按钮跳编辑器
+    onOpenEditor: () -> Unit,
 ) {
     val photo = ui.confirmBitmap
     // 照片框比例跟随真实纵横比（v210）：横拍=横向 4:3，照片不压扁；无图兜底 3:4
@@ -104,8 +111,14 @@ internal fun ConfirmArea(
             .aspectRatio(3f / 4f)
             .background(MaterialTheme.colorScheme.background),
     ) {
-        // 冻结的水印状态/时间（快门瞬间定格，v195）
-        val frozenWm = ui.confirmWatermark ?: effective
+        // 冻结的水印状态/时间（快门瞬间定格，v195）。v0.6.15：标注期间进过编辑器
+        // 的话，内容/样式/模板跟编辑后的仓库走（mergeEditedWatermark），位置/旋转/
+        // 动态值保持定格。仓库状态用 collectAsState 收集（响应式）——编辑器返回后
+        // 自动重组拿到新内容
+        val repoWm by vm.watermark.collectAsState()
+        val frozenWm = ui.confirmWatermark
+            ?.let { base -> if (ui.confirmEditWatermark) vm.mergeEditedWatermark(base, repoWm) else base }
+            ?: effective
         val frozenDyn = ui.confirmDynamic ?: dynamic
         // 水印块包围盒（v232 确认页也接长按拖动：WatermarkOverlay 上报，
         // AnnotationFrame 命中判定用；拖动只改冻结态 confirmWatermark）
@@ -121,6 +134,14 @@ internal fun ConfirmArea(
             modifier = Modifier.fillMaxSize(),
             watermarkBounds = { wmBounds },
             onWatermarkDrag = { dx, dy -> vm.onDragConfirmWatermark(dx, dy) },
+            // 标注期间进水印编辑器（v0.6.15 用户需求）：改的是快门瞬间冻结的水印。
+            // 置编辑标志；返回后 ConfirmArea 显示与 confirmSave 烧录都经
+            // mergeEditedWatermark 合并（内容/样式/模板跟编辑器保存后的仓库走，
+            // 位置/旋转/时间动态值保持快门定格）
+            onEditWatermark = {
+                vm.onEnterEditWatermarkFromConfirm()
+                onOpenEditor()
+            },
         ) {
             if (photo != null && !photo.isRecycled) {
                 // remember 化：否则每次重组 asImageBitmap() 都新建实例 → 纹理反复重传
@@ -184,6 +205,11 @@ internal fun AnnotationFrame(
     // 完全无长按逻辑，行为不变
     watermarkBounds: () -> androidx.compose.ui.geometry.Rect? = { null },
     onWatermarkDrag: ((dxNorm: Float, dyNorm: Float) -> Unit)? = null,
+    // 标注期间进水印编辑器（用户需求 2026-11-03）：非 null 时白框左下角显示编辑
+    // 按钮，点击回调（拍照确认页重新冻结水印/添加水印页直接进编辑器，见调用方）。
+    // null = 不显示该按钮（其他调用方行为不变）。
+    // 注意：必须放在 photoContent 之前——尾随 lambda 绑参数表末位
+    onEditWatermark: (() -> Unit)? = null,
     photoContent: @Composable () -> Unit = {},
 ) {
     // 白框内底色=PS 式透明格子（v221）：照片未铺满的留空区（横拍上下留白）
@@ -589,48 +615,77 @@ internal fun AnnotationFrame(
                 } // 照片盒结束
             } // 缩放层结束
 
-            // 右上角撤销（钉白框右上，位置恒定）；长按=放大/回正切换（放大后快速回正的隐藏入口）
-            Box(
+            // 底部工具条（用户需求 2026-11-03）：左下=编辑水印（进水印编辑器改内容），
+            // 右下=撤销（原右上角下移）。长按撤销=放大(2.5x)/回正切换（隐藏入口保留）。
+            val wmEditCur by androidx.compose.runtime.rememberUpdatedState(onEditWatermark)
+            Row(
                 Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 20.dp, end = 20.dp)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x88000000))
-                    .combinedClickable(
-                        enabled = ui.annotations.isNotEmpty(),
-                        onClick = { vm.annotationUndo() },
-                        onLongClick = {
-                            // 长按=放大(2.5x)/回正 平滑动画（回正同时归位平移）
-                            val target = if (zoom > 1.01f) 1f else 2.5f
-                            zoomAnimJob?.cancel()
-                            zoomAnimJob = scope.launch {
-                                val z0 = zoom
-                                val px0 = pan.x
-                                val py0 = pan.y
-                                val tx = if (target == 1f) 0f else px0
-                                val ty = if (target == 1f) 0f else py0
-                                val t0 = withFrameNanos { it }
-                                val dur = 550_000_000f
-                                while (true) {
-                                    val now = withFrameNanos { it }
-                                    val p = ((now - t0) / dur).coerceIn(0f, 1f)
-                                    val e = p * p * (3f - 2f * p) // smoothstep 缓动
-                                    zoom = z0 + (target - z0) * e
-                                    pan = Offset(px0 + (tx - px0) * e, py0 + (ty - py0) * e)
-                                    if (p >= 1f) break
-                                }
-                            }
-                        },
-                    ),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.Default.Undo,
-                    contentDescription = I18n.t("撤销标注"),
-                    tint = if (ui.annotations.isEmpty()) Color(0x66FFFFFF) else Color.White,
-                    modifier = Modifier.size(22.dp),
-                )
+                if (wmEditCur != null) {
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x88000000))
+                            .clickable { wmEditCur?.invoke() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = I18n.t("编辑水印"),
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                } else {
+                    // 无编辑入口的调用方：右下角撤销单钮钉右下（保持白框内右下角位置）
+                    Box(Modifier.size(40.dp))
+                }
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x88000000))
+                        .combinedClickable(
+                            enabled = ui.annotations.isNotEmpty(),
+                            onClick = { vm.annotationUndo() },
+                            onLongClick = {
+                                // 长按=放大(2.5x)/回正 平滑动画（回正同时归位平移）
+                                val target = if (zoom > 1.01f) 1f else 2.5f
+                                zoomAnimJob?.cancel()
+                                zoomAnimJob = scope.launch {
+                                    val z0 = zoom
+                                    val px0 = pan.x
+                                    val py0 = pan.y
+                                    val tx = if (target == 1f) 0f else px0
+                                    val ty = if (target == 1f) 0f else py0
+                                    val t0 = withFrameNanos { it }
+                                    val dur = 550_000_000f
+                                    while (true) {
+                                        val now = withFrameNanos { it }
+                                        val p = ((now - t0) / dur).coerceIn(0f, 1f)
+                                        val e = p * p * (3f - 2f * p) // smoothstep 缓动
+                                        zoom = z0 + (target - z0) * e
+                                        pan = Offset(px0 + (tx - px0) * e, py0 + (ty - py0) * e)
+                                        if (p >= 1f) break
+                                    }
+                                }
+                            },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Undo,
+                        contentDescription = I18n.t("撤销标注"),
+                        tint = if (ui.annotations.isEmpty()) Color(0x66FFFFFF) else Color.White,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
     } // BoxWithConstraints（白框）结束

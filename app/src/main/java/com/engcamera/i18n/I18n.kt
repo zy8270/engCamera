@@ -297,6 +297,7 @@ private val EN_DICT: Map<String, String> = mapOf(
     "保存照片" to "Save photo",
     "丢弃" to "Discard",
     "撤销标注" to "Undo annotation",
+    "编辑水印" to "Edit watermark",
     "箭头" to "Arrow",
     "矩形" to "Rectangle",
     "画笔" to "Brush",

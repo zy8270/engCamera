@@ -101,6 +101,9 @@ data class CameraUiState(
     val confirmRoll: Int = 0,
     /** 快门时刻的屏幕系→成片系换算角（确认态水印块旋转补偿=与烧录同构，v210） */
     val confirmFrameRotation: Int = 0,
+    /** 确认标注期间进过水印编辑器（v0.6.15 用户需求 2026-11-03）：返回后预览与
+     *  保存经 mergeEditedWatermark 合并编辑结果（内容/样式/模板跟仓库走） */
+    val confirmEditWatermark: Boolean = false,
 ) {
     /** 添加水印模式的一个待处理图片 */
     data class AnnotateItem(val uri: android.net.Uri, val aspect: Float)
@@ -689,6 +692,30 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
     }
 
+    /**
+     * 确认标注期间进过编辑器后，把冻结快照与编辑后的仓库状态合并（v0.6.15）：
+     * 字段内容/开关/样式/模板全部跟编辑后的仓库走（用户要能在标注时改内容与时间），
+     * 只有锚点与旋转保持快门定格（标注期间在照片上拖过的位置不能被 9 宫格覆盖）；
+     * 冻结的 confirmDynamic 不动——留空的 时间/位置/天气 仍用快门时刻的值，不跟着
+     * 编辑器预览"现在"的时间回跳
+     */
+    fun mergeEditedWatermark(frozen: WatermarkState, edited: WatermarkState): WatermarkState =
+        frozen.copy(
+            fields = edited.fields,
+            style = edited.style,
+            templateId = edited.templateId,
+        )
+
+    /**
+     * 确认标注期间进水印编辑器（用户需求 2026-11-03）：置编辑标志。编辑器保存=仓库
+     * WatermarkState 更新，返回后 ConfirmArea 显示与 confirmSave 烧录经
+     * mergeEditedWatermark 合并（内容/样式/模板跟仓库走，位置/旋转/动态值保持快门
+     * 定格）。不在这里冻结——编辑发生在进入之后，此刻拷贝拿不到编辑结果
+     */
+    fun onEnterEditWatermarkFromConfirm() {
+        _ui.update { if (it.confirming) it.copy(confirmEditWatermark = true) else it }
+    }
+
     // ---------- 闪光灯 ----------
     fun cycleFlash() {
         val next = (_ui.value.flashIndex + 1) % 3
@@ -816,6 +843,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                                 confirmDynamic = dynamic.value,
                                 confirmRoll = quantizedRoll.value,
                                 confirmFrameRotation = frameRotation,
+                                confirmEditWatermark = false,
                                 capturing = false,
                             )
                         }
@@ -934,7 +962,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     fun confirmDiscard() {
         val bmp = _ui.value.confirmBitmap
         _ui.update {
-            it.copy(confirming = false, confirmBitmap = null, annotations = emptyList(), textItems = emptyList())
+            it.copy(
+                confirming = false, confirmBitmap = null, annotations = emptyList(),
+                textItems = emptyList(), confirmWatermark = null, confirmDynamic = null,
+                confirmEditWatermark = false,
+            )
         }
         bmp?.recycle()
         confirmTempFile?.delete()
@@ -953,6 +985,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             it.copy(
                 confirming = false, confirmBitmap = null, annotations = emptyList(),
                 textItems = emptyList(), confirmWatermark = null, confirmDynamic = null,
+                confirmEditWatermark = false,
                 capturing = true,
             )
         }
@@ -960,9 +993,16 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             var annotated: Bitmap = photo
             try {
                 annotated = drawAnnotations(photo, st.annotations, st.textItems)
+                // 标注期间进过编辑器：烧录用编辑后的水印（合并冻结态），否则用
+                // 快门瞬间冻结的原状态（v0.6.15）
+                val wm = if (st.confirmEditWatermark && st.confirmWatermark != null) {
+                    mergeEditedWatermark(st.confirmWatermark, container.repository.state.value)
+                } else {
+                    st.confirmWatermark ?: effectiveWatermark.value
+                }
                 saveConfirmed(
                     file, photo, annotated, frameRotation,
-                    st.confirmWatermark ?: effectiveWatermark.value,
+                    wm,
                     st.confirmDynamic ?: dynamic.value,
                     st.annotations, st.textItems,
                 )
