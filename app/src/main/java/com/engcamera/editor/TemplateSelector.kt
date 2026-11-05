@@ -784,6 +784,8 @@ private fun SliderOptionRow(
         "softShadowH" -> style.softShadowH
         "softShadowAlpha" -> style.softShadowAlpha
         "softShadowSpread" -> style.softShadowSpread
+        // 品牌 logo 容器大小（v0.6.16，占水印块宽比例）
+        "logoSize" -> style.logoSize
         else -> opt.min
     }
     val display = when (opt.key) {

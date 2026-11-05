@@ -62,6 +62,7 @@ object TemplatePresets {
             style = style("CLASSIC") { copy(recDot = true, recDotColor = 0xFFFFC107L) },
             fields = stdFields,
             options = listOf(
+                TemplateOptionDef("logoSize", "logo大小", "slider", 0.08f, 0.5f),
                 TemplateOptionDef("recDot", "记录点", "switch"),
                 TemplateOptionDef("recDotSize", "记录点大小", "slider", 0.5f, 2f),
                 TemplateOptionDef("recDotOffset", "记录点左边距", "slider", 0f, 0.2f),
@@ -142,6 +143,7 @@ object TemplatePresets {
             anchorX = 0f,
             anchorY = 1f,
             options = listOf(
+                TemplateOptionDef("logoSize", "logo大小", "slider", 0.08f, 0.5f),
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("cornerRatio", "圆角", "slider", 0f, 0.05f),
                 TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
@@ -252,6 +254,7 @@ object TemplatePresets {
             anchorX = 0f,
             anchorY = 1f,
             options = listOf(
+                TemplateOptionDef("logoSize", "logo大小", "slider", 0.08f, 0.5f),
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("cornerRatio", "圆角", "slider", 0f, 0.05f),
                 TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),
@@ -287,6 +290,7 @@ object TemplatePresets {
             anchorX = 0f,
             anchorY = 1f,
             options = listOf(
+                TemplateOptionDef("logoSize", "logo大小", "slider", 0.08f, 0.5f),
                 TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.3f, 0.9f),
                 TemplateOptionDef("cornerRatio", "圆角", "slider", 0f, 0.05f),
                 TemplateOptionDef("bgOpacity", "底色不透明度", "slider", 0f, 100f),

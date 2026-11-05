@@ -596,11 +596,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // 添加水印模式锁定纵向（v226）：用原始状态（rotationDeg 不随量化重力角
         // 替换），与该模式预览一致——横持手机保存也不会把水印转 90°
         val effective = watermark.value
+        // 防伪码（v0.6.16）：对未加水印/未批注的 upright 算指纹，再随水印一起烧录
+        val antiFakeCode = antiFakeCodeFor(effective, upright)
         WatermarkRenderer.drawOnCanvas(
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, 0,
             backdrop = upright,
             gravityAnchor = true, // 待标注图片本身摆正显示，图片系=重力系，锚点直接落位
+            antiFakeCode = antiFakeCode,
         )
         upright.recycle()
         // 标注最后画（盖在水印上，与预览层级一致）；无标注时返回原件不拷贝
@@ -1117,6 +1120,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     ) {
         val noWatermark = wmState.fields.none { it.enabled }
         val takenAt = System.currentTimeMillis()
+        // 防伪码（v0.6.16）：photo 是未经水印/批注的原始画面——忽略水印、无视批注都由
+        // 这一点保证；防伪码本身在 drawOnCanvas 里画到右下角。手动码优先。
+        val antiFakeCode = antiFakeCodeFor(wmState, photo)
         fun burn(src: Bitmap): Bitmap {
             val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(out)
@@ -1126,6 +1132,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 wmState, dyn, wmState.rotationDeg, frameRotation,
                 backdrop = src,
                 gravityAnchor = true,
+                antiFakeCode = antiFakeCode,
             )
             return out
         }
@@ -1134,8 +1141,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         if (saveOriginal) {
             runCatching { MediaSaver.saveBitmap(context, photo, takenAt, treeUri = saveTreeUri(), projectName = pName) }
         }
-        if (noWatermark) {
-            // 水印全关：成片=画面本身；存标注版一张（+可选原图）
+        if (noWatermark && antiFakeCode == null) {
+            // 水印全关且防伪码关：成片=画面本身；存标注版一张（+可选原图）
             MediaSaver.saveBitmap(context, annotated, takenAt + 1000, treeUri = saveTreeUri(), projectName = pName)
             tempFile.delete()
             return
@@ -1160,9 +1167,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
      */
     private suspend fun burnAndSave(tempFile: File, frameRotation: Int) {
         val upright = decodeUpright(tempFile)
-        // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）
+        // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）；
+        // 但防伪码开着时仍须走烧录路径（右下角要印码）
         val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
-        if (noWatermark) {
+        val antiFakeOn = effectiveWatermark.value.antiFake
+        if (noWatermark && !antiFakeOn) {
             MediaSaver.saveBitmap(context, upright, System.currentTimeMillis(), treeUri = saveTreeUri(), projectName = currentProjectName())
             upright.recycle()
             tempFile.delete()
@@ -1174,6 +1183,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val canvas = Canvas(out)
         canvas.drawBitmap(upright, 0f, 0f, null)
         val effective = effectiveWatermark.value
+        // 防伪码（v0.6.16）：upright 未经水印/批注——忽略水印、无视批注都由此保证
+        val antiFakeCode = antiFakeCodeFor(effective, upright)
         WatermarkRenderer.drawOnCanvas(
             canvas, upright.width, upright.height,
             effective, dynamic.value, effective.rotationDeg, frameRotation,
@@ -1181,6 +1192,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             // 锚点为重力参照系：成片按方向元数据显示出来即重力系，直接落位不旋转
             // （九宫格「下方」=成片物理下方，与持机方向无关）；水印块旋转仍按 frameRotation 补偿
             gravityAnchor = true,
+            antiFakeCode = antiFakeCode,
         )
         // 双张保存（用户确认 2026-10-11 最终语义：水印图=最新=相册第一张，原图第二张）：
         // ① 原图先插入占主文件名（系统相册实测把 (1) 排最前，维持该行为）
@@ -1196,8 +1208,19 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         tempFile.delete()
     }
 
-    /** 拍照保存成功后计数 +1（本次成片显示拍照时的值，下一次拍摄递增） */
-    private fun incrementCount() = container.repository.update { st ->
+    /**
+     * 防伪码取值（v0.6.16）：开关关=null（不画）；手动值优先；空则按 pristine 位图
+     * 的画面内容算 14 位指纹。pristine 必须是**未经水印、未经批注**的位图——
+     * 「忽略水印、无视批注」全靠这一点，不做任何掩膜。
+     */
+    private fun antiFakeCodeFor(state: WatermarkState, pristine: Bitmap): String? {
+        if (!state.antiFake) return null
+        val manual = state.antiFakeCode.trim()
+        return if (manual.length == com.engcamera.util.AntiCounterfeit.LENGTH) manual
+        else runCatching { com.engcamera.util.AntiCounterfeit.compute(pristine) }.getOrNull()
+    }
+
+    /** 拍照保存成功后计数 +1（本次成片显示拍照时的值，下一次拍摄递增） */    private fun incrementCount() = container.repository.update { st ->
         st.copy(
             fields = st.fields.map { f ->
                 if (f.type == FieldType.COUNT && f.enabled) {

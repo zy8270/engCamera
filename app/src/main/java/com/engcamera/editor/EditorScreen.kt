@@ -97,6 +97,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.engcamera.data.FieldType
@@ -187,6 +188,7 @@ fun EditorScreen(onBack: () -> Unit) {
     var showProjectGroups by remember { mutableStateOf(false) }
     var showTemplates by remember { mutableStateOf(false) }
     var showResetConfirm by remember { mutableStateOf(false) }
+    var showAntiFakeDialog by remember { mutableStateOf(false) }
 
     // ---------- 眼睛开关：预览背景换相机实时画面（所见即所得参考调整，默认闭眼） ----------
     var eyeOpen by remember { mutableStateOf(false) }
@@ -518,6 +520,7 @@ fun EditorScreen(onBack: () -> Unit) {
                     // 首次组合的旧值——必须经 rememberUpdatedState 取最新；也不能把 fields
                     // 放进 key（拖动排序中 move 会改列表，重启手势会断拖）
                     val fieldsNow by rememberUpdatedState(state.fields)
+                    Column {
                     FieldRow(
                         field = field,
                         offsetY = if (isDragging) dragOffset else 0f,
@@ -563,6 +566,18 @@ fun EditorScreen(onBack: () -> Unit) {
                                 )
                             },
                     )
+                    // 防伪码入口（v0.6.16，用户需求）：紧贴在「计数」字段下方。
+                    // 没有计数字段的模板（打卡系列）在列表末尾兜底补一行
+                    if (field.type == FieldType.COUNT) {
+                        AntiFakeRow(
+                            enabled = state.antiFake,
+                            manualCode = state.antiFakeCode,
+                            watermarkTooHigh = state.anchorY < 0.75f,
+                            onToggle = vm::setAntiFake,
+                            onOpen = { showAntiFakeDialog = true },
+                        )
+                    }
+                    }
                 }
 
             item {
@@ -575,6 +590,20 @@ fun EditorScreen(onBack: () -> Unit) {
                     Icon(Icons.Default.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
                     Text(I18n.t("添加字段"))
+                }
+            }
+
+            // 兜底：模板没有「计数」字段时，防伪码入口放列表末尾（否则无处可放）
+            if (state.fields.none { it.type == FieldType.COUNT }) {
+                item {
+                    AntiFakeRow(
+                        enabled = state.antiFake,
+                        manualCode = state.antiFakeCode,
+                        watermarkTooHigh = state.anchorY < 0.75f,
+                        onToggle = vm::setAntiFake,
+                        onOpen = { showAntiFakeDialog = true },
+                    )
+                    Spacer(Modifier.height(8.dp))
                 }
             }
 
@@ -604,6 +633,13 @@ fun EditorScreen(onBack: () -> Unit) {
             locationHint = locationHintText,
             locationHintAction = locationHintAction,
             onLocationHintAction = onLocationHintAction,
+            // 品牌 logo（v0.6.16）：仅 4 款工程模板的标题字段显示三元素（开关/选择/重置）
+            logoSupported = state.style.layout in LOGO_LAYOUTS,
+            logoEnabled = state.logoEnabled,
+            logoFile = state.logoFile,
+            onLogoEnabledChange = { vm.setLogoEnabled(it) },
+            onPickLogo = { uri -> vm.setLogo(uri) },
+            onResetLogo = { vm.resetLogo() },
             onDismiss = { editingField = null },
             onConfirm = { label, value, isTitle ->
                 vm.updateField(field.id, label, value, isTitle)
@@ -613,6 +649,11 @@ fun EditorScreen(onBack: () -> Unit) {
                 vm.updateField(field.id, label, value, isTitle)
                 editingField = null
                 onBack()
+            },
+            onResetField = { label, value, isTitle ->
+                // 重置不算"主动编辑"：不自动打开字段开关（用户需求 2026-11-04）
+                vm.updateField(field.id, label, value, isTitle, enable = false)
+                editingField = null
             },
         )
     }
@@ -650,12 +691,28 @@ fun EditorScreen(onBack: () -> Unit) {
         )
     }
 
+    if (showAntiFakeDialog) {
+        AntiFakeDialog(
+            manualCode = state.antiFakeCode,
+            onConfirm = { code ->
+                vm.setAntiFakeCode(code)
+                vm.setAntiFake(true)
+                showAntiFakeDialog = false
+            },
+            onAutoGenerate = {
+                vm.setAntiFakeCode("")
+                vm.setAntiFake(true)
+                showAntiFakeDialog = false
+            },
+            onDismiss = { showAntiFakeDialog = false },
+        )
+    }
+
     com.engcamera.projectgroup.ProjectGroupSelector(
         visible = showProjectGroups,
         handler = vm,
         onDismiss = { showProjectGroups = false },
     )
-
     TemplateSelector(
         visible = showTemplates,
         vm = vm,
@@ -663,8 +720,174 @@ fun EditorScreen(onBack: () -> Unit) {
     )
 }
 
-/** 工程组图标：三条横线，最后一条带三角形；颜色跟随 onPrimary（编辑器 FAB 用） */
+/**
+ * 防伪码行（v0.6.16）：字段列表末尾，标题+开关，副行点开手动编辑对话框。
+ * 水印锚点高于画面 3/4 时副行转橙提示（指纹采样区是上部 62.5%，水印压进来会污染）。
+ */
 @Composable
+private fun AntiFakeRow(
+    enabled: Boolean,
+    manualCode: String,
+    watermarkTooHigh: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onOpen: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 与 FieldRow 的拖动/开关列对齐（无拖动柄，用等宽占位）
+            Spacer(Modifier.width(24.dp))
+            Switch(checked = enabled, onCheckedChange = onToggle)
+            Spacer(Modifier.width(8.dp))
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(vertical = 8.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpen),
+            ) {
+                Text(I18n.t("防伪码"), fontWeight = FontWeight.Medium)
+                Text(
+                    when {
+                        manualCode.isNotBlank() -> I18n.t("手动：{c}").replace("{c}", manualCode)
+                        watermarkTooHigh -> I18n.t("水印位置过高，防伪校验会失真")
+                        else -> I18n.t("自动：按画面内容计算")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (watermarkTooHigh && manualCode.isBlank()) Color(0xFFFFB300)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** 防伪码编辑对话框：14 位手动输入 + 自动生成（清空手动值回到按内容计算）+ 三行边界说明 */
+@Composable
+private fun AntiFakeDialog(
+    manualCode: String,
+    onConfirm: (String) -> Unit,
+    onAutoGenerate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(manualCode) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(I18n.t("防伪码")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = com.engcamera.util.AntiCounterfeit.sanitizeInput(it)
+                    },
+                    label = { Text(I18n.t("防伪码内容（14 位大写字母+数字，留空=自动）")) },
+                    singleLine = true,
+                )
+                TextButton(onClick = onAutoGenerate) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(I18n.t("自动生成"))
+                }
+                Text(
+                    I18n.t("手动填写的码不参与内容校验，只影响图上显示的文字"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    I18n.t("带批注的成片不参与校验（防伪码只对无批注那张有效）"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    I18n.t("水印请留在画面下方 2/3 之外，位置过高会污染指纹"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                DialogActionText(I18n.t("取消"), onDismiss)
+                DialogActionText(I18n.t("确定")) { onConfirm(text) }
+            }
+        },
+    )
+}
+
+/**
+ * 品牌 logo 三元素行（v0.6.16，替换标题字段的标签输入框）：
+ * ① 开关 ② 选图按钮（图标=当前生效 logo，文字「选择logo」）③ 重置（回默认 app 图标 + 关开关）。
+ * 选图用 PickVisualMedia（系统相册单图），授权是临时的 → ViewModel 里复制进 filesDir。
+ */
+@Composable
+private fun LogoRow(
+    logoEnabled: Boolean,
+    logoFile: String,
+    onEnabledChange: (Boolean) -> Unit,
+    onPick: (android.net.Uri) -> Unit,
+    onReset: () -> Unit,
+) {
+    val pickLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) onPick(uri) }
+    // 位图随 logoFile 变化重建（选图后立刻换缩略图）
+    val bmp = remember(logoFile) {
+        com.engcamera.util.BrandLogo.current(logoFile)
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Switch(checked = logoEnabled, onCheckedChange = onEnabledChange)
+        Spacer(Modifier.width(2.dp))
+        // 选图按钮：左侧图标就是当前 logo（白底小方块，与标题栏容器观感一致）
+        TextButton(
+            onClick = {
+                pickLauncher.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                    ),
+                )
+            },
+        ) {
+            if (bmp != null && !bmp.isRecycled) {
+                Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.White),
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(I18n.t("选择logo"))
+        }
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = onReset) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(I18n.t("重置"))
+        }
+    }
+    Text(
+        if (logoFile.isBlank()) I18n.t("使用默认 app 图标") else I18n.t("已使用自定义 logo"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** 工程组图标：三条横线，最后一条带三角形；颜色跟随 onPrimary（编辑器 FAB 用） */@Composable
 private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
     com.engcamera.ui.ProjectGroupGlyph(
         modifier.size(width = 20.dp, height = 16.dp),
@@ -819,6 +1042,9 @@ private fun LocationHintInline(
     }
 }
 
+/** 支持品牌 logo 的布局（用户需求 2026-11-04：仅 4 款工程类模板） */
+private val LOGO_LAYOUTS = setOf("CLASSIC", "TODAY_CARD", "MARK_CARD", "MARK_CARD_LIGHT")
+
 @Composable
 private fun EditFieldDialog(
     field: WatermarkField,
@@ -835,9 +1061,18 @@ private fun EditFieldDialog(
     locationHint: String?,
     locationHintAction: String?,
     onLocationHintAction: () -> Unit,
+    // v0.6.16 品牌 logo（仅工程类模板的标题字段显示）
+    logoSupported: Boolean,
+    logoEnabled: Boolean,
+    logoFile: String,
+    onLogoEnabledChange: (Boolean) -> Unit,
+    onPickLogo: (android.net.Uri) -> Unit,
+    onResetLogo: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (label: String, value: String, isTitle: Boolean) -> Unit,
     onConfirmAndSave: (label: String, value: String, isTitle: Boolean) -> Unit,
+    /** 重置/清空（时间/位置/天气回自动、计数回 1）：不自动打开字段开关 */
+    onResetField: (label: String, value: String, isTitle: Boolean) -> Unit,
 ) {
     // key 用 field.id（稳定标识），避免 field 对象在重组时被重建（如上层重组传了结构相等但不同实例）
     var label by remember(field.id) { mutableStateOf(field.label) }
@@ -911,7 +1146,20 @@ private fun EditFieldDialog(
         title = { Text(I18n.t("编辑字段")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text(I18n.t("标签")) }, singleLine = true)
+                if (field.isTitle && logoSupported) {
+                    // 品牌 logo（v0.6.16，用户拍板位置）：标题字段的「标签」输入框换成三元素——
+                    // 标题的字段名本来就不显示在水印上，这个输入框没有意义。
+                    // ① 开关 ② 选图按钮（图标=当前 logo） ③ 重置（回默认 app 图标并关开关）
+                    LogoRow(
+                        logoEnabled = logoEnabled,
+                        logoFile = logoFile,
+                        onEnabledChange = onLogoEnabledChange,
+                        onPick = onPickLogo,
+                        onReset = onResetLogo,
+                    )
+                } else {
+                    OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text(I18n.t("标签")) }, singleLine = true)
+                }
                 OutlinedTextField(
                     value = valueTfv,
                     onValueChange = { v ->
@@ -1086,9 +1334,9 @@ private fun EditFieldDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。均关闭对话框
                 if (isDateTime || isLocation || isWeather) {
-                    DialogActionText(I18n.t("重置")) { onConfirm(label, "", isTitle) }
+                    DialogActionText(I18n.t("重置")) { onResetField(label, "", isTitle) }
                 } else if (isCount) {
-                    DialogActionText(I18n.t("重置")) { onConfirm(label, "1", isTitle) }
+                    DialogActionText(I18n.t("重置")) { onResetField(label, "1", isTitle) }
                 }
                 DialogActionText(I18n.t("取消"), onDismiss)
                 DialogActionText(I18n.t("确定")) {

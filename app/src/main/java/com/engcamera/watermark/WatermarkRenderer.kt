@@ -140,6 +140,9 @@ object WatermarkRenderer {
         titleCenter: Boolean,
         fontScale: Float = 1f,
         blockWidthOverride: Int? = null,
+        // v0.6.16 品牌 logo：标题让出左侧容器宽（0=无 logo，行为不变）
+        logoInset: Float = 0f,
+        titleMaxLines: Int = 0,
     ): Texts {
         val style = state.style
         val width = canvasWidth.coerceAtLeast(1)
@@ -160,7 +163,14 @@ object WatermarkRenderer {
         val textWidth = (blockWidth - pad * 2).toInt().coerceAtLeast(1)
         val enabled = state.fields.filter { it.enabled }
         val title = enabled.firstOrNull { it.isTitle }
-            ?.let { newLayout(displayText(it, dynamic, style), titlePaint, textWidth, if (titleCenter) Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_NORMAL) }
+            ?.let {
+                newLayout(
+                    displayText(it, dynamic, style), titlePaint,
+                    (textWidth - logoInset).toInt().coerceAtLeast(1),
+                    if (titleCenter) Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_NORMAL,
+                    maxLines = titleMaxLines,
+                )
+            }
         val rows = enabled.filter { !it.isTitle }.map { f ->
             // 字段标签随界面语言（显示点翻译，存量数据不动；自定义标签词典未命中回退原文）
             val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
@@ -170,7 +180,55 @@ object WatermarkRenderer {
         return Texts(title, rows, titlePaint, bodyPaint, pad, blockWidth, corner)
     }
 
+    /**
+     * logo 容器边长（v0.6.16）：水印块宽 × style.logoSize，钳到 ≤半宽
+     * （超半宽标题没地方，用户需求「最大不能超过水印宽度的 50%」）；无 logo 时 0。
+     */
+    private fun logoBoxSize(style: WatermarkStyle, blockW: Int, logo: Bitmap?): Float =
+        if (logo == null || logo.isRecycled || logo.width <= 0) 0f
+        else (blockW.toFloat() * style.logoSize).coerceIn(1f, blockW.toFloat() * 0.5f)
+
+    /**
+     * 画 logo 容器：白底正方形贴标题栏最左、垂直居中；logo 按原比例 fit 进容器
+     * （内缩 8% 留白，用户需求「非正方形按原比例缩小到刚好放进容器」，不拉伸）。
+     * 标题栏在调用方已 clipPath(圆角)，容器的外侧角自动被模板圆角裁切。
+     */
+    private fun drawLogoBox(canvas: Canvas, box: Float, barH: Float, logo: Bitmap) {
+        if (box <= 1f) return
+        val top = (barH - box) / 2f
+        canvas.drawRect(
+            0f, top, box, top + box,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() },
+        )
+        val avail = box * 0.84f
+        val scale = minOf(avail / logo.width, avail / logo.height)
+        val dw = logo.width * scale
+        val dh = logo.height * scale
+        val dx = (box - dw) / 2f
+        val dy = top + (box - dh) / 2f
+        canvas.drawBitmap(
+            logo, null, RectF(dx, dy, dx + dw, dy + dh),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+        )
+    }
+
     private fun emptyBlock(): Block = Block(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888))
+
+    /** 字段全关但 logo 开时的退化块：只有一条标题色带 + logo 容器（v0.6.16） */
+    private fun logoOnlyBlock(blockW: Int, corner: Float, box: Float, logo: Bitmap, barColor: Long): Block {
+        val h = (box + blockW.toFloat() * 0.02f).toInt().coerceAtLeast(1)
+        val bmp = Bitmap.createBitmap(blockW, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.save()
+        canvas.clipPath(roundPath(blockW.toFloat(), h.toFloat(), corner))
+        canvas.drawRect(
+            0f, 0f, blockW.toFloat(), h.toFloat(),
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = barColor.toInt() },
+        )
+        drawLogoBox(canvas, box, h.toFloat(), logo)
+        canvas.restore()
+        return Block(bmp)
+    }
 
     private fun withOpacity(color: Long, pct: Int): Long {
         val a = ((color ushr 24) and 0xFF).toInt() * pct.coerceIn(0, 100) / 100
@@ -180,12 +238,26 @@ object WatermarkRenderer {
     /** 经典工程蓝：标题色条 + 正文黑块连续背景（原始样式） */
     private fun renderClassic(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
         val style = state.style
-        val t = measureTexts(state, canvasWidth, dynamic, titleCenter = true)
-        if (t.title == null && t.rows.isEmpty()) return emptyBlock()
+        // 品牌 logo（v0.6.16）：容器贴标题条最左，标题让出容器宽（先换行再省略）
+        val logo = if (state.logoEnabled) com.engcamera.util.BrandLogo.current(state.logoFile) else null
+        val blockW = (canvasWidth.coerceAtLeast(1) * style.maxWidthRatio).toInt().coerceAtLeast(1)
+        val box = logoBoxSize(style, blockW, logo)
+        val logoInset = if (box > 0f) box + canvasWidth * style.paddingRatio * 0.5f else 0f
+        val t = measureTexts(
+            state, canvasWidth, dynamic, titleCenter = true,
+            logoInset = logoInset, titleMaxLines = if (box > 0f) 2 else 0,
+        )
+        if (t.title == null && t.rows.isEmpty()) {
+            // 字段全关但 logo 开：只出 logo 标题条（用户选了 logo 就该看得见）
+            if (box > 0f && logo != null) return logoOnlyBlock(t.blockWidth, t.corner, box, logo, style.titleBgColor)
+            return emptyBlock()
+        }
         val titleHeight = t.title?.height ?: 0
+        // 标题条高：原高度，但有 logo 时至少容下容器（用户需求：把标题行顶高）
+        val barH = if (titleHeight > 0) maxOf(titleHeight + t.pad, box) else box
         val bodyHeight = t.rows.sumOf { it.height.toDouble() }.toInt()
-        val blockHeight = if (titleHeight > 0) {
-            (titleHeight + bodyHeight + t.pad * 2).toInt().coerceAtLeast(1)
+        val blockHeight = if (barH > 0f) {
+            (barH + bodyHeight + t.pad).toInt().coerceAtLeast(1)
         } else {
             (bodyHeight + t.pad).toInt().coerceAtLeast(1)
         }
@@ -194,13 +266,15 @@ object WatermarkRenderer {
         canvas.save()
         canvas.clipPath(roundPath(t.blockWidth.toFloat(), blockHeight.toFloat(), t.corner))
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        if (titleHeight > 0) {
+        if (barH > 0f) {
             bgPaint.color = style.titleBgColor.toInt()
-            canvas.drawRect(0f, 0f, t.blockWidth.toFloat(), titleHeight + t.pad, bgPaint)
+            canvas.drawRect(0f, 0f, t.blockWidth.toFloat(), barH, bgPaint)
+            if (box > 0f && logo != null) drawLogoBox(canvas, box, barH, logo)
             // 记录点（录制指示灯）：标题条左端，金色光晕+实心圆（用户拍板 2026-10-12 默认模板自带）
-            if (style.recDot) {
+            // 有 logo 时让位（左侧已被容器占满）
+            if (style.recDot && box <= 0f) {
                 val dotR = canvasWidth * style.titleFontSizeRatio * 0.16f * style.recDotSize
-                val dotY = (titleHeight + t.pad) / 2f
+                val dotY = barH / 2f
                 val dotX = t.pad + dotR * 1.4f + t.blockWidth * style.recDotOffset
                 val rec = style.recDotColor.toInt()
                 val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = rec }
@@ -218,7 +292,7 @@ object WatermarkRenderer {
             bgPaint.color = style.bodyBgColor.toInt()
             canvas.drawRect(
                 0f,
-                (if (titleHeight > 0) titleHeight + t.pad else 0).toFloat(),
+                barH,
                 t.blockWidth.toFloat(),
                 blockHeight.toFloat(),
                 bgPaint,
@@ -227,11 +301,13 @@ object WatermarkRenderer {
         var y = t.pad / 2f
         t.title?.let {
             canvas.save()
-            canvas.translate(t.pad, (titleHeight + t.pad - it.height) / 2f)
+            canvas.translate(t.pad + logoInset, (barH - it.height) / 2f)
             it.draw(canvas)
             canvas.restore()
-            y += it.height + t.pad
+            y = barH + t.pad / 2f
         }
+        // 标题关但有 logo：正文行也必须让开 logo 标题条（否则压在 logo 上）
+        if (t.title == null && box > 0f) y = barH + t.pad / 2f
         t.rows.forEach { layout ->
             canvas.save()
             canvas.translate(t.pad, y)
@@ -665,8 +741,16 @@ object WatermarkRenderer {
         val enabled = state.fields.filter { it.enabled }
         val titleText = enabled.firstOrNull { it.isTitle }?.let { displayText(it, dynamic, style) } ?: ""
         val hasBar = titleText.isNotBlank()
+        // 品牌 logo（v0.6.16）：容器贴标题条最左，标题区=剩余宽度，居中（先换行再省略）
+        val logo = if (state.logoEnabled) com.engcamera.util.BrandLogo.current(state.logoFile) else null
+        val box = logoBoxSize(style, blockW, logo)
+        val titleW = if (box > 0f) (blockW - box - w * 0.006f).coerceAtLeast(blockW * 0.3f)
+        else blockW.toFloat()
         val title = if (hasBar) {
-            newLayout(titleText, titlePaint, blockW, Layout.Alignment.ALIGN_CENTER)
+            newLayout(
+                titleText, titlePaint, titleW.toInt().coerceAtLeast(1),
+                Layout.Alignment.ALIGN_CENTER, maxLines = if (box > 0f) 2 else 0,
+            )
         } else null
         val colonW = bodyPaint.measureText("：")
         val valueX = padL + labelCell + colonW
@@ -680,30 +764,39 @@ object WatermarkRenderer {
             } else null
             LRow(labelTxt, value, natural)
         }
-        if (title == null && rows.isEmpty()) return emptyBlock()
+        if (title == null && rows.isEmpty()) {
+            if (box > 0f && logo != null) return logoOnlyBlock(blockW, corner, box, logo, style.titleBgColor)
+            return emptyBlock()
+        }
+        // 标题条高：原高度；有 logo 时至少容下容器，且两行标题不能溢出条外
+        val actualBarH = if (hasBar) maxOf(barH, box, title!!.height + w * 0.008f) else box
         val bodyH = padV * 2 + rows.sumOf { (it.natural ?: it.value).height } +
             rowGap * (rows.size - 1).coerceAtLeast(0)
-        val blockH = ((if (hasBar) barH else 0f) + bodyH).toInt().coerceAtLeast(1)
+        val blockH = (actualBarH + bodyH).toInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.save()
         canvas.clipPath(roundPath(blockW.toFloat(), blockH.toFloat(), corner))
         val bg = Paint(Paint.ANTI_ALIAS_FLAG)
         var top = 0f
-        if (hasBar) {
+        if (actualBarH > 0f) {
             bg.color = style.titleBgColor.toInt()
-            canvas.drawRect(0f, 0f, blockW.toFloat(), barH, bg)
-            if (style.recDot) {
+            canvas.drawRect(0f, 0f, blockW.toFloat(), actualBarH, bg)
+            if (box > 0f && logo != null) {
+                drawLogoBox(canvas, box, actualBarH, logo)
+            } else if (style.recDot) {
                 canvas.drawCircle(
-                    w * 0.0286f, barH / 2f, w * 0.0078f,
+                    w * 0.0286f, actualBarH / 2f, w * 0.0078f,
                     Paint(Paint.ANTI_ALIAS_FLAG).apply { color = style.recDotColor.toInt() },
                 )
             }
-            canvas.save()
-            canvas.translate(0f, (barH - title!!.height) / 2f)
-            title.draw(canvas)
-            canvas.restore()
-            top = barH
+            title?.let { tl ->
+                canvas.save()
+                canvas.translate(if (box > 0f) box + w * 0.006f else 0f, (actualBarH - tl.height) / 2f)
+                tl.draw(canvas)
+                canvas.restore()
+            }
+            top = actualBarH
         }
         bg.color = withOpacity(style.bodyBgColor, style.bgOpacity).toInt()
         canvas.drawRect(0f, top, blockW.toFloat(), blockH.toFloat(), bg)
@@ -1217,10 +1310,23 @@ object WatermarkRenderer {
         val enabled = state.fields.filter { it.enabled }
         val titleText = enabled.firstOrNull { it.isTitle }?.let { displayText(it, dynamic, style) } ?: ""
         val hasBar = titleText.isNotBlank()
-        val titleW = if (lightBody) blockW - (squareX + square) else blockW.toFloat()
+        // 品牌 logo（v0.6.16）：容器贴标题条最左，标题区=剩余宽度，居中（先换行再省略）
+        val logo = if (state.logoEnabled) com.engcamera.util.BrandLogo.current(state.logoFile) else null
+        val box = logoBoxSize(style, blockW, logo)
+        // 有 logo：容器右侧起排；无 logo：保持原内缩（工程白给强调方块让位，其余满宽居中）
+        val titleX = if (box > 0f) box + w * 0.006f
+        else if (lightBody) squareX + square else 0f
+        val titleW = if (box > 0f) (blockW - titleX).coerceAtLeast(blockW * 0.3f)
+        else if (lightBody) (blockW - titleX).toFloat()
+        else blockW.toFloat()
         val title = if (hasBar) {
-            newLayout(titleText, titlePaint, titleW.toInt().coerceAtLeast(1), Layout.Alignment.ALIGN_CENTER)
+            newLayout(
+                titleText, titlePaint, titleW.toInt().coerceAtLeast(1),
+                Layout.Alignment.ALIGN_CENTER, maxLines = if (box > 0f) 2 else 0,
+            )
         } else null
+        // 标题条高：原高度；有 logo 时至少容下容器，两行标题也不能溢出条外
+        val actualBarH = if (hasBar) maxOf(barH, box, title!!.height + w * 0.010f) else box
         val colonW = bodyPaint.measureText("：")
         val valueX = padL + labelCell + colonW
         val valueW = (blockW - valueX - padR).toInt().coerceAtLeast(1)
@@ -1288,7 +1394,10 @@ object WatermarkRenderer {
         // 施工单位输入条永远置底（字段被用户调序也不上浮）
         val ordered = entries.filterNot { it.noteBar } + entries.filter { it.noteBar }
         val rows = ordered.mapNotNull { it.row }
-        if (title == null && rows.isEmpty() && ordered.none { it.noteBar }) return emptyBlock()
+        if (title == null && rows.isEmpty() && ordered.none { it.noteBar }) {
+            if (box > 0f && logo != null) return logoOnlyBlock(blockW, corner, box, logo, style.titleBgColor)
+            return emptyBlock()
+        }
         val noteBarH = w * 0.0505f
         val gapNoteBar = w * 0.008f
         val hasNoteBar = ordered.any { it.noteBar }
@@ -1296,28 +1405,32 @@ object WatermarkRenderer {
         val bodyH = padTop + rows.sumOf { (it.natural ?: it.value).height } +
             rowGap * (rows.size - 1).coerceAtLeast(0) +
             (if (hasNoteBar) gapNoteBar + noteBarH else w * 0.0125f)
-        val blockH = ((if (hasBar) barH else 0f) + bodyH).toInt().coerceAtLeast(1)
+        val blockH = (actualBarH + bodyH).toInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.save()
         canvas.clipPath(roundPath(blockW.toFloat(), blockH.toFloat(), corner))
         val bg = Paint(Paint.ANTI_ALIAS_FLAG)
         var top = 0f
-        if (hasBar) {
+        if (actualBarH > 0f) {
             bg.color = style.titleBgColor.toInt()
-            canvas.drawRect(0f, 0f, blockW.toFloat(), barH, bg)
-            if (lightBody) {
+            canvas.drawRect(0f, 0f, blockW.toFloat(), actualBarH, bg)
+            // 有 logo 时：白底容器贴最左（工程白的强调方块让位，避免压住容器）
+            if (box > 0f && logo != null) {
+                drawLogoBox(canvas, box, actualBarH, logo)
+            } else if (lightBody) {
                 canvas.drawRect(
-                    squareX, (barH - square) / 2f, squareX + square, (barH + square) / 2f,
+                    squareX, (actualBarH - square) / 2f, squareX + square, (actualBarH + square) / 2f,
                     Paint(Paint.ANTI_ALIAS_FLAG).apply { color = style.accentColor.toInt() },
                 )
             }
-            canvas.save()
-            val tx = if (lightBody) squareX + square else 0f
-            canvas.translate(tx, (barH - title!!.height) / 2f)
-            title.draw(canvas)
-            canvas.restore()
-            top = barH
+            title?.let { tl ->
+                canvas.save()
+                canvas.translate(titleX, (actualBarH - tl.height) / 2f)
+                tl.draw(canvas)
+                canvas.restore()
+            }
+            top = actualBarH
         }
         bg.color = withOpacity(style.bodyBgColor, style.bgOpacity).toInt()
         canvas.drawRect(0f, top, blockW.toFloat(), blockH.toFloat(), bg)
@@ -2162,6 +2275,8 @@ object WatermarkRenderer {
      *      「下方」=物理重力方向，直接使用不旋转）；false=屏幕参照系（按 frameRotation 旋进成片系）
      * @param skipGlassCard 液态玻璃只画文本块、跳过玻璃卡（视频合成：玻璃由 GPU 折射效果
      *      单独处理，文字层经本函数逐秒重渲实现时间流动）
+     * @param antiFakeCode 防伪码（v0.6.16）：非空且 state.antiFake 开时画到图片右下角。
+     *      传 null = 不画（视频/预览占位走 WatermarkOverlay，不在本函数）
      */
     fun drawOnCanvas(
         canvas: Canvas,
@@ -2174,6 +2289,7 @@ object WatermarkRenderer {
         backdrop: Bitmap? = null,
         gravityAnchor: Boolean = false,
         skipGlassCard: Boolean = false,
+        antiFakeCode: String? = null,
     ) {
         val tpl = WatermarkTemplates.find(state.templateId)
         val isWeb = tpl?.backend == TemplateBackend.WEB && tpl.html != null
@@ -2219,7 +2335,11 @@ object WatermarkRenderer {
         } else {
             render(renderState, basis, dynamic)
         }
-        if (block.width <= 1) return
+        if (block.width <= 1) {
+            // 水印全关（无字段）时防伪码照样要画
+            drawAntiFake(canvas, canvasW, canvasH, state, antiFakeCode)
+            return
+        }
         // 网页位图按固定宽渲染（WebTemplateRenderer.RENDER_WIDTH），绘制时缩放到
         // 画面宽 × webScale 比例——预览与成片占比一致（native 位图 1:1 绘制）
         val webScaled = isWeb && renderState === state
@@ -2266,6 +2386,14 @@ object WatermarkRenderer {
         canvas.restore()
         // 网页模板的位图归 WebTemplateRenderer 缓存所有，不能回收
         if (!isWeb || renderState !== state) block.bitmap.recycle()
+        // 防伪码最后画：水印块拖到右下角时码仍在最上层可见
+        drawAntiFake(canvas, canvasW, canvasH, state, antiFakeCode)
+    }
+
+    /** 防伪码条：图片坐标系右下角，不随水印锚点/旋转移动（v0.6.16） */
+    private fun drawAntiFake(canvas: Canvas, canvasW: Int, canvasH: Int, state: WatermarkState, code: String?) {
+        if (!state.antiFake || code.isNullOrBlank()) return
+        com.engcamera.util.AntiCounterfeit.drawStrip(canvas, canvasW, canvasH, code)
     }
 
     /** 渐变底栏"拉满整张照片宽度"模式：水印宽度滑杆拉到最大（>=99.9%） */
@@ -2311,9 +2439,18 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
         paint: TextPaint,
         width: Int,
         alignment: Layout.Alignment = Layout.Alignment.ALIGN_NORMAL,
+        // 0=不限行（历史行为：正文/多行值照常换行）；>0 才钳行数并末尾省略
+        maxLines: Int = 0,
     ): StaticLayout =
         StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
             .setAlignment(alignment)
             .setIncludePad(false)
+            .apply {
+                if (maxLines > 0) {
+                    setMaxLines(maxLines)
+                    // 品牌 logo 挤占标题宽后：先换行，仍放不下则末尾省略（用户需求 2026-11-04）
+                    setEllipsize(android.text.TextUtils.TruncateAt.END)
+                }
+            }
             .build()
 }

@@ -113,6 +113,54 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         s.copy(style = st)
     }
 
+    // ---------- v0.6.16 防伪码 ----------
+
+    fun setAntiFake(on: Boolean) = repo.update { it.copy(antiFake = on) }
+
+    /** 手动防伪码（空=回到自动按画面内容计算）；只留字母数字、转大写、截 14 位 */
+    fun setAntiFakeCode(code: String) = repo.update {
+        it.copy(antiFakeCode = com.engcamera.util.AntiCounterfeit.sanitizeInput(code))
+    }
+
+    // ---------- v0.6.16 品牌 logo（4 款工程模板标题栏） ----------
+
+    fun setLogoEnabled(on: Boolean) = repo.update { it.copy(logoEnabled = on) }
+
+    /**
+     * 选图存盘并启用 logo。一次原子更新完成三件事：换文件、开开关、
+     * 关记录点（用户需求「如果用户选择了 logo，模板的记录点就自动关闭」）。
+     */
+    fun setLogo(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        val old = repo.state.value.logoFile
+        viewModelScope.launch {
+            val name = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.engcamera.util.BrandLogo.save(ctx, uri)
+            } ?: return@launch
+            repo.update {
+                it.copy(
+                    logoFile = name,
+                    logoEnabled = true,
+                    style = it.style.copy(recDot = false),
+                )
+            }
+            if (old.isNotBlank() && old != name) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.engcamera.util.BrandLogo.deleteOld(ctx, name)
+                }
+            }
+        }
+    }
+
+    /** 重置 logo：回默认 app 图标并关闭开关（记录点不自动回开） */
+    fun resetLogo() = repo.update {
+        it.copy(logoFile = "", logoEnabled = false)
+    }
+
+    /** 当前生效 logo 位图（UI 缩略图用） */
+    fun logoBitmap(): android.graphics.Bitmap? =
+        com.engcamera.util.BrandLogo.current(repo.state.value.logoFile)
+
     /** 滑杆拖动落盘防抖：拖动每帧只写内存（update persist=false），停手 400ms 后一次性写盘（与锚点拖动同款） */
     private var scalarPersistJob: Job? = null
 
@@ -151,6 +199,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 "softShadowH" -> s.style.copy(softShadowH = value.coerceIn(0.3f, 1.5f))
                 "softShadowAlpha" -> s.style.copy(softShadowAlpha = value.coerceIn(0f, 1f))
                 "softShadowSpread" -> s.style.copy(softShadowSpread = value.coerceIn(0.2f, 0.9f))
+                // v0.6.16 品牌 logo 容器大小（占水印块宽；渲染侧再钳 ≤0.5）
+                "logoSize" -> s.style.copy(logoSize = value.coerceIn(0.08f, 0.5f))
                 else -> s.style
             }
             s.copy(style = st)
@@ -233,12 +283,19 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         repo.rememberFieldValue(finalLabel, value)
     }
 
-    fun updateField(id: String, label: String, value: String, isTitle: Boolean) {
+    /**
+     * 编辑字段内容（用户需求 2026-11-04：主动编辑即自动打开该字段开关）。
+     * enable=true 时无条件打开；「重置」传 false 保持原开关状态（清空自动值不算主动编辑）。
+     */
+    fun updateField(id: String, label: String, value: String, isTitle: Boolean, enable: Boolean = true) {
         repo.update { s ->
             s.copy(
                 fields = s.fields.map {
                     if (it.id == id) {
-                        it.copy(label = label, value = value, isTitle = isTitle)
+                        it.copy(
+                            label = label, value = value, isTitle = isTitle,
+                            enabled = if (enable) true else it.enabled,
+                        )
                     } else {
                         it
                     }

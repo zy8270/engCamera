@@ -77,6 +77,9 @@ data class WatermarkStyle(
     val softShadowAlpha: Float = 0.30f,      // 中心深浅（0=全透 1=不透明）
     val softShadowSpread: Float = 0.7f,      // 扩散：中间档停靠位置（越大越向外延展）
     val softShadowColor: Long = 0xFF000000,  // 阴影颜色
+    // ---- v0.6.16 品牌 logo（仅 4 款工程模板：经典工程蓝/马克·工程/马克·工程白/今日·工程）----
+    /** logo 容器边长 = 水印块宽 × 此比例（渲染侧再钳到 ≤0.5：超半宽标题就没位置了） */
+    val logoSize: Float = 0.18f,
 )
 
 /**
@@ -136,6 +139,19 @@ data class WatermarkState(
     val followGravity: Boolean = true,
     /** 当前水印模板 id（默认=液态玻璃；内置见 TemplatePresets，用户导入的存 DataStore） */
     val templateId: String = "liquid_glass",
+    // ---- v0.6.16 防伪码 ----
+    /** 常驻图片右下角的防伪码开关（默认关，用户需求 2026-11-04） */
+    val antiFake: Boolean = false,
+    /**
+     * 手动指定的防伪码（空=按成片画面内容自动计算）。
+     * 手动值只决定"画上去的 14 位"，不改变指纹算法——校验脚本会因此判不一致，
+     * 属用户主动选择（编辑器对话框里会写明）。
+     */
+    val antiFakeCode: String = "",
+    // ---- v0.6.16 品牌 logo（4 款工程模板标题栏左侧；默认关=不显示）----
+    val logoEnabled: Boolean = false,
+    /** 自定义 logo 文件名（空=用 app 图标；实际文件在 filesDir/brand_logo/ 下） */
+    val logoFile: String = "",
 )
 
 /** 拍照瞬间填充的动态值 */

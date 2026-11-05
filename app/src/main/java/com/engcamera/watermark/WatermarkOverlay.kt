@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -126,7 +128,11 @@ fun WatermarkOverlay(
         // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
         // 若作为 key 会导致每帧重建位图，拖动卡顿）。液态玻璃这里只出纯文本块。
         val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
-        val block = remember(state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, rotationDeg, webTick) {
+        val block = remember(
+            state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, rotationDeg, webTick,
+            // 品牌 logo（v0.6.16）：logo 位图参与渲染，切换/开关/换图都要重渲
+            state.logoEnabled, state.logoFile,
+        ) {
             if (widthPx > 0) {
                 // 渐变底栏拉满模式：块宽覆盖当前旋转方向上的画面整边（横屏=高边）
                 val fullBar = WatermarkRenderer.isFullWidthBar(state)
@@ -441,6 +447,22 @@ fun WatermarkOverlay(
                         } else Modifier,
                     ),
             )
+            }
+        }
+        // 防伪码预览（v0.6.16）：只显示占位符 EngCameraRnzhy（真实码按成片画面内容算，拍照时才生成）。
+        // 必须与烧录**同一套原生绘制**（同一画笔/字号/留白/重力换算）才能所见即所得——
+        // 用 Compose Text 会因字号基准（sp vs px）与边距不同而位置样式都偏。
+        // 叠在最后 = 最上层，与烧录顺序一致（水印块拖到右下角时码仍可见）。
+        if (state.antiFake && widthPx > 0 && heightPx > 0) {
+            androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                // drawContext.canvas 是 Compose 的 Canvas，nativeCanvas 才是 android.graphics.Canvas
+                com.engcamera.util.AntiCounterfeit.drawStripRotated(
+                    this.drawContext.canvas.nativeCanvas,
+                    size.width.roundToInt(),
+                    size.height.roundToInt(),
+                    com.engcamera.util.AntiCounterfeit.PLACEHOLDER,
+                    gravityRollDeg,
+                )
             }
         }
     }

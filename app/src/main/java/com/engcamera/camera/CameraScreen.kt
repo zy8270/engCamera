@@ -1025,7 +1025,7 @@ private fun SettingsDrawer(
                             .clickable {
                                 runCatching {
                                     context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/zy8270/engCamera")),
+                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://zy8270.github.io")),
                                     )
                                 }
                             }

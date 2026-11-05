@@ -22,3 +22,7 @@ base.apk
 test/
 imgcache/
 .smoke/
+
+# ZCode 工具目录（计划草稿等，非项目内容）
+.zcode/
+__pycache__/
