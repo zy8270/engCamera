@@ -128,6 +128,8 @@ fun WatermarkOverlay(
         // 渲染结果只依赖字段/样式/动态文本与尺寸——与锚点无关（锚点每帧拖动会变，
         // 若作为 key 会导致每帧重建位图，拖动卡顿）。液态玻璃这里只出纯文本块。
         val scaleBasis = if (scaleByShortSide) minOf(widthPx, heightPx) else widthPx
+        // 水印整体透明度（v0.6.17）：预览三个绘制点统一乘 alpha，与烧录侧 blockAlpha 同一来源
+        val overallAlpha = state.style.overallOpacity.coerceIn(10, 100) / 100f
         val block = remember(
             state.fields, state.style, effDynamic, widthPx, heightPx, scaleByShortSide, rotationDeg, webTick,
             // 品牌 logo（v0.6.16）：logo 位图参与渲染，切换/开关/换图都要重渲
@@ -290,7 +292,8 @@ fun WatermarkOverlay(
                         },
                         modifier = Modifier
                             .offset { IntOffset(gl.roundToInt(), gt.roundToInt()) }
-                            .requiredSize(with(density) { gw.toDp() }, with(density) { gh.toDp() }),
+                            .requiredSize(with(density) { gw.toDp() }, with(density) { gh.toDp() })
+                            .graphicsLayer { alpha = overallAlpha },
                     )
                 } else {
                     // CPU 版玻璃卡（旋转方向/无采样源）：v230 起全分辨率渲染——本路径
@@ -391,7 +394,10 @@ fun WatermarkOverlay(
                             modifier = Modifier
                                 .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
                                 .requiredSize(with(density) { dw.toDp() }, with(density) { dh.toDp() })
-                                .graphicsLayer { rotationZ = rotationDeg },
+                                .graphicsLayer {
+                                    rotationZ = rotationDeg
+                                    alpha = overallAlpha
+                                },
                         )
                     }
                 }
@@ -412,7 +418,10 @@ fun WatermarkOverlay(
                         with(density) { (if (isWeb) dw else block.width).toDp() },
                         with(density) { (if (isWeb) dh else block.height).toDp() },
                     )
-                    .graphicsLayer { rotationZ = rotationDeg }
+                    .graphicsLayer {
+                        rotationZ = rotationDeg
+                        alpha = overallAlpha
+                    }
                     // 单一手势源：位移超 slop 即拖动（本地增量按旋转角转回屏幕系，跟手方向不变），
                     // 未拖动抬手视为点击进入编辑器。避免 tap/drag 双检测器在旋转层互相干扰。
                     .then(

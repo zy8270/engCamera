@@ -593,7 +593,21 @@ class WatermarkRepository(private val context: Context) {
             it.copy(
                 templateId = tpl.id,
                 fields = newFields,
-                style = tpl.style.copy(maxWidthRatio = cur.style.maxWidthRatio),
+                // 水印整体透明度是跨模板通用设置（v0.6.17），切模板保留用户当前值；
+                // 宽度只在「新旧模板都暴露水印宽度选项」时继承（用户白调不丢），
+                // 否则落目标模板设计默认（巡逻 0.33 等固定版式不被别的模板宽度污染，v265）
+                style = tpl.style.copy(
+                    maxWidthRatio = if (
+                        tpl.options.any { it.key == "maxWidthRatio" } &&
+                        WatermarkTemplates.find(cur.templateId)
+                            ?.options?.any { it.key == "maxWidthRatio" } == true
+                    ) {
+                        cur.style.maxWidthRatio
+                    } else {
+                        tpl.style.maxWidthRatio
+                    },
+                    overallOpacity = cur.style.overallOpacity,
+                ),
                 // 模板自带默认锚点（如液态玻璃=底部居中）则落到该位置，否则保留当前位置
                 anchorX = tpl.anchorX ?: it.anchorX,
                 anchorY = tpl.anchorY ?: it.anchorY,
@@ -746,7 +760,8 @@ class WatermarkRepository(private val context: Context) {
 
     /**
      * 编辑器顶栏"重置"：回到当前模板初始状态——不切换模板（工程组里的重置才回默认模板，见 resetProjects）。
-     * 非快照模板：字段值恢复应用默认值（与 defaultFields 一致，如标题"工程施工记录"）、
+     * 非快照模板：字段值恢复模板自己的 defaultValue（经典标题="工程施工记录"、
+     * 巡逻标题=空→渲染回落显示标签"工作记录"，v266）、
      * 字段结构/样式回模板定义（颜色、滑杆等调整一并还原）；
      * 快照模板（导入含数据）：整份快照还原。位置/旋转/重力等摆放属性两种模板都保留。
      */
@@ -766,7 +781,6 @@ class WatermarkRepository(private val context: Context) {
             }
             return
         }
-        val defaultValues = defaultFields().associateBy { it.type }
         val seenCounts = mutableMapOf<FieldType, Int>()
         val newFields = tpl.fields.map { def ->
             val k = seenCounts.getOrDefault(def.type, 0)
@@ -777,7 +791,9 @@ class WatermarkRepository(private val context: Context) {
                     (if (k > 0) "_$k" else ""),
                 type = def.type,
                 label = def.label,
-                value = defaultValues[def.type]?.value.orEmpty(),
+                // 重置=恢复模板自己的字段默认值（v266）：经典标题「工程施工记录」走 defaultValue，
+                // 巡逻标题默认空→渲染回落显示标签「工作记录」（不再吃全局默认值的「工程施工记录」）
+                value = def.defaultValue,
                 enabled = def.enabled,
                 isTitle = def.isTitle,
                 deletable = def.deletable,

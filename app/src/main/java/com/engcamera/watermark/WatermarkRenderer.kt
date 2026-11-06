@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
@@ -36,6 +38,31 @@ private const val EDGE_MARGIN_RATIO = 0.015f
  * 0.6.0 起按模板分发：原生模板各布局直接绘制；网页模板经 WebTemplateRenderer 缓存出图。
  */
 object WatermarkRenderer {
+
+    /** 巡逻模板大号时间字体 Bahnschrift SemiBold（DIN 系数字，用户拍板 2026-11-07；
+     *  v276 静态 SemiBold 子集（wght=600 实例化，仅数字+冒号 3KB）。
+     *  【不可对 Bahnschrift 用 fakeBold】：可变字体加 fakeBold 会换更宽的粗体实例渲染，
+     *  measureText 却按 Regular 度量——动态拉伸全乱（实测渲染比度量宽 22%） */
+    @Volatile private var patrolTimeFont: Typeface? = null
+
+    /** 巡逻固定标题「执勤巡逻」专用 Noto Sans SC Bold 700 子集（v269，仅四字 2.5KB）：
+     *  DEFAULT_BOLD 对 CJK 无真 Bold 字重（多数 ROM 回退细体）。v272 起白字与阴影
+     *  同用这一个字重（同字重纯放大才有均匀硬边环，Black900/fakeBold 均被推翻）。
+     *  子集出自 Windows 自带 NotoSansSC-VF.ttf 实例化 */
+    @Volatile private var patrolTitleBoldFont: Typeface? = null
+
+    fun ensureFonts(context: android.content.Context) {
+        if (patrolTimeFont == null) {
+            patrolTimeFont = runCatching {
+                Typeface.createFromAsset(context.assets, "fonts/bahnschrift_semi.ttf")
+            }.getOrNull()
+        }
+        if (patrolTitleBoldFont == null) {
+            patrolTitleBoldFont = runCatching {
+                Typeface.createFromAsset(context.assets, "fonts/noto_sc_bold.ttf")
+            }.getOrNull()
+        }
+    }
 
     /** 渲染好的整块水印。带阴影外沿的布局（今日·打卡/打卡1）：位图四周含透明外沿，
      *  offsetX/offsetY=内容区左上角在位图中的位置（两侧对称）——定位/钳位按内容区
@@ -119,6 +146,7 @@ object WatermarkRenderer {
             "MARK_CARD" -> renderMarkCard(state, canvasWidth, dynamic, lightBody = false)
             "MARK_CARD_LIGHT" -> renderMarkCard(state, canvasWidth, dynamic, lightBody = true)
             "MARK_CLOCK" -> renderMarkClock(state, canvasWidth, dynamic)
+            "PATROL" -> renderPatrol(state, canvasWidth, dynamic)
             "LIQUID_GLASS" -> renderLiquidGlass(state, canvasWidth, dynamic)
             else -> renderClassic(state, canvasWidth, dynamic)
         }
@@ -1696,6 +1724,284 @@ object WatermarkRenderer {
         return Block(out)
     }
 
+    /**
+     * 巡逻（用户需求 2026-11-06，参考图 imgcache/巡逻（1）.jpg + 巡逻.jpg）：
+     * 半透明蓝卡 + 黄色标题块（固定「执勤巡逻」双层字 v2：黑字层字号放大垫底不描边保持尖角，
+     * 白字层对齐盖上）+ 可编辑标题「工作记录」+ 尖角箭头带（BUTT+MITER）
+     * + Bahnschrift 字体大号时间（白字掩膜+SRC_ATOP 波浪纹，蓝→红→蓝横向渐变）
+     * + 红方块地址行（对第一行垂直居中）。
+     * 全部几何按卡宽 blockW 的比例复刻参考图；卡宽跟「水印宽度」选项走（默认 0.33 画面宽）。
+     */
+    private fun renderPatrol(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
+        val style = state.style
+        val w = canvasWidth.coerceAtLeast(1).toFloat()
+        // 卡宽跟「水印宽度」选项走（v265 加回滑杆；v267 用户拍板默认 0.50）；
+        // applyTemplate 只在目标模板也暴露该选项时才继承旧值，不会被别的模板宽度污染
+        val bw = (w * style.maxWidthRatio.coerceIn(0.2f, 0.7f)).coerceAtLeast(1f)
+        // 模板选项三色（v263 用户需求）：文字色/标题块色/卡片色，默认=参考图解出色；
+        // 命名沿用旧称呼（white=文字、yellow=标题块），与 1003 行同款模式
+        val white = style.bodyTextColor.toInt()
+        val yellow = style.titleBgColor.toInt()
+
+        // ---- 文案 ----
+        // 黄块里「执勤巡逻」=固定文案（用户需求 2026-11-06：不许改，不走字段）；
+        // 右侧「工作记录」才是标题字段（PROJECT_NAME，值空显示标签）
+        val titleText = "执勤巡逻"
+        val headText = state.fields.firstOrNull { it.isTitle && it.enabled }
+            ?.let { displayText(it, dynamic, style).ifBlank { com.engcamera.i18n.I18n.t(it.label) } }
+            ?: state.fields.firstOrNull { it.type == FieldType.PROJECT_NAME && it.enabled }
+                ?.let { displayText(it, dynamic, style) }
+            ?: ""
+        val parts = timePartsOf(state, dynamic)
+        val timeText = parts?.hm ?: timeRawOf(state, dynamic)
+        val dateText = parts?.dateDash?.split("-")?.takeIf { it.size == 3 }
+            ?.let { "${it[0]}年${it[1]}月${it[2]}日" } ?: ""
+        val locText = state.fields.firstOrNull { it.type == FieldType.LOCATION && it.enabled }
+            ?.let { displayText(it, dynamic, style) } ?: ""
+        val noteTexts = state.fields.filter { it.enabled && it.type == FieldType.NOTE }
+            .map { displayText(it, dynamic, style) }.filter { it.isNotBlank() }
+
+        // ---- 字号（参考图为窄体：字高定 textSize，宽度用 textScaleX 压窄；
+        //      数值由 clean 参考图墨迹实测反推——标题墨高 0.0738/宽 0.2831、
+        //      工作记录 0.0636/0.2477、时间 0.1109/0.3047、日期 0.0648/0.5081、
+        //      地址 0.0648/单字 0.0619）----
+        val titleSize = bw * 0.0800f
+        val headSize = bw * 0.0755f
+        val timeSize = bw * 0.1510f
+        val dateSize = bw * 0.0770f
+        val addrSize = bw * 0.0762f
+
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = titleSize
+            textScaleX = 0.885f
+            // Noto Sans SC Bold 子集（v269）：CJK 无真粗体回退细体的根治
+            typeface = patrolTitleBoldFont ?: Typeface.DEFAULT_BOLD
+        }
+        val headPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = headSize
+            textScaleX = 0.821f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val timePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = timeSize
+            // scaleX 占位——常量块后按 v271 几何（黄框左缘→逻右缘）动态解出
+            textScaleX = 0.97f
+            // Bahnschrift SemiBold 静态子集（v276）：真字重替代 fakeBold（见字体字段注释）
+            typeface = patrolTimeFont ?: Typeface.DEFAULT_BOLD
+        }
+        val datePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = dateSize
+            textScaleX = 0.920f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val addrPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = white
+            textSize = addrSize
+            textScaleX = 0.820f
+        }
+
+        // ---- 版式常量（参考图实测，均相对卡宽）----
+        val boxL = bw * 0.0246f
+        val boxR = bw * 0.3792f
+        val boxT = bw * 0.0228f
+        val boxB = bw * 0.1794f
+        // 黄色贯通下划线：v268 用户要求加粗 25%（0.0084→0.0105 卡宽，参考图实测 0.0072
+        // 但用户观感偏细——以观感为准）；底边与黄框底对齐不动，往上长
+        val ulT = bw * 0.1689f
+        val ulR = bw * 0.9556f
+        val chevT = bw * 0.1973f
+        val chevB = bw * 0.2195f
+        val chevL = bw * 0.0324f
+        val chevR = bw * 0.9640f
+        val titleBaseline = bw * 0.1370f
+        val titleX = boxL + bw * 0.0348f
+        val headX = bw * 0.4368f
+        val headBaseline = bw * 0.1370f
+        // 时间基线（左右位置由 timeDrawX 承担，见常量块后的墨迹对齐补偿）
+        val timeBaseline = bw * 0.4013f
+        val dateBaseline = bw * 0.3845f
+        val redX = bw * 0.0606f
+        val redW = bw * 0.0444f
+        val redH = bw * 0.0289f
+        val addrX = bw * 0.1668f
+        val addrTop = bw * 0.4865f
+        // 红方块对地址第一行垂直居中（用户需求 2026-11-07；行高含 newLayout 的行距 extra）
+        val redT = addrTop + (addrPaint.fontSpacing + bw * 0.011f - redH) / 2f
+        val addrW = (bw * 0.782f).toInt().coerceAtLeast(1)
+
+        // 时间宽度（v274 回 v271 几何）：scaleX=目标宽/自然宽 动态解出（黄框左缘→逻右缘），
+        // 并把【墨迹左缘】（而非原点，Bahnschrift 数字有左侧留白）对齐黄框左缘
+        if (timeText.isNotBlank()) {
+            val natural = TextPaint(timePaint).apply { textScaleX = 1f }
+            val naturalW = natural.measureText(timeText)
+            val targetW = titleX + titlePaint.measureText(titleText) - boxL
+            if (naturalW > 0f && targetW > 0f) {
+                timePaint.textScaleX = (targetW / naturalW).coerceIn(0.5f, 2f)
+            }
+        }
+        val inkBounds = android.graphics.Rect()
+        TextPaint(timePaint).apply { textScaleX = 1f }
+            .getTextBounds(timeText, 0, timeText.length, inkBounds)
+        // 墨迹左缘 = 原点 + bounds.left×scaleX → 反向补偿让墨迹正好落在黄框左缘
+        val timeDrawX = boxL - inkBounds.left * timePaint.textScaleX
+
+        val addrLayouts = buildList {
+            if (locText.isNotBlank()) add(newLayout(locText, addrPaint, addrW, lineSpacingExtra = bw * 0.011f))
+            noteTexts.forEach { add(newLayout(it, addrPaint, addrW, lineSpacingExtra = bw * 0.011f)) }
+        }
+        val addrH = addrLayouts.sumOf { it.height.toDouble() }.toFloat()
+        val baseH = bw * 0.6848f
+        val blockH = maxOf(baseH, addrTop + addrH + bw * 0.040f).toInt().coerceAtLeast(1)
+        val blockW = bw.toInt().coerceAtLeast(1)
+
+        val out = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val corner = bw * 0.012f
+        canvas.save()
+        canvas.clipPath(roundPath(blockW.toFloat(), blockH.toFloat(), corner))
+
+        // 半透明饱和蓝卡：默认 0x86102BF2=基色(16,43,242)@52%（参考图两张自洽解方程——
+        // 叠近黑底得 (8,22,127)、叠浅色墙面 (145,136,119) 得 (73,87,187)）；
+        // v263 起走模板选项「卡片颜色」，透明度随所选颜色自带
+        canvas.drawRect(
+            0f, 0f, blockW.toFloat(), blockH.toFloat(),
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = style.bodyBgColor.toInt() },
+        )
+        // 黄色标题块 + 贯通下划线（同色，参考图两处黄色完全一致）
+        canvas.drawRect(boxL, boxT, boxR, boxB, Paint().apply { color = yellow })
+        canvas.drawRect(boxL, ulT, ulR, boxB, Paint().apply { color = yellow })
+
+        // 淡黄箭头带（同色黄 55% 透明；尖角 ">"：平头收尾+尖角转折，
+        // 用户需求 2026-11-06——参考图是利落的尖角非圆角）
+        val chevPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = yellow
+            alpha = 0x8C
+            this.style = Paint.Style.STROKE
+            strokeWidth = (chevB - chevT) * 0.22f
+            strokeCap = Paint.Cap.BUTT
+            strokeJoin = Paint.Join.MITER
+        }
+        val chevPitch = bw * 0.0273f
+        val chevInset = (chevB - chevT) * 0.06f
+        var cx = chevL
+        while (cx < chevR - chevPitch) {
+            val p = Path().apply {
+                moveTo(cx, chevT + chevInset)
+                lineTo(cx + chevPitch * 0.62f, (chevT + chevB) / 2f)
+                lineTo(cx, chevB - chevInset)
+            }
+            canvas.drawPath(p, chevPaint)
+            cx += chevPitch
+        }
+
+        // 固定标题「执勤巡逻」：白字+硬边阴影 v5（v279 像素对比闭环定版）。
+        // 参考图黑墨外框与白字只差 ~8px、但黑像素是「放大拷贝」的 2.1 倍且填满笔画间隙
+        // ——本质=【形态学膨胀】，即描边！v262 方向没错，错在太细（半径 5.8px vs 实测
+        // 6px@1667 卡宽）+ ROUND join 柔角。FILL_AND_STROKE（半径=strokeWidth/2）
+        // + MITER 保持尖角（尖角由 join 决定，不是不能用描边）。同位绘制即可，
+        // 膨胀对每个字形自身对称，无需逐字缩放（v2~v278 的逐字/各向异性方案全部退役）
+        if (titleText.isNotBlank()) {
+            val black = TextPaint(titlePaint).apply {
+                color = 0xFF000000.toInt()
+                this.style = Paint.Style.FILL_AND_STROKE
+                strokeWidth = bw * 0.0072f
+                strokeJoin = Paint.Join.MITER
+            }
+            canvas.drawText(titleText, titleX, titleBaseline, black)
+            canvas.drawText(titleText, titleX, titleBaseline, titlePaint)
+        }
+        if (headText.isNotBlank()) {
+            canvas.drawText(headText, headX, headBaseline, headPaint)
+        }
+
+        // 大号时间：钱币纹理（白字掩膜垫底 + 波浪细纹 SRC_ATOP 画进字内；
+        // 线色沿横向 LinearGradient 白蓝→白红→白蓝 渐变，比今日-打卡更密。
+        // 用户需求 2026-11-06。旧实现把纹画在白底上再 SRC_IN 叠掩膜——
+        // SRC_IN 输出=掩膜色×底alpha(恒1)，纹理全被丢掉只剩纯白字）
+        if (timeText.isNotBlank()) {
+            val tfm = timePaint.fontMetrics
+            val texW = (timePaint.measureText(timeText) + timeSize * 0.3f).toInt().coerceAtLeast(1)
+            val texH = (timeSize * 1.35f).toInt().coerceAtLeast(1)
+            val tex = Bitmap.createBitmap(texW, texH, Bitmap.Config.ARGB_8888)
+            val tc = Canvas(tex)
+            // 掩膜画刷必须带同款 textScaleX（0.72），否则字比量宽时宽 1/0.72 倍
+            // → 位图右端装不下 → 「23:07」只剩「23:0」（v262 截断 bug 根因）
+            tc.drawText(
+                timeText, timeSize * 0.08f, -tfm.ascent,
+                TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = white
+                    textSize = timeSize
+                    // 掩膜画刷必须与 timePaint 几何完全同款（字体/动态缩放），否则量宽错位裁字
+                    textScaleX = timePaint.textScaleX
+                    typeface = timePaint.typeface
+                },
+            )
+            val hair = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                this.style = Paint.Style.STROKE
+                // v272 PIL 复刻卡与参考图并排调参定版：线距 0.0074/波长 0.030/振幅 0.003/线宽 0.0018，
+                // 淡彩白蓝 #B4D4F0 ↔ 白红 #F0C4D2（参考图实测色度 ~20 的基础上略提一档，
+                // 抵消真机上 1px 线抗锯齿的冲淡）
+                strokeWidth = max(1f, bw * 0.0018f)
+                shader = LinearGradient(
+                    0f, 0f, texW.toFloat(), 0f,
+                    intArrayOf(0xFFB4D4F0.toInt(), 0xFFF0C4D2.toInt(), 0xFFB4D4F0.toInt()),
+                    floatArrayOf(0f, 0.5f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+            }
+            val period = bw * 0.030f
+            // v272 按参考图回调：振幅 0.003（参考图实测 ~0.002，留一点余量）、行距 0.0074（实测值）
+            val amp = bw * 0.003f
+            val gapY = bw * 0.0074f
+            var yy = 0f
+            while (yy < texH) {
+                val p = Path().apply {
+                    moveTo(-period, yy)
+                    var x = -period
+                    while (x < texW + period) {
+                        // 控制点 ±2×amp：二次贝塞尔弧中点纵坐标=控制点一半，波峰才是真 amp；
+                        // v268 周期 0.024→0.048（用户要求峰到峰距离拉长一倍=一个波峰横跨原峰+谷）
+                        quadTo(x + period * 0.25f, yy - amp * 2f, x + period * 0.5f, yy)
+                        quadTo(x + period * 0.75f, yy + amp * 2f, x + period, yy)
+                        x += period
+                    }
+                }
+                tc.drawPath(p, hair)
+                yy += gapY
+            }
+            canvas.drawBitmap(tex, timeDrawX, timeBaseline + tfm.ascent, null)
+            tex.recycle()
+        }
+
+        // 日期（与时间同一行，底边略高于时间）
+        if (dateText.isNotBlank()) {
+            val dateX = timeDrawX + timePaint.measureText(timeText) + bw * 0.060f
+            canvas.drawText(dateText, dateX, dateBaseline, datePaint)
+        }
+
+        // 红方块 + 地址/备注（两行同左缩进）
+        canvas.drawRect(
+            redX, redT, redX + redW, redT + redH,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFB2C18.toInt() },
+        )
+        var ly = addrTop
+        addrLayouts.forEach { layout ->
+            canvas.save()
+            canvas.translate(addrX, ly)
+            layout.draw(canvas)
+            canvas.restore()
+            ly += layout.height
+        }
+
+        canvas.restore()
+        return Block(out)
+    }
+
     /** 记录仪：黑底等宽字体，红点 REC 标记，细边框 */
     private fun renderRecorder(state: WatermarkState, canvasWidth: Int, dynamic: DynamicValues): Block {
         val style = state.style
@@ -2325,6 +2631,8 @@ object WatermarkRenderer {
         // 缩放基准取短边：预览恒为竖向 3:4（宽=短边），横拍成片显示为横向（宽=长边）。
         // 若按长边缩放，横屏水印会比预览大 4/3 倍；短边在两种方向下都对应预览宽度维度。
         val basis = minOf(canvasW, canvasH)
+        // 水印整体透明度（v0.6.17）：块位图绘制时统一乘 alpha（防伪码条不跟随，恒清晰）
+        val blockAlpha = (renderState.style.overallOpacity.coerceIn(10, 100) * 255 / 100)
         // 渐变底栏拉满模式：块宽覆盖成片（按当前旋转后的长轴方向）整边，定位不做安全边距
         val fullBar = isFullWidthBar(renderState)
         // 液态玻璃：render 只出纯文本块，玻璃卡在定位后单独叠加（采样成片画面）
@@ -2369,7 +2677,10 @@ object WatermarkRenderer {
                 val glass = renderGlassCard(renderState, basis, drawW.roundToInt(), drawH.roundToInt(), glassFrame)
                 canvas.save()
                 canvas.rotate(rot, left + drawW / 2f, top + drawH / 2f)
-                canvas.drawBitmap(glass, left, top, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                canvas.drawBitmap(
+                    glass, left, top,
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { alpha = blockAlpha },
+                )
                 canvas.restore()
                 glass.recycle()
             }
@@ -2377,11 +2688,14 @@ object WatermarkRenderer {
         canvas.save()
         canvas.rotate(rot, left + drawW / 2f, top + drawH / 2f)
         if (webScaled) {
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { alpha = blockAlpha }
             canvas.drawBitmap(block.bitmap, null, RectF(left, top, left + drawW, top + drawH), paint)
         } else {
             // 位图整体（含阴影外沿）回退内容区左上角绘制：left/top 是内容区的定位点
-            canvas.drawBitmap(block.bitmap, left - block.offsetX, top - block.offsetY, null)
+            canvas.drawBitmap(
+                block.bitmap, left - block.offsetX, top - block.offsetY,
+                Paint().apply { alpha = blockAlpha },
+            )
         }
         canvas.restore()
         // 网页模板的位图归 WebTemplateRenderer 缓存所有，不能回收
@@ -2441,10 +2755,12 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
         alignment: Layout.Alignment = Layout.Alignment.ALIGN_NORMAL,
         // 0=不限行（历史行为：正文/多行值照常换行）；>0 才钳行数并末尾省略
         maxLines: Int = 0,
+        lineSpacingExtra: Float = 0f,
     ): StaticLayout =
         StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
             .setAlignment(alignment)
             .setIncludePad(false)
+            .setLineSpacing(lineSpacingExtra, 1f)
             .apply {
                 if (maxLines > 0) {
                     setMaxLines(maxLines)

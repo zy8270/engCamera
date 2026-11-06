@@ -201,6 +201,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 "softShadowSpread" -> s.style.copy(softShadowSpread = value.coerceIn(0.2f, 0.9f))
                 // v0.6.16 品牌 logo 容器大小（占水印块宽；渲染侧再钳 ≤0.5）
                 "logoSize" -> s.style.copy(logoSize = value.coerceIn(0.08f, 0.5f))
+                // v0.6.17 水印整体透明度（所有模板通用，10~100%）
+                "overallOpacity" -> s.style.copy(overallOpacity = value.toInt().coerceIn(10, 100))
                 else -> s.style
             }
             s.copy(style = st)

@@ -524,8 +524,8 @@ fun TemplateOptionsCard(
             ) { expanded = !expanded }
             androidx.compose.animation.AnimatedVisibility(visible = expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
-                    // 水印位置 9 宫格（所有模板排首位，用户拍板 2026-10-16）
-                    PositionOptionRow(anchorX, anchorY, onAnchor)
+                    // 水印位置+整体透明度折叠组（v263 用户需求：透明度低频，收进折叠栏默认隐藏）
+                    PositionOptionRow(anchorX, anchorY, onAnchor, style, onScalar)
                     // 记录点四个子选项（大小/左边距/光晕/颜色）不单独平铺，收进"记录点"组内嵌套渲染
                     val recSubKeys = setOf("recDotSize", "recDotOffset", "recGlow", "recDotColor")
                     // 阴影四拉杆（大小/扩散/透明度/垂直偏移）收进"文字阴影"折叠组（v171）
@@ -698,12 +698,15 @@ private fun PositionOptionRow(
     anchorX: Float,
     anchorY: Float,
     onAnchor: (Float, Float) -> Unit,
+    style: WatermarkStyle,
+    onScalar: (String, Float) -> Unit,
 ) {
     val xs = listOf(0f, 0.5f, 1f)
     val ys = listOf(0f, 0.5f, 1f)
     var open by remember { mutableStateOf(false) }
     Column {
-        GroupHeader(I18n.t("水印位置"), open) { open = !open }
+        // 整体透明度收进本折叠组（v263 用户需求：低频操作默认收起）
+        GroupHeader(I18n.t("水印位置与透明度"), open) { open = !open }
         androidx.compose.animation.AnimatedVisibility(visible = open) {
             Column(
                 Modifier.fillMaxWidth(),
@@ -739,14 +742,20 @@ private fun PositionOptionRow(
                                             else MaterialTheme.colorScheme.surfaceContainerHigh
                                         )
                                         .clickable { onAnchor(gx, gy) },
-                            )
+                                )
+                            }
                         }
                     }
                 }
+                // 水印整体透明度（v0.6.17 全模板通用，10~100%）
+                SliderOptionRow(
+                    TemplateOptionDef("overallOpacity", "整体透明度", "slider", 10f, 100f),
+                    style,
+                    onScalar,
+                )
             }
         }
     }
-}
 }
 
 /** 数值选项行：标签+百分比值 + 滑杆（值映射自 WatermarkStyle 对应字段） */
@@ -786,10 +795,12 @@ private fun SliderOptionRow(
         "softShadowSpread" -> style.softShadowSpread
         // 品牌 logo 容器大小（v0.6.16，占水印块宽比例）
         "logoSize" -> style.logoSize
+        // 水印整体透明度（v0.6.17，10~100 整数百分比）
+        "overallOpacity" -> style.overallOpacity.toFloat()
         else -> opt.min
     }
     val display = when (opt.key) {
-        "bgOpacity", "webBgOpacity" -> "${current.roundToInt()}"
+        "bgOpacity", "webBgOpacity", "overallOpacity" -> "${current.roundToInt()}"
         // 倍率类（边框粗细/记录点大小/网页整体缩放/阴影大小·扩散·垂直偏移）按 ×N 显示
         "borderWidth", "recDotSize", "webScale", "textShadow", "shadowSpread", "shadowOffsetY" ->
             "×" + "%.1f".format(current)

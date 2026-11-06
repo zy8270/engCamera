@@ -580,19 +580,6 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 }
 
-            item {
-                Button(
-                    onClick = { showAddDialog = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(I18n.t("添加字段"))
-                }
-            }
-
             // 兜底：模板没有「计数」字段时，防伪码入口放列表末尾（否则无处可放）
             if (state.fields.none { it.type == FieldType.COUNT }) {
                 item {
@@ -604,6 +591,20 @@ fun EditorScreen(onBack: () -> Unit) {
                         onOpen = { showAntiFakeDialog = true },
                     )
                     Spacer(Modifier.height(8.dp))
+                }
+            }
+
+            // 添加字段按钮恒在所有字段（含防伪码行）的最下面（用户需求 2026-11-06）
+            item {
+                Button(
+                    onClick = { showAddDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(I18n.t("添加字段"))
                 }
             }
 

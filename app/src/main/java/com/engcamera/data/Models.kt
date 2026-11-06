@@ -80,6 +80,9 @@ data class WatermarkStyle(
     // ---- v0.6.16 品牌 logo（仅 4 款工程模板：经典工程蓝/马克·工程/马克·工程白/今日·工程）----
     /** logo 容器边长 = 水印块宽 × 此比例（渲染侧再钳到 ≤0.5：超半宽标题就没位置了） */
     val logoSize: Float = 0.18f,
+    // ---- v0.6.17 水印整体透明度（所有模板的模板选项顶部拉杆，10~100%）----
+    /** 水印整体不透明度百分比（10~100，默认 100）；防伪码条不跟随（保持恒清晰） */
+    val overallOpacity: Int = 100,
 )
 
 /**
@@ -228,6 +231,9 @@ data class TemplateFieldDef(
     val isTitle: Boolean = false,
     /** true=启用状态恒用模板默认、不跟随用户存量（如今日·打卡的天气默认关，用户需求 2026-10-31） */
     val forceEnabled: Boolean = false,
+    /** 重置当前工程时恢复的字段值（v266）：经典模板标题=「工程施工记录」；
+     *  空串=重置为空、渲染回落显示 label（如巡逻标题回落「工作记录」，用户需求 2026-11-07） */
+    val defaultValue: String = "",
 )
 
 /** 模板暴露的可调选项（编辑器内编辑；值写入 WatermarkStyle 对应键） */

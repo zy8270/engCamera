@@ -8,7 +8,7 @@ package com.engcamera.data
 object TemplatePresets {
 
     private val stdFields = listOf(
-        TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+        TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true, defaultValue = "工程施工记录"),
         TemplateFieldDef(FieldType.DATETIME, "时间"),
         TemplateFieldDef(FieldType.LOCATION, "位置"),
         TemplateFieldDef(FieldType.WEATHER, "天气"),
@@ -133,7 +133,7 @@ object TemplatePresets {
                 )
             },
             fields = listOf(
-                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true, defaultValue = "工程施工记录"),
                 TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
                 TemplateFieldDef(FieldType.DATETIME, "拍摄时间"),
                 TemplateFieldDef(FieldType.WEATHER, "天气"),
@@ -242,7 +242,7 @@ object TemplatePresets {
                 )
             },
             fields = listOf(
-                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true, defaultValue = "工程施工记录"),
                 TemplateFieldDef(FieldType.DATETIME, "时间"),
                 TemplateFieldDef(FieldType.WEATHER, "天气"),
                 TemplateFieldDef(FieldType.LOCATION, "地点"),
@@ -282,7 +282,7 @@ object TemplatePresets {
                 )
             },
             fields = listOf(
-                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true),
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工程名称", isTitle = true, defaultValue = "工程施工记录"),
                 TemplateFieldDef(FieldType.DATETIME, "时间"),
                 TemplateFieldDef(FieldType.WEATHER, "天气"),
                 TemplateFieldDef(FieldType.LOCATION, "地点"),
@@ -323,6 +323,38 @@ object TemplatePresets {
             anchorY = 1f,
             options = listOf(
                 TemplateOptionDef("accentColor", "打卡配色", "color"),
+                TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
+            ),
+        ),
+        WatermarkTemplate(
+            id = "patrol",
+            name = "巡逻",
+            // 默认色=参考图解出色：蓝卡基色(16,43,242)@52%、标题块黄、文字白（v263 用户需求补选项）；
+            // 默认宽度 0.50（v267 用户拍板，原 0.33=参考图实测）
+            style = style("PATROL") {
+                copy(
+                    maxWidthRatio = 0.50f,
+                    weatherEmoji = false,
+                    bodyBgColor = 0x86102BF2L,
+                    titleBgColor = 0xFFFAEF73L,
+                    bodyTextColor = 0xFFFFFFFFL,
+                )
+            },
+            fields = listOf(
+                // 黄块里"执勤巡逻"是固定文案（用户需求 2026-11-06，不许改）；
+                // 右侧"工作记录"才是标题字段（走工程名称，值空时显示标签）
+                TemplateFieldDef(FieldType.PROJECT_NAME, "工作记录", isTitle = true),
+                TemplateFieldDef(FieldType.DATETIME, "时间"),
+                TemplateFieldDef(FieldType.LOCATION, "地点"),
+                TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
+            ),
+            anchorX = 0f,
+            anchorY = 1f,
+            // 模板选项（v263/v265 用户需求）：宽度滑杆加回 + 三色；默认宽 0.50（v267）
+            options = listOf(
+                TemplateOptionDef("maxWidthRatio", "水印宽度", "slider", 0.2f, 0.7f),
+                TemplateOptionDef("bodyBgColor", "卡片颜色", "color"),
+                TemplateOptionDef("titleBgColor", "标题块颜色", "color"),
                 TemplateOptionDef("bodyTextColor", "文字颜色", "color"),
             ),
         ),
