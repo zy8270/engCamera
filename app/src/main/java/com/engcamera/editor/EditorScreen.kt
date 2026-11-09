@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -32,13 +33,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
@@ -634,6 +638,10 @@ fun EditorScreen(onBack: () -> Unit) {
             locationHint = locationHintText,
             locationHintAction = locationHintAction,
             onLocationHintAction = onLocationHintAction,
+            // 时间格式（v0.6.18）：打卡/巡逻/马克工程等固定版式模板不显示选择器
+            timeFormatSupported = com.engcamera.util.TimeFormat.supported(state.style.layout),
+            timeFormat = state.style.timeFormat,
+            onTimeFormatChange = { vm.setTimeFormat(it) },
             // 品牌 logo（v0.6.16）：仅 4 款工程模板的标题字段显示三元素（开关/选择/重置）
             logoSupported = state.style.layout in LOGO_LAYOUTS,
             logoEnabled = state.logoEnabled,
@@ -1062,6 +1070,10 @@ private fun EditFieldDialog(
     locationHint: String?,
     locationHintAction: String?,
     onLocationHintAction: () -> Unit,
+    // v0.6.18 时间格式（仅"时间整串渲染"的模板显示选择器）
+    timeFormatSupported: Boolean,
+    timeFormat: String,
+    onTimeFormatChange: (String) -> Unit,
     // v0.6.16 品牌 logo（仅工程类模板的标题字段显示）
     logoSupported: Boolean,
     logoEnabled: Boolean,
@@ -1115,6 +1127,8 @@ private fun EditFieldDialog(
     // 点"确定"才写入字段（进入自定义），点"取消"不留任何痕迹；一打字即停止跟随
     var followLocation by remember(field.id) { mutableStateOf(false) }
     var followWeather by remember(field.id) { mutableStateOf(false) }
+    // 时间格式选择器弹出状态（v0.6.18）
+    var showTimeFormatPicker by remember(field.id) { mutableStateOf(false) }
     LaunchedEffect(followLocation, autoLocation) {
         if (followLocation) {
             autoLocation.takeIf { !isLocationPlaceholder(it) }?.let { setValueText(it) }
@@ -1188,6 +1202,14 @@ private fun EditFieldDialog(
                         KeyboardOptions.Default
                     },
                 )
+                // 时间格式选择器（v0.6.18，用户需求 2026-11-09）：紧贴时间输入框下方。
+                // 只对"时间整串渲染"的模板显示——打卡/巡逻等固定版式模板改了也不生效，隐藏
+                if (isDateTime && timeFormatSupported) {
+                    TimeFormatRow(
+                        current = timeFormat,
+                        onClick = { showTimeFormatPicker = true },
+                    )
+                }
                 if (isWeather) {
                     // 天气 emoji 开关：挂在天气字段编辑内（用户拍板 2026-10-13，不进模板选项卡），即时生效
                     Row(
@@ -1361,6 +1383,18 @@ private fun EditFieldDialog(
         },
     )
 
+    // 时间格式选择（v0.6.18）：选中即时写入（预览立即可见），不阻塞字段本身的确定/取消
+    if (showTimeFormatPicker) {
+        TimeFormatPickerDialog(
+            current = timeFormat,
+            onDismiss = { showTimeFormatPicker = false },
+            onSelect = { pattern ->
+                onTimeFormatChange(pattern)
+                showTimeFormatPicker = false
+            },
+        )
+    }
+
     // 时间定格二次确认
     if (confirmTimeFreeze) {
         AlertDialog(
@@ -1399,6 +1433,101 @@ private fun DialogActionText(text: String, onClick: () -> Unit) {
             .clip(RoundedCornerShape(8.dp))
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
+    )
+}
+
+/** 「时间格式」入口行（v0.6.18，用户需求 2026-11-09）：时间输入框正下方，点开格式选择器 */
+@Composable
+private fun TimeFormatRow(current: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            I18n.t("时间格式"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            current,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            Icons.Default.ArrowDropDown,
+            contentDescription = I18n.t("选择时间格式"),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/** 时间格式单选对话框：当前项高亮 + 右侧圆形勾选，点选立即生效（含示例文本预览） */
+@Composable
+private fun TimeFormatPickerDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(I18n.t("时间格式")) },
+        text = {
+            Column {
+                // 示例时刻固定在打开瞬间，避免每次重组都跳秒
+                val sample = remember { java.util.Date() }
+                com.engcamera.util.TimeFormat.PATTERNS.forEach { pattern ->
+                    val selected = pattern == current
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSelect(pattern) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                pattern,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                            )
+                            Text(
+                                // 示例：用当前时刻按该格式渲染，让用户直观看到效果
+                                com.engcamera.util.TimeFormat.format(pattern, sample),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        if (selected) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = I18n.t("已选中"),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        } else {
+                            Box(
+                                Modifier
+                                    .size(22.dp)
+                                    .border(1.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(I18n.t("取消")) }
+        },
     )
 }
 

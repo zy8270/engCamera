@@ -83,6 +83,13 @@ data class WatermarkStyle(
     // ---- v0.6.17 水印整体透明度（所有模板的模板选项顶部拉杆，10~100%）----
     /** 水印整体不透明度百分比（10~100，默认 100）；防伪码条不跟随（保持恒清晰） */
     val overallOpacity: Int = 100,
+    // ---- v0.6.18 时间格式（水印编辑器时间字段的格式选择器，用户需求 2026-11-09）----
+    /**
+     * 时间显示格式（SimpleDateFormat 模式串）。仅对"时间整串渲染"的模板生效；
+     * 打卡/巡逻等把时间拆成日期行+星期+大号时分的固定版式模板忽略此值
+     * （见 TimeFormat.FIXED_LAYOUTS，编辑器对它们不显示选择器）。
+     */
+    val timeFormat: String = com.engcamera.util.TimeFormat.DEFAULT,
 )
 
 /**

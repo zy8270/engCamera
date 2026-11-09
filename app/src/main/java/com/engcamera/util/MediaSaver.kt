@@ -60,17 +60,19 @@ object MediaSaver {
         return if (group.isEmpty()) "$FILE_PREFIX$ts.$ext" else "$FILE_PREFIX${group}_$ts.$ext"
     }
 
-    /** 保存水印成片 JPEG，返回 Uri。takenAtMs 显式写入 DATE_TAKEN（不写则由系统猜，双张保存时排序不稳定） */
+    /** 保存水印成片 JPEG，返回 Uri。takenAtMs 显式写入 DATE_TAKEN（不写则由系统猜，双张保存时排序不稳定）。
+     *  quality 默认 95（拍照链路沿用）；拼图用 98，避免"拼"这一步再叠一代明显压缩（v0.6.19） */
     suspend fun saveBitmap(
         context: Context,
         bitmap: Bitmap,
         takenAtMs: Long? = null,
         treeUri: Uri? = null,
         projectName: String? = null,
+        quality: Int = 95,
     ): Uri = withContext(Dispatchers.IO) {
         if (treeUri != null) {
             return@withContext saveToTree(context, treeUri, "image/jpeg", takenAtMs, projectName) { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
             }
         }
         val resolver = context.contentResolver
@@ -86,7 +88,7 @@ object MediaSaver {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: error(I18n.t("MediaStore 插入失败"))
         resolver.openOutputStream(uri)?.use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
         } ?: error(I18n.t("无法写入照片"))
         if (Build.VERSION.SDK_INT >= 29) {
             val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }

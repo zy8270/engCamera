@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -48,6 +49,10 @@ class WatermarkRepository(private val context: Context) {
     private val annotationToolKey = intPreferencesKey("annotation_tool")
     private val saveTreeUriKey = stringPreferencesKey("save_tree_uri")
     private val saveTreeNameKey = stringPreferencesKey("save_tree_name")
+    private val defaultZoomKey = floatPreferencesKey("default_zoom_ratio")
+    private val restoreLastZoomKey = booleanPreferencesKey("restore_last_zoom")
+    private val lastZoomKey = floatPreferencesKey("last_zoom_ratio")
+    private val collageKey = stringPreferencesKey("collage_v1") // 拼图设置（v0.6.19）
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -79,6 +84,10 @@ class WatermarkRepository(private val context: Context) {
     private val _annotationTool = MutableStateFlow(0)
     val annotationTool: StateFlow<Int> = _annotationTool.asStateFlow()
 
+    /** 拼图设置（v0.6.19：列数/模板/标题/字段，用户需求 2026-11-09 带记忆） */
+    private val _collage = MutableStateFlow(CollageSettings())
+    val collage: StateFlow<CollageSettings> = _collage.asStateFlow()
+
     /** 界面语言（v191：跟随系统/中文/English，用户拍板全量中英） */
     private val _languageMode = MutableStateFlow(com.engcamera.i18n.AppLanguageMode.SYSTEM)
     val languageMode: StateFlow<com.engcamera.i18n.AppLanguageMode> = _languageMode.asStateFlow()
@@ -99,6 +108,22 @@ class WatermarkRepository(private val context: Context) {
     private val _saveTree = MutableStateFlow<Pair<Uri, String>?>(null)
     val saveTree: StateFlow<Pair<Uri, String>?> = _saveTree.asStateFlow()
 
+    /** 默认缩放倍率（用户需求 2026-11-09）：相机启动时自动缩放到的倍率，默认 1.0× */
+    private val _defaultZoom = MutableStateFlow(1f)
+    val defaultZoom: StateFlow<Float> = _defaultZoom.asStateFlow()
+
+    /** 恢复上次倍率：开启后启动时用上次退出前的倍率（优先于默认倍率），默认关 */
+    private val _restoreLastZoom = MutableStateFlow(false)
+    val restoreLastZoom: StateFlow<Boolean> = _restoreLastZoom.asStateFlow()
+
+    /** 上次使用的变焦倍率（相机页退出时写入，供「恢复上次倍率」使用） */
+    private val _lastZoom = MutableStateFlow(1f)
+    val lastZoom: StateFlow<Float> = _lastZoom.asStateFlow()
+
+    /** DataStore 首读完成（相机绑定可能早于此，启动倍率需等它再决定） */
+    private val _loaded = MutableStateFlow(false)
+    val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
+
     /** 用户导入的水印模板（内置模板见 TemplatePresets） */
     private val _userTemplates = MutableStateFlow<List<WatermarkTemplate>>(emptyList())
     val userTemplates: StateFlow<List<WatermarkTemplate>> = _userTemplates.asStateFlow()
@@ -114,15 +139,17 @@ class WatermarkRepository(private val context: Context) {
                 runCatching { json.decodeFromString<WatermarkState>(stored) }
                     .onSuccess {
                     _state.value = enforceUniqueFieldIds(
-                        migrateSoftShadowDefaults(
-                            ensureCountField(
-                                ensureWeatherField(
-                                    migrateWidth(
-                                        migrateWebScale(
-                                            migrateWebOpacity(
-                                                migrateShadowAlpha(
-                                                    migrateLiquidGlass(
-                                                        migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                        migrateTimeFormat(
+                            migrateSoftShadowDefaults(
+                                ensureCountField(
+                                    ensureWeatherField(
+                                        migrateWidth(
+                                            migrateWebScale(
+                                                migrateWebOpacity(
+                                                    migrateShadowAlpha(
+                                                        migrateLiquidGlass(
+                                                            migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                                                        ),
                                                     ),
                                                 ),
                                             ),
@@ -145,6 +172,10 @@ class WatermarkRepository(private val context: Context) {
             _editorBackdrop.value = context.appDataStore.data.first()[editorBackdropKey] ?: true
             _photoConfirm.value = context.appDataStore.data.first()[photoConfirmKey] ?: true
             _annotationTool.value = (context.appDataStore.data.first()[annotationToolKey] ?: 0).coerceIn(0, 3)
+            context.appDataStore.data.first()[collageKey]?.let { raw ->
+                runCatching { json.decodeFromString<CollageSettings>(raw) }
+                    .getOrNull()?.let { _collage.value = it.copy(columns = it.columns.coerceIn(1, 4)) }
+            }
             runCatching {
                 com.engcamera.i18n.AppLanguageMode.valueOf(
                     context.appDataStore.data.first()[languageKey] ?: "SYSTEM",
@@ -163,6 +194,9 @@ class WatermarkRepository(private val context: Context) {
                 _saveTree.value = android.net.Uri.parse(savedTreeUri) to
                     (context.appDataStore.data.first()[saveTreeNameKey] ?: "所选目录")
             }
+            _defaultZoom.value = (context.appDataStore.data.first()[defaultZoomKey] ?: 1f).coerceIn(0.5f, 10f)
+            _restoreLastZoom.value = context.appDataStore.data.first()[restoreLastZoomKey] ?: false
+            _lastZoom.value = (context.appDataStore.data.first()[lastZoomKey] ?: 1f).coerceIn(0.5f, 10f)
             // 一次性迁移：计数默认关闭（2026-10-11）——已有状态里的计数也关一次，用户可再手动开
             if (context.appDataStore.data.first()[booleanPreferencesKey("count_default_off_migrated")] != true) {
                 _state.value = _state.value.copy(
@@ -191,12 +225,14 @@ class WatermarkRepository(private val context: Context) {
                         projects = g.projects.map { p ->
                             p.copy(
                                 state = enforceUniqueFieldIds(
-                                    migrateSoftShadowDefaults(
-                                        migrateFieldOrder(
-                                            migrateWebScale(
-                                                migrateWebOpacity(
-                                                    migrateShadowAlpha(
-                                                        migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                    migrateTimeFormat(
+                                        migrateSoftShadowDefaults(
+                                            migrateFieldOrder(
+                                                migrateWebScale(
+                                                    migrateWebOpacity(
+                                                        migrateShadowAlpha(
+                                                            migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                                        ),
                                                     ),
                                                 ),
                                             ),
@@ -251,6 +287,7 @@ class WatermarkRepository(private val context: Context) {
                     }
                 }
             }
+            _loaded.value = true
         }
     }
 
@@ -536,6 +573,15 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
+    /** 拼图设置（列数/模板/标题/字段，用户需求 2026-11-09 带记忆）：整份写入 */
+    fun setCollage(settings: CollageSettings) {
+        val normalized = settings.copy(columns = settings.columns.coerceIn(1, 4))
+        _collage.value = normalized
+        scope.launch {
+            context.appDataStore.edit { it[collageKey] = json.encodeToString(normalized) }
+        }
+    }
+
     /** 界面语言设置（即时生效：同步刷 I18n.mode） */
     fun setLanguageMode(mode: com.engcamera.i18n.AppLanguageMode) {
         _languageMode.value = mode
@@ -550,6 +596,33 @@ class WatermarkRepository(private val context: Context) {
         _editorBackdrop.value = value
         scope.launch {
             context.appDataStore.edit { it[editorBackdropKey] = value }
+        }
+    }
+
+    /** 默认缩放倍率（相机启动时应用） */
+    fun setDefaultZoom(value: Float) {
+        val v = value.coerceIn(0.5f, 10f)
+        _defaultZoom.value = v
+        scope.launch {
+            context.appDataStore.edit { it[defaultZoomKey] = v }
+        }
+    }
+
+    /** 恢复上次倍率开关 */
+    fun setRestoreLastZoom(value: Boolean) {
+        _restoreLastZoom.value = value
+        scope.launch {
+            context.appDataStore.edit { it[restoreLastZoomKey] = value }
+        }
+    }
+
+    /** 记录上次使用的倍率（相机页退出/倍率变更时写入） */
+    fun rememberLastZoom(value: Float) {
+        val v = value.coerceIn(0.5f, 10f)
+        if (v == _lastZoom.value) return
+        _lastZoom.value = v
+        scope.launch {
+            context.appDataStore.edit { it[lastZoomKey] = v }
         }
     }
 
@@ -607,6 +680,11 @@ class WatermarkRepository(private val context: Context) {
                         tpl.style.maxWidthRatio
                     },
                     overallOpacity = cur.style.overallOpacity,
+                    // 时间格式（v0.6.18）：目标模板有专属默认（马克·工程=带星期、
+                    // 工程白=点分）就用它，否则沿用用户当前选择（普通模板之间切换不丢设置）
+                    timeFormat = com.engcamera.util.TimeFormat.defaultFor(tpl.style.layout)
+                        .takeIf { it != com.engcamera.util.TimeFormat.DEFAULT }
+                        ?: cur.style.timeFormat,
                 ),
                 // 模板自带默认锚点（如液态玻璃=底部居中）则落到该位置，否则保留当前位置
                 anchorX = tpl.anchorX ?: it.anchorX,
@@ -882,6 +960,18 @@ class WatermarkRepository(private val context: Context) {
         } else {
             s
         }
+
+    /** 存量数据迁移：时间格式默认值（v0.6.18，用户需求 2026-11-09）——
+     *  马克·工程/工程白原本把时间固定渲染成「日期+星期+时分」/「点分日期+时分」，
+     *  改成可选格式后，存量状态里的 timeFormat 仍是通用默认值，会让这两款显示成
+     *  yyyy-MM-dd HH:mm:ss。仅当 timeFormat 仍等于通用默认（用户没调过）时替换成
+     *  该模板自己的写法；替换后特征消失，幂等。 */
+    private fun migrateTimeFormat(s: WatermarkState): WatermarkState {
+        if (s.style.timeFormat != com.engcamera.util.TimeFormat.DEFAULT) return s
+        val want = com.engcamera.util.TimeFormat.defaultFor(s.style.layout)
+        if (want == com.engcamera.util.TimeFormat.DEFAULT) return s
+        return s.copy(style = s.style.copy(timeFormat = want))
+    }
 
     /** 字段 id 去重（v245 修复）：今日·打卡1 的拍摄人/工作单位都是 CUSTOM，applyTemplate 曾在
      *  同一毫秒生成两个相同 id——编辑器字段列表以 id 为 key 直接崩溃。首个保留原 id，

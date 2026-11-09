@@ -261,6 +261,10 @@ class CameraEngine(
     private var zoomObserver: Observer<ZoomState>? = null
     private var zoomObservedInfo: CameraInfo? = null
 
+    /** zoomState 是否已真正回流过一次（bind 完成后才有真范围；启动倍率等它再下发） */
+    private val _zoomReady = MutableStateFlow(false)
+    val zoomReady: StateFlow<Boolean> = _zoomReady.asStateFlow()
+
     /** 设置电子变焦倍数（自动夹取到当前镜头支持范围） */
     fun setZoomRatio(ratio: Float) {
         val cam = camera ?: return
@@ -273,10 +277,12 @@ class CameraEngine(
         val info = camera?.cameraInfo ?: return
         if (info == zoomObservedInfo) return
         zoomObservedInfo?.let { old -> zoomObserver?.let { old.zoomState.removeObserver(it) } }
+        _zoomReady.value = false
         val obs = Observer { zs: ZoomState ->
             _zoomRatio.value = zs.zoomRatio
             _zoomMin.value = zs.minZoomRatio
             _zoomMax.value = zs.maxZoomRatio
+            _zoomReady.value = true
         }
         zoomObserver = obs
         zoomObservedInfo = info

@@ -113,6 +113,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
         s.copy(style = st)
     }
 
+    /** 时间显示格式（v0.6.18，用户需求 2026-11-09）：仅"时间整串渲染"的模板生效 */
+    fun setTimeFormat(pattern: String) = repo.update { s ->
+        s.copy(style = s.style.copy(timeFormat = pattern.ifBlank { com.engcamera.util.TimeFormat.DEFAULT }))
+    }
+
     // ---------- v0.6.16 防伪码 ----------
 
     fun setAntiFake(on: Boolean) = repo.update { it.copy(antiFake = on) }

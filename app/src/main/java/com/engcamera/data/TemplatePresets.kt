@@ -239,6 +239,8 @@ object TemplatePresets {
                     bodyTextColor = 0xFFFFFFFF,
                     accentColor = 0xFF00A3FF,
                     weatherEmoji = false,
+                    // 马克·工程默认「日期 + 星期 + 时分」（v0.6.18：编辑器里可改格式）
+                    timeFormat = com.engcamera.util.TimeFormat.WEEKDAY,
                 )
             },
             fields = listOf(
@@ -279,6 +281,8 @@ object TemplatePresets {
                     bodyTextColor = 0xFF1A1A1A,
                     accentColor = 0xFFFEB800,
                     weatherEmoji = false,
+                    // 马克·工程白默认「点分日期 + 时分」（v0.6.18：编辑器里可改格式）
+                    timeFormat = com.engcamera.util.TimeFormat.DOT_DATE,
                 )
             },
             fields = listOf(

@@ -1359,20 +1359,14 @@ object WatermarkRenderer {
         val valueX = padL + labelCell + colonW
         val valueW = (blockW - valueX - padR).toInt().coerceAtLeast(1)
         val naturalW = (blockW - padL - padR).toInt().coerceAtLeast(1)
-        val parts = timePartsOf(state, dynamic)
-
         val entries = mutableListOf<MEntry>()
         enabled.filter { !it.isTitle }.forEach { f ->
             when {
                 f.type == FieldType.DATETIME -> {
-                    // 日期行：dark 无标签"2026-10-30 星期五 00:01"；
-                    // light 带「时 间」两端对齐标签（参考实测：时/间分居标签格两端）
-                    val text = if (parts != null) {
-                        if (lightBody) "${parts.dateDot} ${parts.hm}"
-                        else "${parts.dateDash} ${com.engcamera.i18n.I18n.t(parts.weekday)} ${parts.hm}"
-                    } else {
-                        timeRawOf(state, dynamic)
-                    }
+                    // 时间走用户所选格式（v0.6.18 用户需求）：马克·工程默认带星期、
+                    // 工程白默认点分日期，两者都是单行文字，可在编辑器里改；
+                    // 解析不出时间时退回原文本（不吞用户输入）
+                    val text = displayText(f, dynamic, style)
                     val labelTxt = if (lightBody && f.label.isNotBlank()) {
                         com.engcamera.i18n.I18n.t(f.label)
                     } else ""
@@ -2726,7 +2720,11 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
     /** 字段当前显示文本：位置/时间标签有值（手动编辑）则优先生效，空则用拍照瞬间动态值。 */
     private fun displayText(f: WatermarkField, dynamic: DynamicValues, style: WatermarkStyle): String {
         val text = when (f.type) {
-            FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
+            // 时间格式（v0.6.18）：整串渲染的模板按用户所选格式显示；解析不了的时间原样保留
+            FieldType.DATETIME -> com.engcamera.util.TimeFormat.apply(
+                f.value.ifBlank { dynamic.time },
+                style.timeFormat,
+            )
             FieldType.LOCATION -> f.value.ifBlank {
                 dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
             }

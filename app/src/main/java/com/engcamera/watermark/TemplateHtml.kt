@@ -28,9 +28,19 @@ object TemplateHtml {
     private const val EXTRA_MARKER = "<div data-extra></div>"
 
     /** 单字段当前显示文本（与 WatermarkRenderer.displayText 同规则，不回退标签） */
-    private fun fieldValue(f: WatermarkField, dynamic: DynamicValues, emoji: Boolean, showLatLng: Boolean): String {
+    private fun fieldValue(
+        f: WatermarkField,
+        dynamic: DynamicValues,
+        emoji: Boolean,
+        showLatLng: Boolean,
+        timeFormat: String,
+    ): String {
         val text = when (f.type) {
-            FieldType.DATETIME -> f.value.ifBlank { dynamic.time }
+            // 时间格式（v0.6.18）：与原生渲染同规则（网页模板都是"时间整串"渲染）
+            FieldType.DATETIME -> com.engcamera.util.TimeFormat.apply(
+                f.value.ifBlank { dynamic.time },
+                timeFormat,
+            )
             FieldType.LOCATION -> f.value.ifBlank {
                 dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
             }
@@ -50,7 +60,9 @@ object TemplateHtml {
     /** 字段当前文本（取该类型第一个"启用"的字段；关闭的字段显示标签兜底） */
     fun valueOf(type: FieldType, label: String, state: WatermarkState, dynamic: DynamicValues): String {
         val f = state.fields.firstOrNull { it.type == type && it.enabled } ?: return label
-        return fieldValue(f, dynamic, state.style.weatherEmoji, state.style.showLatLng).ifBlank { label }
+        return fieldValue(
+            f, dynamic, state.style.weatherEmoji, state.style.showLatLng, state.style.timeFormat,
+        ).ifBlank { label }
     }
 
     fun escape(s: String): String = s
@@ -113,7 +125,11 @@ object TemplateHtml {
         }
         if (extra.isEmpty()) return body.replace(EXTRA_MARKER, "")
         val rows = extra.joinToString("") { f ->
-            val text = escape(fieldValue(f, dynamic, state.style.weatherEmoji, state.style.showLatLng))
+            val text = escape(
+                fieldValue(
+                    f, dynamic, state.style.weatherEmoji, state.style.showLatLng, state.style.timeFormat,
+                ),
+            )
             // 标签随界面语言（与原生渲染同规则）
             val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
             if (labelTxt.isBlank()) "<div>$text</div>" else "<div>${escape(labelTxt)}：$text</div>"

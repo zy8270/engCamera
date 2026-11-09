@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.17/engCamera-v0.6.17-279.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.19/engCamera-v0.6.19-281.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
-A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, and multiple **project profiles** switch the whole watermark set in one tap. No ads, no sign-in, no cloud sync.
+A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.17 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.19 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -20,11 +20,19 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 |---|---|---|
 | ![Main](screenshots/主界面.png) | ![Editor](screenshots/水印编辑器.png) | ![Annotate](screenshots/照片标注.png) |
 
-| Watermark gallery photos | Settings drawer | Project groups |
+| Burst collage (live minimap) | Burst review · drag to reorder | Collage template settings |
 |---|---|---|
-| ![Add watermark](screenshots/编辑添加水印.png) | ![Settings](screenshots/设置.png) | ![Groups](screenshots/工程组.png) |
+| ![Collage mode](screenshots/连拍拼图.png) | ![Burst review](screenshots/连拍预览.png) | ![Collage template](screenshots/拼图模板设置.png) |
 
-*Screenshots taken on real devices.*
+| Collage output (red-header template) | Watermark gallery photos | Settings drawer |
+|---|---|---|
+| ![Collage output](screenshots/拼图成品.png) | ![Add watermark](screenshots/编辑添加水印.png) | ![Settings](screenshots/设置.png) |
+
+| Project groups | Template picker |
+|---|---|
+| ![Groups](screenshots/工程组.png) | ![Template picker](screenshots/模板选择器.png) |
+
+*Screenshots taken on the emulator (Android 17 / 1280×2856).*
 
 ## Features
 
@@ -34,7 +42,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Shot confirm & gesture annotation** (setting, on by default): after the shutter you get a confirm page — arrow / rectangle / brush annotations (six colors, undo per stroke), tap-to-add text (drag to move, handle to rotate & scale, instant recolor), and **long-press the watermark block to drag it** (affects only this save, not the global position); **pinch to zoom for fine annotation**: zoom stays after lifting your fingers, single finger keeps drawing, stroke width is locked to the zoom level at pen-down (strokes drawn zoomed-in stay thinner, matching the saved photo), and text handles keep a constant size; landscape / upside-down shots are centered at true aspect inside a fixed 3:4 confirm frame with the watermark gravity-corrected to its final position, and can be zoomed to fill the frame
 - **Bilingual UI (Chinese / English)**: follow system / Chinese / English, switchable in settings — template names, field labels and prompts all switch instantly
 - **Video aspect matches the preview**: preview / photo / video are cropped to the same ratio; quality tiers are generated from the camera's real capabilities (showing actual output resolution & frame rate; no 4K on front cameras)
-- **Photo quality picker**: tiers follow the current lens' true capabilities, labeled with real output resolution and megapixels (e.g. 4624×3472 · ~16MP)
+- **Photo / video quality settings**: tiers follow the current lens' true capabilities, labeled with real output resolution and megapixels (e.g. 4624×3472 · ~16MP); moved into the "Quality" group of the settings drawer as of v0.6.18
 - **Electronic zoom & multi-lens**: pinch to zoom, tap the badge for 1×/2× quick toggle; on multi-lens devices, pinching below 1× auto-switches to a wider lens (e.g. 0.6× ultra-wide); focal capsule cycles on tap, long-press expands the full focal panel (hidden on single-lens devices)
 - **Tap to focus & meter**: tap anywhere to focus + meter + white balance, auto-return to continuous after 4 s
 - **Gravity-following orientation**: landscape (±90°) / upside-down (180°) output orientation aligns with the system camera, text always upright; the watermark 9-grid position follows **gravity** — pick "bottom" and it stays on the physical bottom in any orientation
@@ -46,6 +54,17 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Custom save location** (setting): default `DCIM/Camera`, or any SAF folder you pick
 - **Shutter sound / volume-key shutter** (settings): shutter sound off by default (enable where local law requires); volume keys act as shutter, on by default
 - **Daily update check**: every launch compares the app version with the latest GitHub Release once a day; when a newer version exists the settings footer shows an update notice with a red dot that links straight to the download page
+
+### Burst collage
+
+- **Entry**: the collage icon at the right of the bottom bar (where the quality picker used to be — quality moved into the settings drawer). Tapping it enters burst-collage mode and the top title switches to "Burst collage"
+- **Burst capture**: shots go to a cache first, **not** to the gallery, and each one burns the watermark frozen at its own shutter moment (template / style / text / time & location all frozen — editing the watermark mid-burst only affects later shots)
+- **Minimap**: a live grid of "columns × rows" in the middle of the viewfinder; captured cells turn yellow, pending cells stay transparent, and red-header templates get a red strip on top
+- **Templates**: three built in — No template (plain white-gap grid) / **Client visit** / **Work report** (the latter two are red-header document styles: solid red title band, thick+thin rules, info rows, notes, signature line). Template and column count (1–4, default 1) are **remembered** for next time
+- **Configurable fields**: the red-header templates have their own title and field inputs — visit/report date and location (auto-filled from shot time and GPS) on by default; client, visitor, signature, department, reporter and notes off by default, each toggleable
+- **Burst review**: the bottom-left button (thumbnail background with an outlined "N photos" label centered on top) opens the review panel — a grid matching the column count, a trash icon per cell, **long-press drag to reorder** (the dragged cell lifts and follows your finger while the others spring out of the way; single column dodges vertically), and Template / Back / Save buttons at the bottom. "Apply current watermark" at the top overwrites every captured photo's frozen watermark at once
+- **Saving**: full-resolution composite — every photo keeps its **native size with no scaling and no cropping**; photos sit side by side with equal white gaps. JPEG q98, encoded exactly once. If the total exceeds the memory budget the whole page is scaled down proportionally and the actual output size is reported. A **ring progress + percentage + cancel button** is shown while compositing; cancelling keeps the burst cache so you can retry
+- **Confirmation on destructive actions**: exiting collage mode, generating, applying the watermark and deleting a shot all ask first
 
 ### Watermark
 

@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaActionSound
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import android.os.SystemClock
@@ -26,6 +27,7 @@ import com.engcamera.scan.BarcodeAnalyzer
 import com.engcamera.sensor.GravitySensor
 import com.engcamera.util.MediaSaver
 import com.engcamera.util.VideoWatermarker
+import com.engcamera.watermark.CollageRenderer
 import com.engcamera.watermark.WatermarkRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +40,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -104,6 +107,21 @@ data class CameraUiState(
     /** 确认标注期间进过水印编辑器（v0.6.15 用户需求 2026-11-03）：返回后预览与
      *  保存经 mergeEditedWatermark 合并编辑结果（内容/样式/模板跟仓库走） */
     val confirmEditWatermark: Boolean = false,
+    // ---------- 拼图模式（v0.6.19，用户需求 2026-11-09） ----------
+    /** 拼图模式开启（入口进入；退出清空连拍缓存） */
+    val collageMode: Boolean = false,
+    /** 已连拍照片（按用户排序；内存态，进程重启即丢） */
+    val collageItems: List<com.engcamera.data.CollageItem> = emptyList(),
+    /** 连拍预览覆盖层展开（展开期间暂停相机） */
+    val collagePreviewOpen: Boolean = false,
+    /** 正在拍/处理当前这张（防重复点击快门） */
+    val collageCapturing: Boolean = false,
+    /** 正在合成保存拼图 */
+    val collageSaving: Boolean = false,
+    /** 合成进度文字（"正在处理 3/4"），null=无 */
+    val collageProgress: String? = null,
+    /** 合成进度 0f..1f（进度弹窗的圆环与百分比） */
+    val collageProgressFraction: Float = 0f,
 ) {
     /** 添加水印模式的一个待处理图片 */
     data class AnnotateItem(val uri: android.net.Uri, val aspect: Float)
@@ -170,6 +188,18 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     private val _ui = MutableStateFlow(CameraUiState())
     val ui: StateFlow<CameraUiState> = _ui.asStateFlow()
+
+    /** 设置页「画质设置」用：只暴露画质列表与选中项。整份 ui 每秒随录像计时变化，
+     *  直接收集会让设置抽屉整页重组（v0.6.18）。 */
+    data class QualityUi(
+        val photoQualities: List<CameraEngine.PhotoQuality> = emptyList(),
+        val photoQualityIndex: Int = 0,
+        val videoQualities: List<CameraEngine.VideoQuality> = emptyList(),
+        val videoQualityIndex: Int = 0,
+    )
+
+    private val _qualityUi = MutableStateFlow(QualityUi())
+    val qualityUi: StateFlow<QualityUi> = _qualityUi.asStateFlow()
 
     private val _mediaVersion = MutableStateFlow(0)
     val mediaVersion: StateFlow<Int> = _mediaVersion.asStateFlow()
@@ -281,16 +311,44 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         viewModelScope.launch {
             _mediaVersion.collect { refreshLatest() }
         }
+        // 拼图连拍缓存不跨进程（用户需求 2026-11-09）：启动即清上次残留
+        viewModelScope.launch(Dispatchers.IO) { clearCollageDir() }
+        // 画质子流：只在画质相关字段变化时更新（设置抽屉订阅它而不是整份 ui）
+        viewModelScope.launch {
+            _ui.collect { s ->
+                val next = QualityUi(
+                    photoQualities = s.photoQualities,
+                    photoQualityIndex = s.photoQualityIndex,
+                    videoQualities = s.videoQualities,
+                    videoQualityIndex = s.videoQualityIndex,
+                )
+                if (next != _qualityUi.value) _qualityUi.value = next
+            }
+        }
     }
 
     fun attachEngine(e: CameraEngine) {
         engine = e
+        // 启动倍率（用户需求 2026-11-09）：仅本次 app 启动后的第一次进相机页应用。
+        // 绑定常早于布局测量，随后的一次重绑会重置倍率，所以 pending 保持到用户
+        // 手动变焦或离开相机页（离开后再回来属于"返回"，不该再重置用户倍率）
+        if (!startupZoomConsumed) pendingStartupZoom = true
     }
 
     fun detachEngine() {
+        // 记住退出前的倍率，供「恢复上次倍率」下次启动使用
+        container.repository.rememberLastZoom(_ui.value.zoomRatio)
+        pendingStartupZoom = false
+        startupZoomConsumed = true
         engine?.release()
         engine = null
     }
+
+    /** 待应用的启动倍率（attachEngine 置真，用户手动变焦/离开相机页清掉） */
+    private var pendingStartupZoom = false
+
+    /** 本次进程内启动倍率是否已用掉（从编辑器/相册返回相机页不再重置） */
+    private var startupZoomConsumed = false
 
     fun onEngineBound() {
         val e = engine ?: return
@@ -326,6 +384,33 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             )
         }
         setFlashMode(_ui.value.flashIndex)
+        applyStartupZoom(e)
+    }
+
+    /** 应用启动倍率（用户需求 2026-11-09）：等 DataStore 首读完成（否则默认值还没
+     *  加载，会把 1.0 当作用户设置）+ 等 zoomState 真回流（bind 完成前范围是初始
+     *  1×，此时 setZoomRatio 会被夹到 1×），再下发。用户一旦手动变焦即停用，
+     *  之后的重绑（切镜头/换画质/从编辑器返回）不再重置当前倍率。 */
+    private fun applyStartupZoom(e: CameraEngine) {
+        if (!pendingStartupZoom) return
+        viewModelScope.launch {
+            var waited = 0
+            while (!container.repository.loaded.value && waited < 30) {
+                delay(100)
+                waited++
+            }
+            val target = startupZoom()
+            if (target == 1f) return@launch
+            waited = 0
+            while (!e.zoomReady.value && waited < 30) {
+                delay(100)
+                waited++
+            }
+            // 设备本身不支持变焦（min=max=1）时无需下发
+            if (!pendingStartupZoom) return@launch
+            if (e.zoomMax.value <= 1f && e.zoomMin.value >= 1f) return@launch
+            e.setZoomRatio(target)
+        }
     }
 
     /** 选择录像画质并重绑 */
@@ -371,6 +456,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
         val target = (_ui.value.zoomRatio * factor)
             .coerceIn(_ui.value.zoomMin, _ui.value.zoomMax)
+        pendingStartupZoom = false // 用户手动变焦：不再用启动倍率覆盖
         engine?.setZoomRatio(target)
         _ui.update { it.copy(zoomRatio = target) }
     }
@@ -378,6 +464,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     /** 变焦徽标点击：1× 与 2× 之间快速切换（同样夹取范围） */
     fun toggleZoom() {
         val target = if (_ui.value.zoomRatio > 1.5f) 1f else 2f
+        pendingStartupZoom = false // 用户手动变焦：不再用启动倍率覆盖
         engine?.setZoomRatio(target)
         _ui.update { it.copy(zoomRatio = target) }
     }
@@ -423,10 +510,32 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     /** 取景器截帧作编辑器预览背景（默认开） */
     val editorBackdrop: StateFlow<Boolean> = container.repository.editorBackdrop
 
+    /** 缩放倍率（用户需求 2026-11-09）：默认倍率与「恢复上次倍率」开关 */
+    val defaultZoom: StateFlow<Float> = container.repository.defaultZoom
+    val restoreLastZoom: StateFlow<Boolean> = container.repository.restoreLastZoom
+
+    fun setDefaultZoom(value: Float) = container.repository.setDefaultZoom(value)
+
+    fun setRestoreLastZoom(value: Boolean) = container.repository.setRestoreLastZoom(value)
+
+    /** 启动倍率：恢复上次倍率开启时用上次退出前的倍率，否则用默认倍率 */
+    private fun startupZoom(): Float =
+        if (container.repository.restoreLastZoom.value) {
+            container.repository.lastZoom.value
+        } else {
+            container.repository.defaultZoom.value
+        }
+
     /** 拍照后确认（默认开）：拍摄后先预览标注，手动保存 */
     val photoConfirm: StateFlow<Boolean> = container.repository.photoConfirm
 
     fun setPhotoConfirm(value: Boolean) = container.repository.setPhotoConfirm(value)
+
+    // ---------- 拼图设置（v0.6.19） ----------
+    val collageSettings: StateFlow<com.engcamera.data.CollageSettings> = container.repository.collage
+
+    fun setCollageSettings(settings: com.engcamera.data.CollageSettings) =
+        container.repository.setCollage(settings)
 
     /** 界面语言 */
     val languageMode: StateFlow<com.engcamera.i18n.AppLanguageMode> = container.repository.languageMode
@@ -626,6 +735,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     }
 
     fun stopEverything() {
+        // 记住当前倍率（「恢复上次倍率」用）：ON_PAUSE（按 Home/切后台）也会走到这里，
+        // 比 detachEngine 更可靠——退出页面走 detachEngine 时同样会记一次
+        container.repository.rememberLastZoom(_ui.value.zoomRatio)
         // 拖动防抖未落盘的锚点在此兜底写入
         if (anchorPersistJob?.isActive == true) {
             anchorPersistJob = null
@@ -757,6 +869,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     fun setVideoMode(video: Boolean) {
         val st = _ui.value
         if (st.recording) return
+        // 拼图模式不支持录像（用户需求 2026-11-09）：模式胶囊已被替换，这里兜底拦死
+        if (video && st.collageMode) return
         // 点拍照/录像按钮同时退出添加水印模式（用户用它们切回相机）
         if (st.videoMode == video && !st.annotating) return
         _ui.update {
@@ -809,6 +923,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     // ---------- 拍照 ----------
     fun takePhoto() {
         val st = _ui.value
+        // 拼图模式（v0.6.19）：走连拍链路，跳过确认页与标注（用户拍板）
+        if (st.collageMode) {
+            takeCollagePhoto()
+            return
+        }
         if (st.capturing || st.recording) return
         val e = engine
         if (e == null || st.videoMode) {
@@ -1382,6 +1501,379 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     fun showToast(message: String?) {
         _ui.update { it.copy(toast = message) }
+    }
+
+    // ==================== 拼图模式（v0.6.19，用户需求 2026-11-09） ====================
+
+    /** 连拍原始 JPEG 目录：不跨进程，启动/退出/保存后清空 */
+    private val collageDir: File by lazy {
+        File(context.cacheDir, "collage").apply { mkdirs() }
+    }
+
+    /** 连拍序号（文件名用，避免同毫秒碰撞） */
+    private var collageSeq = 0L
+
+    /** 正在进行的拼图保存任务（取消按钮 cancel 它） */
+    private var collageSaveJob: kotlinx.coroutines.Job? = null
+
+    private fun clearCollageDir() {
+        runCatching {
+            collageDir.listFiles()?.forEach { it.delete() }
+        }
+    }
+
+    /** 进入拼图模式：强制拍照模式（不录像），清空上次残留 */
+    fun enterCollage() {
+        viewModelScope.launch(Dispatchers.IO) { clearCollageDir() }
+        collageSeq = 0L
+        setVideoMode(false)
+        _ui.update {
+            it.copy(
+                collageMode = true,
+                collageItems = emptyList(),
+                collagePreviewOpen = false,
+                collageCapturing = false,
+                collageSaving = false,
+                collageProgress = null,
+            )
+        }
+    }
+
+    /** 退出拼图模式（丢弃连拍缓存）。UI 侧负责二次确认（有照片时） */
+    fun exitCollage() {
+        _ui.update {
+            it.copy(
+                collageMode = false,
+                collageItems = emptyList(),
+                collagePreviewOpen = false,
+                collageCapturing = false,
+                collageSaving = false,
+                collageProgress = null,
+            )
+        }
+        viewModelScope.launch(Dispatchers.IO) { clearCollageDir() }
+    }
+
+    fun setCollagePreviewOpen(open: Boolean) {
+        _ui.update { it.copy(collagePreviewOpen = open) }
+    }
+
+    /**
+     * 拼图模式快门（用户拍板 B 语义）：原始 JPEG 落 cacheDir/collage/，
+     * 并**冻结拍摄瞬间的水印状态与动态值**——中途改水印只影响之后的照片，
+     * 预览弹窗提供「同步当前水印」手动统一。
+     *
+     * 此处不烧水印：烧了就要再编码一次 JPEG，保存时又得解码 = 多一代损失。
+     * 冻结的是"用哪份设置"，不是"何时编码"。
+     */
+    fun takeCollagePhoto() {
+        val st = _ui.value
+        if (!st.collageMode || st.collageCapturing || st.collageSaving) return
+        val e = engine ?: run {
+            _ui.update { it.copy(toast = I18n.t("相机未就绪")) }
+            return
+        }
+        _ui.update { it.copy(collageCapturing = true) }
+        playShutterIfNeeded()
+        val frameRotation = frameRotationFor(quantizedRoll.value)
+        val roll = quantizedRoll.value
+        // 先落 cacheDir 根，成功后再移进 collage 目录（避免失败留脏文件）
+        val temp = File(context.cacheDir, "collage_${System.currentTimeMillis()}_${collageSeq}.jpg")
+        // 快门瞬间冻结（与拍照确认页同款语义）
+        val frozenWatermark = effectiveWatermark.value
+        val frozenDynamic = dynamic.value
+        e.takePhoto(temp) { ok ->
+            if (!ok) {
+                temp.delete()
+                _ui.update { it.copy(collageCapturing = false, toast = I18n.t("拍照失败")) }
+                return@takePhoto
+            }
+            _ui.update { it.copy(shutterTick = it.shutterTick + 1) }
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val seq = ++collageSeq
+                    val dest = File(collageDir, String.format(Locale.US, "%04d.jpg", seq))
+                    if (dest.exists()) dest.delete()
+                    if (!temp.renameTo(dest)) {
+                        temp.copyTo(dest, overwrite = true)
+                        temp.delete()
+                    }
+                    // 只读 bounds + EXIF，不解码像素（布局用）
+                    val (w, h) = uprightSizeOf(dest)
+                    val item = com.engcamera.data.CollageItem(
+                        id = System.currentTimeMillis() * 1000 + seq,
+                        file = dest,
+                        watermark = frozenWatermark,
+                        dynamic = frozenDynamic,
+                        frameRotation = frameRotation,
+                        rotationDeg = roll.toFloat(),
+                        uprightWidth = w,
+                        uprightHeight = h,
+                    )
+                    _ui.update {
+                        it.copy(collageItems = it.collageItems + item, collageCapturing = false)
+                    }
+                } catch (t: Throwable) {
+                    t.printStackTrace()
+                    temp.delete()
+                    _ui.update {
+                        it.copy(
+                            collageCapturing = false,
+                            toast = I18n.t("拍照失败：{msg}").replace("{msg}", t.message ?: ""),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** 读取转正后的像素尺寸（inJustDecodeBounds + EXIF，不解码像素） */
+    private fun uprightSizeOf(file: File): Pair<Int, Int> {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, opts)
+        val w = opts.outWidth.coerceAtLeast(1)
+        val h = opts.outHeight.coerceAtLeast(1)
+        val deg = runCatching { MediaSaver.exifDegrees(file.absolutePath) }.getOrDefault(0)
+        return if (deg == 90 || deg == 270) h to w else w to h
+    }
+
+    /** 删除一张连拍（UI 侧二次确认由调用方负责） */
+    fun deleteCollageItem(id: Long) {
+        val target = _ui.value.collageItems.firstOrNull { it.id == id } ?: return
+        _ui.update { s -> s.copy(collageItems = s.collageItems.filterNot { it.id == id }) }
+        viewModelScope.launch(Dispatchers.IO) { runCatching { target.file.delete() } }
+    }
+
+    /** 拖动换位 */
+    fun moveCollageItem(from: Int, to: Int) {
+        _ui.update { s ->
+            val list = s.collageItems.toMutableList()
+            if (from !in list.indices || to !in list.indices || from == to) return@update s
+            val item = list.removeAt(from)
+            list.add(to, item)
+            s.copy(collageItems = list)
+        }
+    }
+
+    /**
+     * 同步当前水印（用户拍板：手动触发，二次确认）：把已拍照片冻结的状态
+     * 全部换成仓库当前状态。B 语义的逃生口——改完水印发现前几张还是旧内容时用。
+     */
+    fun syncCollageWatermark() {
+        val cur = effectiveWatermark.value
+        _ui.update { s ->
+            s.copy(collageItems = s.collageItems.map { it.copy(watermark = cur) })
+        }
+        _ui.update { it.copy(toast = I18n.t("已同步水印")) }
+    }
+
+    /**
+     * 合成保存拼图（用户需求 2026-11-09）。
+     *
+     * 内存策略：只读 bounds 算版式 → 若总像素超预算整体等比缩 → 建画布 →
+     * **逐张**解码/烧水印/贴图/回收，峰值 = 画布 + 单张。全程只编码一次（q98）。
+     *
+     * 可取消（用户需求 2026-11-10）：张数多时合成耗时很长，进度弹窗提供取消按钮。
+     * 取消后丢弃画布、保留连拍缓存（用户可以重来），回到拼图模式。
+     */
+    fun saveCollage() {
+        val st = _ui.value
+        if (!st.collageMode || st.collageSaving) return
+        val items = st.collageItems
+        if (items.isEmpty()) {
+            // 没拍照就点确认 = 退出拼图模式（用户需求）
+            exitCollage()
+            return
+        }
+        val settings = container.repository.collage.value
+        _ui.update {
+            it.copy(
+                collageSaving = true,
+                collageProgress = I18n.t("正在生成拼图…"),
+                collageProgressFraction = 0f,
+            )
+        }
+        collageSaveJob = viewModelScope.launch(Dispatchers.IO) {
+            var page: Bitmap? = null
+            try {
+                // 预算 = 堆上限 × 50%，并封顶 72MP。
+                // 实测（imgcache/_analysis/collage_math2.py）：这个档位下最常见的
+                // 「2 列 4 张」（71.4MP）与「1 列 4 张」（55.9MP）都保持原生分辨率零缩放；
+                // 画布 272MB + 单张解码 ≈ 320MB，512MB 堆留 190MB 给编码缓冲，安全
+                val maxPixels = minOf(
+                    (Runtime.getRuntime().maxMemory() * 0.50).toLong(),
+                    72_000_000L,
+                )
+                val layout = CollageRenderer.layout(items, settings.columns, settings, maxPixels)
+                ensureActive()
+                page = Bitmap.createBitmap(layout.pageW, layout.pageH, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(page)
+                canvas.drawColor(android.graphics.Color.WHITE)
+
+                // 页眉（红头带/分隔线/信息行）
+                CollageRenderer.drawHeader(canvas, layout, settings.template)
+
+                // 逐格：解码 → 转正 → 烧该张冻结的水印 → 贴图 → 回收
+                items.forEachIndexed { idx, item ->
+                    // 每张开始前检查取消：单张解码+烧水印可能耗时数秒，
+                    // 检查粒度放在张级足够，且不引入逐像素开销
+                    ensureActive()
+                    _ui.update {
+                        it.copy(
+                            collageProgress = I18n.t("正在处理 {a}/{b}")
+                                .replace("{a}", "${idx + 1}")
+                                .replace("{b}", "${items.size}"),
+                            // 前 85% 给逐张合成，后 15% 给编码落盘
+                            collageProgressFraction = (idx.toFloat() / items.size) * 0.85f,
+                        )
+                    }
+                    val rect = layout.cellRect(idx)
+                    val bmp = decodeForCell(item, rect.width(), rect.height()) ?: return@forEachIndexed
+                    try {
+                        // 烧水印：用该张冻结的 state/dynamic（B 语义），几何与 burnAndSave 一致。
+                        // 直接在照片位图上画（bmp 内容即照片本体，无需再拷一层）
+                        val antiFake = antiFakeCodeFor(item.watermark, bmp)
+                        WatermarkRenderer.drawOnCanvas(
+                            Canvas(bmp),
+                            bmp.width, bmp.height,
+                            item.watermark, item.dynamic,
+                            item.rotationDeg, item.frameRotation,
+                            backdrop = bmp,
+                            gravityAnchor = true,
+                            antiFakeCode = antiFake,
+                        )
+                        // 贴进格子：格子尺寸已按该张照片的宽高比算好（原生尺寸并排布局），
+                        // 但解码走 inSampleSize（2 的幂）只能接近目标尺寸，所以仍按
+                        // 等比 fitCenter 落位——偏差在 1~2px 内，视觉上等于无白边
+                        val dst = fitCenter(bmp.width, bmp.height, rect)
+                        canvas.drawBitmap(bmp, null, dst, Paint().apply {
+                            isFilterBitmap = true
+                            isAntiAlias = true
+                        })
+                    } finally {
+                        bmp.recycle()
+                    }
+                }
+
+                // 页脚（备注折行 + 落款）
+                CollageRenderer.drawFooter(canvas, layout, settings.template)
+                ensureActive()
+
+                _ui.update {
+                    it.copy(
+                        collageProgress = I18n.t("正在保存…"),
+                        collageProgressFraction = 0.9f,
+                    )
+                }
+                MediaSaver.saveBitmap(
+                    context, page, treeUri = saveTreeUri(),
+                    projectName = currentProjectName(), quality = 98,
+                )
+                page.recycle()
+                page = null
+
+                // 保存成功：清空缓存、张数归零、留在拼图模式（"从零开始"）
+                clearCollageDir()
+                collageSeq = 0L
+                _mediaVersion.value += 1
+                _ui.update {
+                    it.copy(
+                        collageItems = emptyList(),
+                        collagePreviewOpen = false,
+                        collageSaving = false,
+                        collageProgress = null,
+                        collageProgressFraction = 0f,
+                        toast = if (layout.clamped) {
+                            I18n.t("拼图已保存（{w}×{h}）")
+                                .replace("{w}", "${layout.pageW}")
+                                .replace("{h}", "${layout.pageH}")
+                        } else {
+                            I18n.t("拼图已保存")
+                        },
+                    )
+                }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // 用户取消：丢弃画布、保留连拍缓存让他重来（不清缓存！）
+                page?.recycle()
+                _ui.update {
+                    it.copy(
+                        collageSaving = false,
+                        collageProgress = null,
+                        collageProgressFraction = 0f,
+                        toast = I18n.t("已取消保存"),
+                    )
+                }
+                throw c
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                page?.recycle()
+                _ui.update {
+                    it.copy(
+                        collageSaving = false,
+                        collageProgress = null,
+                        collageProgressFraction = 0f,
+                        toast = I18n.t("保存失败：{msg}").replace("{msg}", t.message ?: I18n.t("未知错误")),
+                    )
+                }
+            } finally {
+                collageSaveJob = null
+            }
+        }
+    }
+
+    /** 取消拼图保存（进度弹窗的取消按钮）。丢弃画布、保留连拍缓存 */
+    fun cancelCollageSave() {
+        collageSaveJob?.cancel()
+        collageSaveJob = null
+    }
+
+    /**
+     * 解码一张连拍到接近目标尺寸（采样降载），并按 EXIF 转正。
+     * 注意：烧水印需要"未加水印"的原始位图，所以这里返回的是转正后的纯照片。
+     */
+    private fun decodeForCell(item: com.engcamera.data.CollageItem, targetW: Int, targetH: Int): Bitmap? {
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(item.file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+            var sample = 1
+            // 目标尺寸按转正后算，采样时用原始尺寸比较即可（采样是 2 的幂，误差可接受）
+            while (bounds.outWidth / (sample * 2) >= targetW &&
+                bounds.outHeight / (sample * 2) >= targetH
+            ) {
+                sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                // 必须可变：水印直接烧在这张位图上（BitmapFactory 默认给不可变位图，
+                // Canvas(immutable) 会抛 IllegalStateException）。inMutable 省掉
+                // 一次全分辨率拷贝——拼图逐格处理，拷贝次数直接决定峰值内存
+                inMutable = true
+            }
+            val src = BitmapFactory.decodeFile(item.file.absolutePath, opts) ?: return@runCatching null
+            val deg = runCatching { MediaSaver.exifDegrees(item.file.absolutePath) }.getOrDefault(0)
+            if (deg == 0) {
+                // inMutable 在个别解码器上仍可能返回不可变位图，兜底拷一份可变的
+                if (src.isMutable) src else src.copy(Bitmap.Config.ARGB_8888, true).also { src.recycle() }
+            } else {
+                val m = Matrix().apply { postRotate(deg.toFloat()) }
+                Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).also {
+                    if (it !== src) src.recycle()
+                }
+            }
+        }.getOrNull()
+    }
+
+    /** 等比放进目标矩形并居中（不裁切、不放大超出） */
+    private fun fitCenter(srcW: Int, srcH: Int, dst: android.graphics.Rect): android.graphics.RectF {
+        if (srcW <= 0 || srcH <= 0) return android.graphics.RectF(dst)
+        val sc = minOf(dst.width().toFloat() / srcW, dst.height().toFloat() / srcH)
+        val w = srcW * sc
+        val h = srcH * sc
+        val left = dst.left + (dst.width() - w) / 2f
+        val top = dst.top + (dst.height() - h) / 2f
+        return android.graphics.RectF(left, top, left + w, top + h)
     }
 
     override fun onCleared() {
