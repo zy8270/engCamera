@@ -1,10 +1,12 @@
 package com.engcamera.watermark
 
+import com.engcamera.data.AddressParts
 import com.engcamera.data.DynamicValues
 import com.engcamera.data.FieldType
 import com.engcamera.data.WatermarkField
 import com.engcamera.data.WatermarkState
 import com.engcamera.data.WatermarkTemplate
+import com.engcamera.data.assembleAddress
 import com.engcamera.data.localizeDynamicPlaceholder
 import com.engcamera.data.stripLatLng
 import com.engcamera.data.weatherEmojiPrefix
@@ -34,6 +36,8 @@ object TemplateHtml {
         emoji: Boolean,
         showLatLng: Boolean,
         timeFormat: String,
+        addressOrder: String = AddressParts.DEFAULT_ORDER,
+        addressHidden: String = AddressParts.DEFAULT_HIDDEN,
     ): String {
         val text = when (f.type) {
             // 时间格式（v0.6.18）：与原生渲染同规则（网页模板都是"时间整串"渲染）
@@ -41,8 +45,16 @@ object TemplateHtml {
                 f.value.ifBlank { dynamic.time },
                 timeFormat,
             )
+            // 位置（v0.6.21）：结构化地址按用户顺序/开关拼装，与原生渲染完全同源。
+            // 注意不能用 ifBlank 判空——用户把所有层级都关掉时结果就是空串，
+            // 此时必须显示为空，不能回退到含邮编的整串原文
             FieldType.LOCATION -> f.value.ifBlank {
-                dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
+                val parts = dynamic.addressParts
+                if (parts.hasStructured() || parts.hasCoords()) {
+                    assembleAddress(parts, addressOrder, addressHidden, showCoords = showLatLng)
+                } else {
+                    dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
+                }
             }
             FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
             FieldType.WEATHER -> f.value.ifBlank {
@@ -62,6 +74,7 @@ object TemplateHtml {
         val f = state.fields.firstOrNull { it.type == type && it.enabled } ?: return label
         return fieldValue(
             f, dynamic, state.style.weatherEmoji, state.style.showLatLng, state.style.timeFormat,
+            state.style.addressOrder, state.style.addressHidden,
         ).ifBlank { label }
     }
 
@@ -128,6 +141,7 @@ object TemplateHtml {
             val text = escape(
                 fieldValue(
                     f, dynamic, state.style.weatherEmoji, state.style.showLatLng, state.style.timeFormat,
+                    state.style.addressOrder, state.style.addressHidden,
                 ),
             )
             // 标签随界面语言（与原生渲染同规则）

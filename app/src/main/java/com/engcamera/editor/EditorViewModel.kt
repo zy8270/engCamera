@@ -35,9 +35,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
 
     /** 自动定位文本（相机页共享同一个 LocationSource） */
     val locationText: StateFlow<String> = container.locationSource.text
-
     /** 自动天气文本（随定位联动获取） */
     val weatherText: StateFlow<String> = container.locationSource.weather
+    /** 定位/天气是否正在刷新（v0.6.25）：编辑对话框据此显示转圈，用户才知道真的在请求 */
+    val refreshingLocation: StateFlow<Boolean> = container.locationSource.refreshingLocation
+    val refreshingWeather: StateFlow<Boolean> = container.locationSource.refreshingWeather
 
     /** 定位总开关关闭 / 定位权限缺失：位置字段编辑对话框据此换成提示文案 */
     val locationServiceDisabled: StateFlow<Boolean> = container.locationSource.serviceDisabled
@@ -116,6 +118,18 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     /** 时间显示格式（v0.6.18，用户需求 2026-11-09）：仅"时间整串渲染"的模板生效 */
     fun setTimeFormat(pattern: String) = repo.update { s ->
         s.copy(style = s.style.copy(timeFormat = pattern.ifBlank { com.engcamera.util.TimeFormat.DEFAULT }))
+    }
+
+    // ---------- v0.6.21 地址选项（Issue #3）----------
+
+    /** 地址层级顺序（逗号分隔 key）：写入后预览/成片立即按新顺序拼装 */
+    fun setAddressOrder(order: String) = repo.update { s ->
+        s.copy(style = s.style.copy(addressOrder = order))
+    }
+
+    /** 地址层级开关（逗号分隔 key = 被隐藏的层级） */
+    fun setAddressHidden(hidden: String) = repo.update { s ->
+        s.copy(style = s.style.copy(addressHidden = hidden))
     }
 
     // ---------- v0.6.16 防伪码 ----------
@@ -246,6 +260,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                     time = fmt.format(Date()),
                     location = locationText.value,
                     weather = weatherText.value,
+                    addressParts = container.locationSource.addressParts.value,
                 )
                 delay(1000)
             }
@@ -260,6 +275,12 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
                 // 定位文字变化时立即更新 dynamic（不等下一秒 tick），预览实时同步。
                 // 注意：不写字段值——字段只有用户在编辑对话框点"确定"才提交（取消不得产生"自定义"）
                 _dynamic.value = _dynamic.value.copy(location = text)
+            }
+        }
+        // 结构化地址（v0.6.21）：地址选项改动后预览要立即反映，不等下一秒 tick
+        viewModelScope.launch {
+            container.locationSource.addressParts.collect { p ->
+                _dynamic.value = _dynamic.value.copy(addressParts = p)
             }
         }
     }

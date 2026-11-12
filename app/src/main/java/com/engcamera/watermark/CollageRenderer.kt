@@ -9,6 +9,7 @@ import com.engcamera.data.CollageFieldDef
 import com.engcamera.data.CollageItem
 import com.engcamera.data.CollageSettings
 import com.engcamera.data.CollageTemplate
+import com.engcamera.data.assembledLocation
 import com.engcamera.data.stripLatLng
 import com.engcamera.i18n.I18n
 import kotlin.math.max
@@ -346,7 +347,10 @@ object CollageRenderer {
         val first = items.firstOrNull() ?: return ""
         return when (def.key) {
             "date" -> first.dynamic.time.take(10)
-            "place" -> stripLatLng(first.dynamic.location).takeIf { it.isNotBlank() } ?: ""
+            // 位置（v0.6.21）：优先按该张冻结的水印样式拼装结构化地址（与成片水印同规则）；
+            // 拼图没有自己的经纬度开关，恒不显示坐标，故 suppressCoords = true
+            "place" -> assembledLocation(first.dynamic, first.watermark.style, suppressCoords = true)
+                ?: stripLatLng(first.dynamic.location).takeIf { it.isNotBlank() } ?: ""
             else -> ""
         }
     }

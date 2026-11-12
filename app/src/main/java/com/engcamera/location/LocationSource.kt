@@ -14,7 +14,9 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.engcamera.data.AddressParts
 import com.engcamera.data.appDataStore
+import com.engcamera.data.assembleAddress
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -90,6 +92,14 @@ class LocationSource(private val context: Context) {
     val text: StateFlow<String> = _text.asStateFlow()
 
     /**
+     * 结构化地址（v0.6.21，Issue #3）：各级拆开保存，供水印按用户设定的
+     * 顺序/开关拼装。此前只留拼好的一整串，导致系统 Geocoder 塞进来的
+     * 「邮政编码: 69100-000」无法关闭。空 = 还没有任何地址。
+     */
+    private val _addressParts = MutableStateFlow(AddressParts())
+    val addressParts: StateFlow<AddressParts> = _addressParts.asStateFlow()
+
+    /**
      * 系统「定位」总开关是否关闭（v0.6.14 用户反馈"已授权定位却拿不到定位"）：
      * 权限与定位开关是两件事，关开关时融合定位的 Task 会以失败返回（此前被静默丢弃），
      * 界面据此给用户可点击跳系统设置的提示。
@@ -125,6 +135,23 @@ class LocationSource(private val context: Context) {
     private val _weather = MutableStateFlow("")
     /** 天气文本（如"晴 26℃"），随定位更新联动获取并缓存 */
     val weather: StateFlow<String> = _weather.asStateFlow()
+
+    /**
+     * 定位是否正在手动刷新（v0.6.25，用户反馈 2026-11-12）。
+     *
+     * 原来只在 text 里塞"定位中…"，但水印的地址改由结构化字段拼装后，拼装函数不会
+     * 产出"定位中…"，UI 就完全看不到加载过程——用户以为"毫秒级就拿到了"。
+     * 现在用独立状态位驱动界面转圈，不依赖文本内容。
+     */
+    private val _refreshingLocation = MutableStateFlow(false)
+    val refreshingLocation: StateFlow<Boolean> = _refreshingLocation.asStateFlow()
+
+    /**
+     * 天气是否正在刷新（v0.6.25）。天气走 Open-Meteo 网络请求，必然有数百毫秒延迟，
+     * 此前完全没有加载态，用户点「刷新天气」看不出任何反馈。
+     */
+    private val _refreshingWeather = MutableStateFlow(false)
+    val refreshingWeather: StateFlow<Boolean> = _refreshingWeather.asStateFlow()
 
     // 地址缓存：定位回调很频繁（1-2 秒一次），每次都先显示坐标再等联网反查，
     // 会让中文地址"一下消失一下恢复"。缓存 60 秒或位移超 50 米才刷新文本。
@@ -386,6 +413,7 @@ class LocationSource(private val context: Context) {
         cachedAtMs = 0L // 强制绕过缓存
         prevTextBeforeRefresh = _text.value
         refreshing = true
+        _refreshingLocation.value = true
         _text.value = "定位中…"
         // 12 秒总预算：无论融合定位成功/失败/返回 null，到点还没点就退回刷新前文本，
         // 避免永久卡在"定位中…"（v0.6.14）
@@ -424,6 +452,7 @@ class LocationSource(private val context: Context) {
     /** 结束刷新态：文本退回刷新前的值（它本身可能是"未获取定位"，此时保持） */
     private fun finishRefresh() {
         refreshing = false
+        _refreshingLocation.value = false
         refreshTimeoutJob?.cancel()
         refreshTimeoutJob = null
         _text.value = prevTextBeforeRefresh.ifBlank { "未获取定位" }
@@ -453,7 +482,18 @@ class LocationSource(private val context: Context) {
     }
 
     private fun onLocation(location: Location) {
-        if (cacheValid(location)) return // 缓存有效：文本保持稳定不闪动
+        if (cacheValid(location)) {
+            // 缓存有效：文本保持稳定不闪动。但手动刷新必须收掉转圈，
+            // 否则用户点了刷新、结果落在缓存范围内，转圈会一直转（v0.6.25）
+            if (refreshing) {
+                refreshing = false
+                _refreshingLocation.value = false
+                refreshTimeoutJob?.cancel()
+                refreshTimeoutJob = null
+                _text.value = prevTextBeforeRefresh.ifBlank { _text.value }
+            }
+            return
+        }
         cachedLat = location.latitude
         cachedLon = location.longitude
         lastLocation = location
@@ -464,6 +504,7 @@ class LocationSource(private val context: Context) {
         // 手动刷新拿到结果：结束刷新态，取消超时回退（否则 12s 后会把新地址覆盖回旧值）
         val wasRefreshing = refreshing
         refreshing = false
+        _refreshingLocation.value = false
         refreshTimeoutJob?.cancel()
         refreshTimeoutJob = null
         val coords = String.format(Locale.US, "%.6f, %.6f", location.latitude, location.longitude)
@@ -471,10 +512,19 @@ class LocationSource(private val context: Context) {
         // 例外：手动刷新时文本是"定位中…"，必须先回写坐标，否则反查失败就永久停在"定位中…"
         if (!hasAddress || wasRefreshing) _text.value = coords
         scope.launch {
-            val address = reverseGeocode(location)
-            if (!address.isNullOrBlank()) {
+            val parts = reverseGeocode(location)
+            if (parts != null) {
                 hasAddress = true
-                _text.value = "$address ($coords)"
+                // 结构化地址发布给水印渲染（各级可开关/排序，v0.6.21）
+                _addressParts.value = parts
+                // "自动定位：…"提示文本与水印默认输出同源（默认隐藏国家+邮编，
+                // 所以这里也不会再出现「邮政编码: 69100-000」）
+                val line = assembleAddress(
+                    parts,
+                    AddressParts.DEFAULT_ORDER,
+                    AddressParts.DEFAULT_HIDDEN,
+                )
+                _text.value = if (line.isNotBlank()) "$line ($coords)" else coords
             } else if (!hasAddress || wasRefreshing) {
                 _text.value = coords
             }
@@ -510,7 +560,19 @@ class LocationSource(private val context: Context) {
             longitude = cachedLon
         }
         if (loc.latitude == 0.0 && loc.longitude == 0.0) return
-        scope.launch { fetchWeather(loc) }
+        _refreshingWeather.value = true
+        scope.launch {
+            try {
+                // 总预算兜底（v0.6.25）：connect+read 各 5s，极端情况下仍可能卡住，
+                // 用 withTimeout 保证转圈一定会停
+                kotlinx.coroutines.withTimeout(12_000L) { fetchWeather(loc) }
+            } catch (_: Throwable) {
+                // 超时/失败都静默保留旧值（与原行为一致）
+            } finally {
+                // 无论成功失败都要收掉转圈
+                _refreshingWeather.value = false
+            }
+        }
     }
 
     private fun wmoText(code: Int): String = when (code) {
@@ -528,11 +590,17 @@ class LocationSource(private val context: Context) {
     }
 
     /**
-     * 反地理编码：优先系统 Geocoder；结果太粗（仅国家级，常见于 vivo 等无 GMS 机型，
-     * 系统 Geocoder 后端只给"中国"）时降级在线反查（BigDataCloud 免 key，中文）。
+     * 反地理编码：优先系统 Geocoder 的结构化字段；太粗（仅国家级，常见于 vivo 等无 GMS
+     * 机型，系统 Geocoder 后端只给"中国"）时降级在线反查（Photon 免 key）。
+     *
+     * v0.6.21（Issue #3）改为返回 [AddressParts] 而非拼好的整串：此前系统
+     * `getAddressLine(0)` 原样返回，巴西场景自带「邮政编码: 69100-000」、`Unnamed Road`
+     * 被译成「未命名的道路」，用户无法关闭。现在各级拆开，由 [assembleAddress] 按用户
+     * 设定的顺序/开关拼装——默认隐藏国家与邮编，输出与升级前一致。
+     *
      * 都失败返回 null，保持只显示经纬度。
      */
-    private suspend fun reverseGeocode(location: Location): String? = withContext(Dispatchers.IO) {
+    private suspend fun reverseGeocode(location: Location): AddressParts? = withContext(Dispatchers.IO) {
         val addr = runCatching {
             if (!Geocoder.isPresent()) return@runCatching null
             @Suppress("DEPRECATION")
@@ -541,41 +609,48 @@ class LocationSource(private val context: Context) {
                 ?.firstOrNull()
         }.getOrNull()
 
-        // 优先拼好的整行（多数机型正常）；部分机型（vivo 等）字段齐全但 getAddressLine(0)
-        // 只拼到国名——实测同机竞品读结构化字段能出完整地址，故弱结果时先试字段拼接，再走在线
-        val sysLine = addr?.getAddressLine(0)?.trim()
-        val weak = sysLine.isNullOrBlank() || sysLine.length <= 4
-        if (!weak) return@withContext sysLine
-
-        val composed = addr?.let { a ->
-            // 对齐谷歌整行组词：省 市 区 村(featureName) 路(thoroughfare) 巷号(subThoroughfare) 小区(premise)
-            // 例：广东省 广州市 天河区 新塘 西约新村大街 上十巷15号 小新塘回迁房D1区（用户确认 2026-10-11）
+        val parts = addr?.let { a ->
             val place = a.featureName?.trim()
                 ?.takeIf { f -> f.isNotBlank() && f != "null" && f != a.thoroughfare && f != a.subLocality }
-            // 用户确认顺序：省 市 区 路(thoroughfare) 地点/小区(featureName, premises)；门牌号(subThoroughfare)不要
-            buildList {
-                add(a.adminArea)
-                add(a.locality)
-                add(a.subLocality ?: a.subAdminArea)
-                add(a.thoroughfare)
-                add(place)
-                add(a.premises)
-            }.mapNotNull { x -> x?.trim()?.takeIf { it.isNotBlank() && it != "null" } }
-                .joinToString("")
-        }?.takeIf { it.length > 4 }
-        if (composed != null) {
-            return@withContext composed
+            AddressParts(
+                country = a.countryName.orEmpty().clean(),
+                province = a.adminArea.orEmpty().clean(),
+                city = a.locality.orEmpty().clean(),
+                district = (a.subLocality ?: a.subAdminArea).orEmpty().clean(),
+                street = a.thoroughfare.orEmpty().clean(),
+                // 地点/小区：featureName 优先，退回 premises（与历史拼接规则一致）
+                place = (place ?: a.premises).orEmpty().clean(),
+                postcode = a.postalCode.orEmpty().clean(),
+                lat = location.latitude,
+                lng = location.longitude,
+                rawLine = a.getAddressLine(0).orEmpty().trim(),
+            )
         }
 
+        // 判定"够不够详细"沿用历史标准（v0.6.14 起）：只有国家一项 = 太粗
+        // （vivo 等无 GMS 机型的系统 Geocoder 后端只给"中国"），此时必须降级在线反查。
+        // 不能用 hasStructured() 判——它只要国家有值就为真，会让那类机型永远停在"中国"。
+        val detailed = parts != null && listOf(
+            parts.province, parts.city, parts.district, parts.street, parts.place,
+        ).any { it.isNotBlank() }
+        if (detailed) return@withContext parts
+
         val online = onlineReverseGeocode(location)
-        online
+        if (online != null) return@withContext online
+
+        // 最后兜底：整行原文（可能含邮编等杂质，但这是唯一能显示的地址）
+        parts?.takeIf { it.rawLine.length > 4 }
     }
+
+    /** 去空白与 Geocoder 偶发的字面 "null" */
+    private fun String.clean(): String = trim().takeIf { it.isNotBlank() && it != "null" }.orEmpty()
+
 
     /**
      * 在线反查：Photon(Komoot/OSM)——真坐标、简体中文、免 key、可到街道级，不含国家级前缀。
      * （弃用：Nominatim 国内直连不通；BigDataCloud 免费档实为 IP 定位会答错城市——实测广州坐标回湖北）
      */
-    private fun onlineReverseGeocode(location: Location): String? = runCatching {
+    private fun onlineReverseGeocode(location: Location): AddressParts? = runCatching {
         val url = java.net.URL(
             "https://photon.komoot.io/reverse?lat=${location.latitude}&lon=${location.longitude}&lang=default",
         )
@@ -588,12 +663,20 @@ class LocationSource(private val context: Context) {
         val props = (feats?.firstOrNull() as? kotlinx.serialization.json.JsonObject)
             ?.get("properties") as? kotlinx.serialization.json.JsonObject ?: return@runCatching null
         fun f(name: String): String? =
-            (props[name] as? kotlinx.serialization.json.JsonPrimitive)?.content
-        // 例：state=广东省 city=广州市 district=冼村街道（缺 district 时用 locality）
-        listOfNotNull(
-            f("state"),
-            f("city"),
-            f("district") ?: f("locality"),
-        ).filter { it.isNotBlank() }.joinToString("").ifBlank { null }
+            (props[name] as? kotlinx.serialization.json.JsonPrimitive)?.content?.clean()?.ifBlank { null }
+        // v0.6.21：改为结构化返回（原先只拼 state+city+district 一整串）。
+        // Photon 的 key 映射：state=省/州、city=市、district/county=区、street=路、
+        // name=地点、postcode=邮编、country=国家
+        AddressParts(
+            country = f("country").orEmpty(),
+            province = f("state").orEmpty(),
+            city = f("city").orEmpty(),
+            district = (f("district") ?: f("county") ?: f("locality")).orEmpty(),
+            street = f("street").orEmpty(),
+            place = f("name").orEmpty(),
+            postcode = f("postcode").orEmpty(),
+            lat = location.latitude,
+            lng = location.longitude,
+        ).takeIf { it.hasStructured() }
     }.getOrNull()
 }

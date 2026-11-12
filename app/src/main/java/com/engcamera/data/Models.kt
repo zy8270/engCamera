@@ -83,6 +83,11 @@ data class WatermarkStyle(
     // ---- v0.6.17 水印整体透明度（所有模板的模板选项顶部拉杆，10~100%）----
     /** 水印整体不透明度百分比（10~100，默认 100）；防伪码条不跟随（保持恒清晰） */
     val overallOpacity: Int = 100,
+    // ---- v0.6.21 地址选项（Issue #3 用户需求 2026-11-12）----
+    /** 地址层级拼装顺序（逗号分隔 key，见 AddressParts.ALL_KEYS） */
+    val addressOrder: String = AddressParts.DEFAULT_ORDER,
+    /** 隐藏的地址层级（逗号分隔 key）。默认隐藏国家+邮编，与升级前的输出一致 */
+    val addressHidden: String = AddressParts.DEFAULT_HIDDEN,
     // ---- v0.6.18 时间格式（水印编辑器时间字段的格式选择器，用户需求 2026-11-09）----
     /**
      * 时间显示格式（SimpleDateFormat 模式串）。仅对"时间整串渲染"的模板生效；
@@ -173,6 +178,11 @@ data class DynamicValues(
     val location: String = "未获取定位",
     /** 天气文本（如"晴 26℃"），跟随定位自动获取 */
     val weather: String = "",
+    /**
+     * 结构化地址（v0.6.21）：各级可开关/排序的原始数据。
+     * 空 = 没有结构化地址，此时位置字段回退 [location] 整串。
+     */
+    val addressParts: AddressParts = AddressParts(),
 )
 
 /** 默认字段（对应计划书 6.1 + 用户补充：计数；顺序用户拍板 2026-10-13：标题/时间/位置/天气/计数/备注） */

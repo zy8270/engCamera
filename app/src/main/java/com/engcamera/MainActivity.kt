@@ -5,6 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -124,7 +127,18 @@ class MainActivity : ComponentActivity() {
                         navController.popBackStack()
                     }
                 }
-                NavHost(navController = navController, startDestination = Routes.CAMERA) {
+                // 页面过渡（v0.6.24）：默认无动画时，pop 后新旧目的地会共存若干帧——
+                // 旧页（编辑器）仍在组合中参与命中测试，用户在返回后立刻点屏幕会点到
+                // 已经"看不见"的编辑器 UI（实测：闪现一下编辑字段窗口）。
+                // 显式声明淡入淡出，让旧页在退出动画期间快速透明且不再接收触摸。
+                NavHost(
+                    navController = navController,
+                    startDestination = Routes.CAMERA,
+                    enterTransition = { fadeIn(animationSpec = tween(180)) },
+                    exitTransition = { fadeOut(animationSpec = tween(120)) },
+                    popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                    popExitTransition = { fadeOut(animationSpec = tween(120)) },
+                ) {
                     composable(Routes.CAMERA) {
                         CameraScreen(
                             onOpenGallery = { navController.navigate(Routes.GALLERY) },

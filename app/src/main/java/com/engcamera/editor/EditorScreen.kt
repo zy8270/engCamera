@@ -15,6 +15,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,7 +29,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,6 +53,9 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
@@ -53,6 +63,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -77,12 +88,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -104,7 +117,14 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.engcamera.data.AddressParts
+import com.engcamera.data.DynamicValues
 import com.engcamera.data.FieldType
+import com.engcamera.data.WatermarkStyle
+import com.engcamera.data.addressKeyLabel
+import com.engcamera.data.assembleAddress
+import com.engcamera.data.assembledLocation
+import com.engcamera.data.parseAddressKeys
 import com.engcamera.data.WatermarkField
 import com.engcamera.ui.theme.LocalAppDarkTheme
 import com.engcamera.watermark.WatermarkRenderer
@@ -117,6 +137,15 @@ import com.engcamera.i18n.I18n
 fun EditorScreen(onBack: () -> Unit) {
     val vm: EditorViewModel = viewModel()
     val context = LocalContext.current
+    // 退出编辑器时先关掉所有本地对话框再导航（v0.6.24 修复）。
+    // AlertDialog 是**独立窗口**，不归 NavHost 的层级管：pop 后 Camera 页已经组合完成、
+    // 但编辑器这一帧还没 dispose 时，弹窗窗口仍可被触摸命中——用户实测"返回主界面后
+    // 0.1 秒内点对焦，会闪现一下编辑字段窗口"。所以退出路径必须先清本地状态。
+    var closeAllDialogs by remember { mutableStateOf(false) }
+    val exitEditor: () -> Unit = {
+        closeAllDialogs = true
+        onBack()
+    }
     // 系统栏图标对比度按当前主题（相机页强制浅色图标，回到本页恢复）
     val dark = LocalAppDarkTheme.current
     DisposableEffect(dark) {
@@ -131,6 +160,8 @@ fun EditorScreen(onBack: () -> Unit) {
     val rotationDeg by vm.rotationDeg.collectAsState()
     val autoLocation by vm.locationText.collectAsState()
     val weatherText by vm.weatherText.collectAsState()
+    val refreshingLocation by vm.refreshingLocation.collectAsState()
+    val refreshingWeather by vm.refreshingWeather.collectAsState()
     val fieldHistory by vm.fieldHistory.collectAsState()
     val groups by vm.projects.collectAsState()
     // 定位异常（与相机页同一份状态：用户在相机页点过提示条的 X，这里也不再提示）
@@ -193,6 +224,19 @@ fun EditorScreen(onBack: () -> Unit) {
     var showTemplates by remember { mutableStateOf(false) }
     var showResetConfirm by remember { mutableStateOf(false) }
     var showAntiFakeDialog by remember { mutableStateOf(false) }
+
+    // 退出时把所有弹窗状态一次性清掉（见 exitEditor 注释）：
+    // 单靠导航 pop 无法及时销毁 Dialog 的独立窗口，残留窗口会被下一帧的触摸命中
+    LaunchedEffect(closeAllDialogs) {
+        if (closeAllDialogs) {
+            editingField = null
+            showAddDialog = false
+            showProjectGroups = false
+            showTemplates = false
+            showResetConfirm = false
+            showAntiFakeDialog = false
+        }
+    }
 
     // ---------- 眼睛开关：预览背景换相机实时画面（所见即所得参考调整，默认闭眼） ----------
     var eyeOpen by remember { mutableStateOf(false) }
@@ -349,7 +393,7 @@ fun EditorScreen(onBack: () -> Unit) {
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = exitEditor) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = I18n.t("返回"))
                     }
                 },
@@ -357,7 +401,7 @@ fun EditorScreen(onBack: () -> Unit) {
                     IconButton(onClick = { showResetConfirm = true }) {
                         Icon(Icons.Default.RestartAlt, contentDescription = I18n.t("重置当前模板数据"))
                     }
-                    TextButton(onClick = onBack) { Text(I18n.t("保存")) }
+                    TextButton(onClick = exitEditor) { Text(I18n.t("保存")) }
                 },
             )
         },
@@ -628,11 +672,19 @@ fun EditorScreen(onBack: () -> Unit) {
             history = (fieldHistory[field.label] ?: emptyList()).reversed(),
             autoLocation = autoLocation,
             autoWeather = weatherText,
+            refreshingLocation = refreshingLocation,
+            refreshingWeather = refreshingWeather,
             currentTime = dynamic.time,
             weatherEmojiOn = state.style.weatherEmoji,
             onWeatherEmojiChange = { vm.setTemplateSwitch("weatherEmoji", it) },
             showLatLngOn = state.style.showLatLng,
             onLatLngChange = { vm.setTemplateSwitch("showLatLng", it) },
+            // 地址选项（v0.6.21，Issue #3）：层级顺序与隐藏项，同步到所有模板的水印
+            addressOrder = state.style.addressOrder,
+            addressHidden = state.style.addressHidden,
+            addressParts = dynamic.addressParts,
+            onAddressOrderChange = { vm.setAddressOrder(it) },
+            onAddressHiddenChange = { vm.setAddressHidden(it) },
             onRefreshLocation = { vm.refreshLocation() },
             onRefreshWeather = { vm.refreshWeather() },
             locationHint = locationHintText,
@@ -657,7 +709,7 @@ fun EditorScreen(onBack: () -> Unit) {
             onConfirmAndSave = { label, value, isTitle ->
                 vm.updateField(field.id, label, value, isTitle)
                 editingField = null
-                onBack()
+                exitEditor()
             },
             onResetField = { label, value, isTitle ->
                 // 重置不算"主动编辑"：不自动打开字段开关（用户需求 2026-11-04）
@@ -1060,11 +1112,20 @@ private fun EditFieldDialog(
     history: List<String>,
     autoLocation: String,
     autoWeather: String,
+    // v0.6.25 刷新加载态（用户反馈 2026-11-12：点刷新后看不到任何反馈）
+    refreshingLocation: Boolean,
+    refreshingWeather: Boolean,
     currentTime: String,
     weatherEmojiOn: Boolean,
     onWeatherEmojiChange: (Boolean) -> Unit,
     showLatLngOn: Boolean,
     onLatLngChange: (Boolean) -> Unit,
+    // v0.6.21 地址选项（Issue #3）：层级顺序与隐藏项
+    addressOrder: String,
+    addressHidden: String,
+    addressParts: AddressParts,
+    onAddressOrderChange: (String) -> Unit,
+    onAddressHiddenChange: (String) -> Unit,
     onRefreshLocation: () -> Unit,
     onRefreshWeather: () -> Unit,
     locationHint: String?,
@@ -1093,8 +1154,14 @@ private fun EditFieldDialog(
     val initialValue = remember(field.id) {
         when {
             field.type == FieldType.DATETIME && field.value.isBlank() -> currentTime
+            // 位置（用户需求 2026-11-12）：预填**当前正在应用的地址**（按地址选项的开关/顺序
+            // 拼装过的结果），而不是自动定位的完整原文——开关的优先级高于完整地址信息。
+            // 没拿到结构化数据（老数据/离线）才退回自动定位原文。
             field.type == FieldType.LOCATION && field.value.isBlank() ->
-                autoLocation.takeIf { !isLocationPlaceholder(it) } ?: field.value
+                assembledLocation(
+                    DynamicValues(location = autoLocation, addressParts = addressParts),
+                    WatermarkStyle(addressOrder = addressOrder, addressHidden = addressHidden, showLatLng = showLatLngOn),
+                ) ?: autoLocation.takeIf { !isLocationPlaceholder(it) } ?: field.value
             field.type == FieldType.WEATHER && field.value.isBlank() ->
                 autoWeather.takeIf { it.isNotBlank() } ?: field.value
             else -> field.value
@@ -1118,6 +1185,24 @@ private fun EditFieldDialog(
             androidx.compose.ui.text.TextRange(t.length),
         )
     }
+    /**
+     * 用户是否真正编辑过 input 内容（用户需求 2026-11-12）。
+     *
+     * 只有它才应该让字段进入"自定义"（写入非空 value = 定格、不再跟随自动刷新）。
+     * 地址选项的开关/排序会回填 input（[setValueText]），那是**预览**不是编辑——
+     * 若把回填当成编辑，用户只点了个开关再按确定，位置就被锁定不再自动定位了。
+     */
+    var inputEdited by remember(field.id) { mutableStateOf(false) }
+    /** 程序回填（地址选项预览）专用：改文本但不置 inputEdited */
+    fun setPreviewText(t: String) {
+        setValueText(t)
+    }
+    /**
+     * 提交时决定 value：
+     * - 编辑过 → 写入输入框内容（进入"自定义"，定格不再跟随自动刷新）
+     * - 没编辑过 → 保持字段原值（原本为空就仍为空 = 继续跟随自动定位）
+     */
+    fun effectiveValue(): String = if (inputEdited) value else field.value
     var isTitle by remember(field.id) { mutableStateOf(field.isTitle) }
     // 时间字段手动值二次确认：非空时间会定格后续所有拍照，防误触（预填值+随手点确定）
     var confirmTimeFreeze by remember(field.id) { mutableStateOf(false) }
@@ -1131,7 +1216,17 @@ private fun EditFieldDialog(
     var showTimeFormatPicker by remember(field.id) { mutableStateOf(false) }
     LaunchedEffect(followLocation, autoLocation) {
         if (followLocation) {
-            autoLocation.takeIf { !isLocationPlaceholder(it) }?.let { setValueText(it) }
+            // 刷新后回填也用"开关处理后的地址"（与预填同源），不能回填完整原文——
+            // 否则用户关掉的层级会在刷新后又冒出来
+            val shown = assembledLocation(
+                DynamicValues(location = autoLocation, addressParts = addressParts),
+                WatermarkStyle(
+                    addressOrder = addressOrder,
+                    addressHidden = addressHidden,
+                    showLatLng = showLatLngOn,
+                ),
+            ) ?: autoLocation.takeIf { !isLocationPlaceholder(it) }
+            shown?.let { setValueText(it) }
         }
     }
     LaunchedEffect(followWeather, autoWeather) {
@@ -1158,7 +1253,58 @@ private fun EditFieldDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(I18n.t("编辑字段")) },
+        // 标题右侧放「刷新定位 / 刷新天气」（用户需求 2026-11-12）：原来按钮在内容区底部，
+        // 点完还要往下滚才看得到结果；移到标题栏与标题同高，一眼可见且不占正文空间
+        title = {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(I18n.t("编辑字段"), modifier = Modifier.weight(1f))
+                if (isLocation || isWeather) {
+                    val busy = if (isLocation) refreshingLocation else refreshingWeather
+                    TextButton(
+                        onClick = {
+                            if (isLocation) {
+                                followLocation = true
+                                onRefreshLocation()
+                            } else {
+                                followWeather = true
+                                onRefreshWeather()
+                            }
+                        },
+                        // 刷新中禁用，避免连点堆积请求
+                        enabled = !busy,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        if (busy) {
+                            // 刷新中显示转圈（v0.6.25）：定位要等系统给点、天气要等网络，
+                            // 都不可能是毫秒级，必须给可见反馈
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            when {
+                                isLocation && busy -> I18n.t("定位中…")
+                                !isLocation && busy -> I18n.t("获取中…")
+                                isLocation -> I18n.t("刷新定位")
+                                else -> I18n.t("刷新天气")
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (field.isTitle && logoSupported) {
@@ -1183,6 +1329,8 @@ private fun EditFieldDialog(
                         value = if (isCount) v.text.filter { it.isDigit() }.take(6) else v.text
                         followLocation = false
                         followWeather = false
+                        // 真正动过 input 才算自定义（见 inputEdited 注释）
+                        inputEdited = true
                     },
                     modifier = Modifier.focusRequester(valueFocus),
                     label = {
@@ -1228,38 +1376,32 @@ private fun EditFieldDialog(
                             onCheckedChange = onWeatherEmojiChange,
                         )
                     }
-                    Text(
-                        I18n.t("自动天气：{w}").replace("{w}", if (autoWeather.isBlank()) I18n.t("未获取") else autoWeather),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = {
-                        followWeather = true
-                        onRefreshWeather()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(I18n.t("刷新天气"))
+                    // 点击「自动天气：…」= 刷新天气（与位置文字同款交互，用户需求 2026-11-12）
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (refreshingWeather) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(
+                            I18n.t("自动天气：{w}（点击刷新）")
+                                .replace("{w}", if (autoWeather.isBlank()) I18n.t("未获取") else autoWeather),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(enabled = !refreshingWeather) {
+                                    followWeather = true
+                                    onRefreshWeather()
+                                }
+                                .padding(vertical = 4.dp),
+                        )
                     }
                 }
                 if (isLocation) {
-                    // 显示经纬度开关：挂在位置字段编辑内（默认关，用户拍板 2026-10-16），即时生效
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            I18n.t("显示经纬度（经纬度字段）"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Switch(
-                            checked = showLatLngOn,
-                            onCheckedChange = onLatLngChange,
-                        )
-                    }
                     if (locationHint != null) {
                         // 定位拿不到时用提示顶掉"自动定位：…"（用户反馈 2026-11-01），
                         // 能定位就不显示，恢复原来的自动定位文本
@@ -1269,20 +1411,56 @@ private fun EditFieldDialog(
                             onAction = onLocationHintAction,
                         )
                     } else {
-                        Text(
-                            I18n.t("自动定位：{loc}").replace("{loc}", autoLocation),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        // 点击「自动定位：…」= 刷新定位（用户需求 2026-11-12 澄清：是触发刷新，
+                        // 不是把内容重填进 input）。
+                        // 这里恒显示**完整地址**（全部层级打开、含坐标），作为"这里有什么可用"
+                        // 的预览；受开关控制的只有 input 内的文字（用户需求 2026-11-12）
+                        val full = if (addressParts.hasStructured() || addressParts.hasCoords()) {
+                            assembleAddress(
+                                parts = addressParts,
+                                order = AddressParts.DEFAULT_ORDER,
+                                hidden = "",
+                                showCoords = true,
+                            )
+                        } else {
+                            autoLocation
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (refreshingLocation) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                I18n.t("自动定位：{loc}（点击刷新）").replace("{loc}", full),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(enabled = !refreshingLocation) {
+                                        followLocation = true
+                                        onRefreshLocation()
+                                    }
+                                    .padding(vertical = 4.dp),
+                            )
+                        }
                     }
-                    TextButton(onClick = {
-                        followLocation = true
-                        onRefreshLocation()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(I18n.t("刷新定位"))
-                    }
+                    // 地址选项（v0.6.21，Issue #3）：原先这里只有一个「显示经纬度」开关，
+                    // 现在经纬度并入可排序列表（开关状态仍写 style.showLatLng，单一真相源），
+                    // 其余层级（国家/省/市/区/路/地点/邮编）都可自由开关与排序
+                    AddressOptionsSection(
+                        order = addressOrder,
+                        hidden = addressHidden,
+                        showCoords = showLatLngOn,
+                        addressParts = addressParts,
+                        onOrderChange = onAddressOrderChange,
+                        onHiddenChange = onAddressHiddenChange,
+                        onShowCoordsChange = onLatLngChange,
+                        onAssembledChange = { t -> setPreviewText(t) },
+                    )
                 }
                 // 历史记录快速填充（按标签，最近在前）：最多显示 5 行可上下滚动，右侧滚动条
                 if (!isCount && !isLocation && !isDateTime && !isWeather && history.isNotEmpty()) {
@@ -1363,20 +1541,20 @@ private fun EditFieldDialog(
                 }
                 DialogActionText(I18n.t("取消"), onDismiss)
                 DialogActionText(I18n.t("确定")) {
-                    if (isDateTime && value.isNotBlank()) {
+                    if (isDateTime && value.isNotBlank() && inputEdited) {
                         saveAndBackAfterFreeze = false
                         confirmTimeFreeze = true
                     } else {
-                        onConfirm(label, value, isTitle)
+                        onConfirm(label, effectiveValue(), isTitle)
                     }
                 }
                 // 确定并保存：保存字段后直接回相机拍照页，便于快速拍下一张
                 DialogActionText(I18n.t("确定并保存")) {
-                    if (isDateTime && value.isNotBlank()) {
+                    if (isDateTime && value.isNotBlank() && inputEdited) {
                         saveAndBackAfterFreeze = true
                         confirmTimeFreeze = true
                     } else {
-                        onConfirmAndSave(label, value, isTitle)
+                        onConfirmAndSave(label, effectiveValue(), isTitle)
                     }
                 }
             }
@@ -1408,9 +1586,9 @@ private fun EditFieldDialog(
                     confirmTimeFreeze = false
                     if (saveAndBackAfterFreeze) {
                         saveAndBackAfterFreeze = false
-                        onConfirmAndSave(label, value, isTitle)
+                        onConfirmAndSave(label, effectiveValue(), isTitle)
                     } else {
-                        onConfirm(label, value, isTitle)
+                        onConfirm(label, effectiveValue(), isTitle)
                     }
                 }) { Text(I18n.t("确定定格")) }
             },
@@ -1434,6 +1612,204 @@ private fun DialogActionText(text: String, onClick: () -> Unit) {
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
     )
+}
+
+/**
+ * 「地址选项」可展开区块（v0.6.21，Issue #3 用户需求 2026-11-12）。
+ *
+ * 背景：此前位置文本是系统 Geocoder 整行原文，巴西场景自带「邮政编码: 69100-000」，
+ * 用户既关不掉邮编也控制不了任何层级。这里把各级拆开供自由开关与排序。
+ *
+ * 交互：入口行右侧 `>`，展开时转 90° 变 `∨`（默认收起）。展开后每行 = 层级名 +
+ * ↑/↓（移动一位）+ 开关。「经纬度」的开关写回 style.showLatLng（与历史开关同一真相源）。
+ *
+ * 展开时自动收起输入法（用户需求 2026-11-12）：选项列表和键盘抢同一块屏幕，
+ * 键盘占着会让 8 行列表只剩两三行可见。
+ *
+ * 每次开关/排序都会把最新拼装结果回填到位置输入框（[onAssembledChange]），
+ * 让用户当场看到改动效果；但回填**不等于**进入自定义——见对话框里 `inputEdited` 判定。
+ */
+@Composable
+private fun AddressOptionsSection(
+    order: String,
+    hidden: String,
+    showCoords: Boolean,
+    addressParts: AddressParts,
+    onOrderChange: (String) -> Unit,
+    onHiddenChange: (String) -> Unit,
+    onShowCoordsChange: (Boolean) -> Unit,
+    onAssembledChange: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    // 直接算，不用 remember/derivedStateOf：解析 8 项逗号串的开销可忽略，而
+    // remember(无 key) + derivedStateOf 会永久捕获首次组合的 order（参数变化读不到旧值），
+    // 那才是"开关改了列表不动"的真凶
+    val orderedKeys = parseAddressKeys(order)
+        .let { keys -> keys + AddressParts.ALL_KEYS.filterNot { it in keys } }
+    val hiddenSet = parseAddressKeys(hidden).toSet()
+
+    /**
+     * 把当前选项应用到输入框（用户需求 2026-11-12：改开关要实时看到结果）。
+     * 直接用结构化数据拼装，不靠文本猜——坐标段在这里剥掉，因为输入框里的位置
+     * 是"地址"，坐标由「经纬度」开关在渲染时以括号形式附加。
+     */
+    fun preview(orderedNow: List<String>, hiddenNow: Set<String>, coordsOn: Boolean) {
+        if (!addressParts.hasStructured() && !addressParts.hasCoords()) return
+        onAssembledChange(
+            assembleAddress(
+                parts = addressParts,
+                order = orderedNow.joinToString(","),
+                hidden = hiddenNow.joinToString(","),
+                showCoords = coordsOn,
+            ),
+        )
+    }
+
+    fun move(key: String, delta: Int) {
+        val list = orderedKeys.toMutableList()
+        val from = list.indexOf(key)
+        val to = from + delta
+        if (from < 0 || to !in list.indices) return
+        list.removeAt(from)
+        list.add(to, key)
+        onOrderChange(list.joinToString(","))
+        preview(list, hiddenSet, showCoords)
+    }
+
+    fun toggle(key: String, on: Boolean) {
+        val next = hiddenSet.toMutableSet()
+        if (on) next.remove(key) else next.add(key)
+        onHiddenChange(next.joinToString(","))
+        preview(orderedKeys, next, if (key == AddressParts.KEY_COORDS) on else showCoords)
+    }
+
+    // 箭头旋转用轻量动画（只动 graphicsLayer，不触发重新测量）
+    val arrowAngle by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        label = "addressArrow",
+    )
+
+    // 展开后收起输入法（用户需求 2026-11-12）：必须放到动画之后——若在点击的同一帧
+    // 调 hide()，窗口 inset 动画会和展开动画抢同一批帧，用户看到的就是"展开很卡"。
+    // 先让展开动画播完（150ms）再收键盘，两段动画串行，视觉上反而更顺。
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            kotlinx.coroutines.delay(160)
+            focusManager.clearFocus()
+            keyboard?.hide()
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        // 入口行（照 TimeFormatRow 的样式）
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) { expanded = !expanded }
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                I18n.t("地址选项"),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                Icons.Default.KeyboardArrowRight,
+                contentDescription = I18n.t("展开地址选项"),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    // 展开时 `>` 转 90° 变 `∨`（用户要求的视觉反馈）。
+                    // 用 graphicsLayer 旋转，只动绘制不动布局
+                    .graphicsLayer { rotationZ = arrowAngle },
+            )
+        }
+        // 展开动画：默认的 expandVertically 每帧都要重新测量整棵子树（8 行 × 箭头/开关），
+        // 叠加 keyboard.hide() 引起的窗口 inset 变化会明显掉帧。改成只淡入淡出 +
+        // 一次性的高度动画，且淡入用轻量 spec（用户反馈"展开动画很卡" 2026-11-12）
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = tween(150)),
+            exit = fadeOut(animationSpec = tween(100)),
+        ) {
+            // 8 行会撑爆 AlertDialog：限高 + 可滚动
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 260.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 8.dp, end = 4.dp),
+            ) {
+                Text(
+                    I18n.t("点击箭头调整顺序，开关控制是否显示"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+                orderedKeys.forEachIndexed { index, key ->
+                    val isCoords = key == AddressParts.KEY_COORDS
+                    val on = if (isCoords) showCoords else key !in hiddenSet
+                    // key(key)：行按层级标识复用，而不是按下标——否则上移/下移后
+                    // 所有行都换内容却共用同一批槽位，动画期间会整片重组
+                    key(key) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            addressKeyLabel(key),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // 上下箭头：点一次移动一位（对话框里比拖动可靠，不会与滚动抢手势）
+                        IconButton(
+                            onClick = { move(key, -1) },
+                            enabled = index > 0,
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowUp,
+                                contentDescription = I18n.t("上移"),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        IconButton(
+                            onClick = { move(key, 1) },
+                            enabled = index < orderedKeys.lastIndex,
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = I18n.t("下移"),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Switch(
+                            checked = on,
+                            onCheckedChange = { v ->
+                                // 经纬度也要走 toggle 的预览回填，否则开关拨了但 input 不变
+                                // （用户反馈 2026-11-12：经纬度开关不实时）
+                                if (isCoords) {
+                                    onShowCoordsChange(v)
+                                    preview(orderedKeys, hiddenSet, v)
+                                } else {
+                                    toggle(key, v)
+                                }
+                            },
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** 「时间格式」入口行（v0.6.18，用户需求 2026-11-09）：时间输入框正下方，点开格式选择器 */

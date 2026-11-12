@@ -680,6 +680,10 @@ class WatermarkRepository(private val context: Context) {
                         tpl.style.maxWidthRatio
                     },
                     overallOpacity = cur.style.overallOpacity,
+                    // 地址选项（v0.6.21）：跨模板通用设置——用户要求"此开关同步到所有水印"，
+                    // 切模板必须保留，否则每换一次模板就得重设一遍
+                    addressOrder = cur.style.addressOrder,
+                    addressHidden = cur.style.addressHidden,
                     // 时间格式（v0.6.18）：目标模板有专属默认（马克·工程=带星期、
                     // 工程白=点分）就用它，否则沿用用户当前选择（普通模板之间切换不丢设置）
                     timeFormat = com.engcamera.util.TimeFormat.defaultFor(tpl.style.layout)

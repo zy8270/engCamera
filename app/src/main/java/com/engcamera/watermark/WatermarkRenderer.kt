@@ -22,6 +22,7 @@ import com.engcamera.data.WatermarkField
 import com.engcamera.data.WatermarkState
 import com.engcamera.data.WatermarkStyle
 import com.engcamera.data.WatermarkTemplates
+import com.engcamera.data.assembledLocation
 import com.engcamera.data.stripLatLng
 import com.engcamera.data.localizeDynamicPlaceholder
 import com.engcamera.data.weatherEmojiPrefix
@@ -1387,7 +1388,11 @@ object WatermarkRenderer {
                     val labelTxt = if (f.label.isBlank()) "" else com.engcamera.i18n.I18n.t(f.label)
                     // 工程白：经纬度独立成行，地址文本恒不带括号段（开关只控制独立行显隐）
                     val disp = if (lightBody && f.type == FieldType.LOCATION) {
-                        stripLatLng(displayText(f, dynamic, style))
+                        // 结构化路径下坐标由下面的独立「经纬度」行承担，地址串里抑制掉
+                        f.value.ifBlank {
+                            assembledLocation(dynamic, style, suppressCoords = true)
+                                ?: dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
+                        }.let { stripLatLng(it) }
                     } else {
                         displayText(f, dynamic, style)
                     }
@@ -1399,12 +1404,22 @@ object WatermarkRenderer {
                     // 工程白：位置字段后追加经纬度行（「显示经纬度」开关开才加行，
                     // 从位置文本提取坐标，无坐标不加行）
                     if (lightBody && f.type == FieldType.LOCATION && style.showLatLng) {
-                        val locText = f.value.ifBlank { dynamic.location }
-                        coordsText(locText)?.let { c ->
+                        // 结构化地址优先（v0.6.21）：坐标就在 parts 里，不必从文本正则反解
+                        val c = dynamic.addressParts
+                            .takeIf { it.hasCoords() && f.value.isBlank() }
+                            ?.let {
+                                String.format(
+                                    java.util.Locale.US, "%.6f°%s,%.6f°%s",
+                                    kotlin.math.abs(it.lat), if (it.lat >= 0) "N" else "S",
+                                    kotlin.math.abs(it.lng), if (it.lng >= 0) "E" else "W",
+                                )
+                            }
+                            ?: coordsText(f.value.ifBlank { dynamic.location })
+                        c?.let { cc ->
                             entries += MEntry(
                                 LRow(
                                     com.engcamera.i18n.I18n.t("经纬度"),
-                                    newLayout(c, bodyPaint, valueW),
+                                    newLayout(cc, bodyPaint, valueW),
                                     null,
                                 ),
                             )
@@ -2725,8 +2740,11 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
                 f.value.ifBlank { dynamic.time },
                 style.timeFormat,
             )
+            // 位置（v0.6.21）：手动值优先；否则结构化地址按用户顺序/开关拼装
+            // （默认隐藏国家+邮编，输出与升级前一致）；都没有才回退整串
             FieldType.LOCATION -> f.value.ifBlank {
-                dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
+                assembledLocation(dynamic, style)
+                    ?: dynamic.location.ifBlank { com.engcamera.i18n.I18n.t("未获取定位") }
             }
             FieldType.COUNT -> f.value.filter { it.isDigit() }.ifBlank { "1" }
             FieldType.WEATHER -> f.value.ifBlank {

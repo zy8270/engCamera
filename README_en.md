@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.19/engCamera-v0.6.19-281.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.25/engCamera-v0.6.25-287.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.19 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.25 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -74,8 +74,9 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Position & opacity**: visually pick any of 9 slots (corners / edges / center), never reset by rotation, or fine-tune by dragging; directions are interpreted in the **physical gravity** frame — in landscape, "bottom" is the table side; the same fold holds an **overall opacity** slider (10%~100%, preview matches the burned output; the anti-counterfeit code is unaffected)
 - **Editor live camera preview (eye toggle)**: tap the "eye" in the editor to swap the background for the live rear camera — liquid glass refracts it live; closed eye = viewfinder freeze-frame background (settings toggle; off = flat dual-mountain artwork, dark/light variants)
 - **Project groups**: one-tap switch between complete watermark configs (create = copy current, rename, bulk delete, reset), current project shown in the editor title; a persistent quick entry sits left of the bottom mode switch so multi-site users never open the editor just to swap; a new group's name can auto-fill its watermark title (setting)
-- **Configurable fields**: project name (title), time, location, weather, note, counter, custom fields; add/remove/reorder/enable per field; time/location/weather support manual freeze (marked "custom") with one-tap reset; location text can append lat/lng (off by default); field editing offers "OK & Save" — saves and returns straight to the camera to shoot the next shot
-- **Auto location + Chinese addresses**: multi-device fallback chain (system Geocoder → structured province/city/district/road/place join → online reverse-geocode), degrades to coordinates offline; address/weather cached across restarts
+- **Configurable fields**: project name (title), time, location, weather, note, counter, custom fields; add/remove/reorder/enable per field; time/location/weather support manual freeze (marked "custom") with one-tap reset; field editing offers "OK & Save" — saves and returns straight to the camera to shoot the next shot
+- **Address options**: expandable inside the location field — split into 8 levels (country / province-state / city / district-street / road / place-community / coordinates / postal code), each with its own **toggle** and **reorder arrows**, applied live to the preview; country and postal code hidden by default (matching previous output), settings carried across templates
+- **Auto location + Chinese addresses**: multi-device fallback chain (system Geocoder structured fields → online reverse-geocode), degrades to coordinates offline; address/weather cached across restarts; refresh shows a loading spinner
 - **Auto weather + emoji**: fetched with location (e.g. "☀️ 晴 26℃"), flat emoji per condition (sunny/cloudy/overcast/rain/snow/storm/fog…), toggleable, manual entry & refresh supported
 - **Counter field**: auto +1 per saved photo (off by default, enable in settings)
 - **Anti-forgery code** (off by default): a 14-character alphanumeric **content fingerprint** (salted with `EngCameraRnzhy`, computed from the image itself, not random) is burned into the bottom-right corner of every photo; the bundled `verify_anticounterfeit.py` script checks whether a photo has been modified and reports a deviation percentage. It **ignores the watermark and ignores annotations** — the fingerprint is computed on the raw, un-watermarked, un-annotated frame, so only the annotation-free copy is verifiable. Survives JPEG recompression / platform denoising / resizing / global color grading (measured ≤5% deviation), but it is a content fingerprint, not a cryptographic signature: small local edits (~2% of the frame) are not detectable. See [交付说明](交付说明.md) (Chinese) for limits. The editor lets you enter a code manually; the preview shows a placeholder and follows gravity to the physical bottom-right corner

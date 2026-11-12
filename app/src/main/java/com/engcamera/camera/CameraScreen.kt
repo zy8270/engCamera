@@ -174,6 +174,16 @@ fun CameraScreen(
     // 拼图设置（v0.6.19）：列数/模板供小地图与预览弹窗使用
     val collageSettings by vm.collageSettings.collectAsState()
 
+    // 返回本页后的短暂触摸屏蔽（v0.6.24 修复"从编辑器返回后 0.1 秒内点对焦会闪现编辑字段窗口"）：
+    // 导航 pop 后旧目的地要等新目的地组合完成才 dispose，这段时间旧页（含 AlertDialog
+    // 的独立窗口）仍参与命中测试。屏蔽 260ms 覆盖"旧页 dispose + 过渡动画"的窗口期，
+    // 让落点稳定落在相机页自己身上。
+    var touchBlocked by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(260)
+        touchBlocked = false
+    }
+
     // 主界面跟随主题（0.6.0 用户拍板：日间浅色背景+深色快门按键）；系统栏图标随主题。
     // 仅取景画面上的小浮层（镜头胶囊/录像角标/对焦圈/工程组快捷钮）保持深色半透明，
     // 因为它们压在不可预测的实时画面上
@@ -455,6 +465,7 @@ fun CameraScreen(
                 }
             }
 
+            Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 // 顶部控制条：闪光灯左、设置右；图标角度随重力，位置不变；
                 // 文字工具提示水平居中覆盖在整条上（用户拍板 2026-10-16）
@@ -618,6 +629,25 @@ fun CameraScreen(
                     onConfirmCollage = ::requestConfirmCollage,
                     onEnterCollage = { vm.enterCollage() },
                 )
+            }
+
+            // 触摸屏蔽层（v0.6.24）：返回本页后的极短时间内吞掉所有触摸，
+            // 防止落到上一页残留的 UI（含 AlertDialog 独立窗口）上。
+            // 用 pointerInput 吞掉**全部**事件（点击/滑动/长按），clickable 只拦点击不够
+            if (touchBlocked) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    e.changes.forEach { it.consume() }
+                                }
+                            }
+                        },
+                )
+            }
             }
 
             // 音量键→快门（设置开启时 Activity 转发；仅相机页组合期间注册）
@@ -1563,35 +1593,38 @@ private fun PreviewArea(
             )
         }
         focusPoint?.let { pos -> FocusIndicator(pos) }
-        // 后置焦段（右上角）：单击轮询下一档；长按向下展开半透明面板列出全部焦段供点选
-        // （不同设备焦段数不同；面板展开时点面板外关闭，用户拍板 2026-10-13）
-        if (!ui.frontCamera && ui.lensLabels.size > 1) {
-            var lensMenuOpen by remember { mutableStateOf(false) }
-            if (lensMenuOpen) {
-                // 全屏透明拦截层：点面板外任意处收起面板
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { lensMenuOpen = false },
-                )
-            }
+        // 右上角合并胶囊（v0.6.21，用户需求 2026-11-12）：此前「电子变焦倍数」(1.0×) 与
+        // 「后置焦段」(2.9× ▾) 是两个上下叠在一起的胶囊，用户看截图以为重复了。
+        // 现在合成一个：左段=电子变焦（点按 1×/2× 快切），右段=物理镜头
+        // （点按轮询下一档，长按展开面板）。两者语义不同，所以用分隔线分成两段而不是合并数值。
+        val hasLensChoice = !ui.frontCamera && ui.lensLabels.size > 1
+        var lensMenuOpen by remember { mutableStateOf(false) }
+        if (lensMenuOpen) {
+            // 全屏透明拦截层：点面板外任意处收起面板
             Box(
                 Modifier
-                    .align(Alignment.TopEnd)
-                    // ±90° 时变焦徽标转成竖排占高约 58dp，焦段胶囊下移避让防碰撞
-                    .padding(top = if (rot == 90 || rot == -90) 86.dp else 56.dp, end = 8.dp),
-            ) {
-                // 纵向半透明焦段面板（按钮正下方展开；不随重力旋转，数字横排好读）
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { lensMenuOpen = false },
+            )
+        }
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 8.dp, end = 8.dp),
+        ) {
+            // 纵向半透明焦段面板（胶囊正下方展开；**不随重力旋转**，数字横排好读）
+            if (hasLensChoice) {
                 AnimatedVisibility(
                     visible = lensMenuOpen,
                     enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
                     exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 38.dp),
+                        // ±90° 时胶囊横躺占高更大，面板相应下移避让
+                        .padding(top = if (rot == 90 || rot == -90) 96.dp else 40.dp),
                 ) {
                     Column(
                         Modifier
@@ -1619,21 +1652,49 @@ private fun PreviewArea(
                         }
                     }
                 }
-                // 当前焦段胶囊：单击轮询下一档，长按展开/收起面板（▾ 提示可展开）
+            }
+            // 合并胶囊本体
+            Row(
+                Modifier
+                    .rotateWithLayout(rot.toFloat())
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x66000000)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 左段：电子变焦倍数（点按 1×/2× 快切）
                 Text(
-                    text = ui.lensLabels.getOrElse(ui.lensIndex) { "1×" } + " ▾",
-                    color = Color.Black,
+                    String.format(Locale.US, "%.1f×", ui.zoomRatio),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
-                        .rotate(rot.toFloat())
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .combinedClickable(
-                            onClick = { vm.selectLens((ui.lensIndex + 1) % ui.lensLabels.size) },
-                            onLongClick = { lensMenuOpen = !lensMenuOpen },
-                        )
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { vm.toggleZoom() }
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
                 )
+                if (hasLensChoice) {
+                    // 分隔线：明确这是两个独立维度（数字变焦 vs 物理镜头）
+                    Box(
+                        Modifier
+                            .width(1.dp)
+                            .height(12.dp)
+                            .background(Color(0x66FFFFFF)),
+                    )
+                    // 右段：当前物理焦段（点按轮询下一档，长按展开面板）
+                    Text(
+                        text = ui.lensLabels.getOrElse(ui.lensIndex) { "1×" } + " ▾",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .combinedClickable(
+                                onClick = { vm.selectLens((ui.lensIndex + 1) % ui.lensLabels.size) },
+                                onLongClick = { lensMenuOpen = !lensMenuOpen },
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
             }
         }
         // 拼图小地图（v0.6.19，用户需求 2026-11-09）：取景框正中显示当前列数×行数的格子，
@@ -1669,25 +1730,7 @@ private fun PreviewArea(
                 Text("${ui.recordingSeconds}s", color = Color.White)
             }
         }
-        // 电子变焦倍数徽标：点击在 1×/2× 间快速切换（右上角；镜头胶囊下移让位）；
-        // 随重力旋转且按旋转后可视尺寸布局（±90° 竖排胶囊不越出预览边界，边距与竖屏一致）
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 8.dp, end = 8.dp)
-                .rotateWithLayout(rot.toFloat())
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0x66000000))
-                .clickable { vm.toggleZoom() }
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-        ) {
-            Text(
-                String.format(Locale.US, "%.1f×", ui.zoomRatio),
-                color = Color.White,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+        // 注：电子变焦徽标已并入右上角的合并胶囊（v0.6.21 左段），此处不再单独渲染
     }
 }
 

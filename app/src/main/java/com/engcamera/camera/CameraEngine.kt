@@ -339,9 +339,16 @@ class CameraEngine(
                     bestIdx = i
                 }
             }
+            // 标签去重（v0.6.21）：同一台设备上两个 camera id 焦距相同会得到完全一样的
+            // 「2.9×」，面板里无法区分（用户反馈"我的手机上有两个 2.9 倍"）。重复的追加
+            // 位次后缀：2.9× / 2.9×·2 / 2.9×·3
+            val usedLabels = mutableMapOf<String, Int>()
             raws.forEachIndexed { i, raw ->
                 val ratio = (ratios[i] * 10).toInt() / 10f
-                val label = if (ratio % 1f == 0f) "${ratio.toInt()}×" else "${ratio}×"
+                val base = if (ratio % 1f == 0f) "${ratio.toInt()}×" else "${ratio}×"
+                val nth = (usedLabels[base] ?: 0) + 1
+                usedLabels[base] = nth
+                val label = if (nth == 1) base else "$base·$nth"
                 backLenses += BackLens(raw.id, label)
             }
             selectedLensId = raws[bestIdx].id
@@ -434,6 +441,15 @@ class CameraEngine(
                 .also { it.setAnalyzer(exec, a) }
         }
 
+        // ViewPort 的旋转参数是**显示系**旋转（决定宽高比以哪个坐标系表达），不是成片旋转。
+        // 本页 Activity 锁竖屏、预览框恒 3:4，所以必须传显示旋转（恒 ROTATION_0）：
+        // CameraX 据此把 3:4 反算成传感器系 4:3 → 裁切矩形恒等于整块传感器。
+        // 曾经误传跟随重力的 targetRotation：横持时重绑会算出 3:4 的传感器裁切（只占 56% 宽度），
+        // 取景框表现为「1.0× 却被放大」，且横屏拍完转竖屏后该裁切矩形不会重算
+        // （CameraX 的 ImageCapture.setTargetRotation 不更新会话，源码 TODO b/122846516），
+        // 于是竖屏拍出横向 4:3 的成片——用户实测复现 2026-11-12。
+        val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
+
         fun attempt(withVideo: Boolean, withAnalysis: Boolean, withViewport: Boolean): Camera? =
             try {
                 p.unbindAll()
@@ -444,7 +460,7 @@ class CameraEngine(
                 if (withAnalysis) analysis?.let(group::addUseCase)
                 if (withViewport && vw > 0 && vh > 0) {
                     group.setViewPort(
-                        ViewPort.Builder(Rational(vw, vh), targetRotation)
+                        ViewPort.Builder(Rational(vw, vh), displayRotation)
                             .setScaleType(ViewPort.FILL_CENTER)
                             .build(),
                     )
@@ -458,12 +474,14 @@ class CameraEngine(
         imageCapture = capture
         videoCapture = video
         camera = attempt(withVideo = true, withAnalysis = true, withViewport = true)
-        observeZoom()
             ?: attempt(withVideo = true, withAnalysis = false, withViewport = true)
             ?: attempt(withVideo = false, withAnalysis = true, withViewport = true)
             ?: attempt(withVideo = false, withAnalysis = true, withViewport = false)
                 .also { if (it != null) videoCapture = null }
         if (camera == null) videoCapture = null
+        // 必须放在回退链之外：observeZoom 返回 Unit（非 null），插在 elvis 链里会让
+        // 后面所有回退分支变成死代码（首绑失败直接没有相机）
+        observeZoom()
     }
 
     fun setFlashMode(mode: Int) {

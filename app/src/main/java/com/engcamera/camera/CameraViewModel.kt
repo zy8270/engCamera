@@ -243,7 +243,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private var textIdGen = 0L
     private var pendingVideoFile: File? = null
     private var timerJob: Job? = null
-    private var zoomCollectJob: Job? = null
+    private var zoomCollectJobs: List<Job> = emptyList()
 
     /**
      * 录像开始瞬间的水印快照 + 成片坐标系换算角 + 开始时刻 + 重力时间线（合成时使用，
@@ -280,6 +280,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                     time = fmt.format(Date()),
                     location = locationSource.text.value,
                     weather = locationSource.weather.value,
+                    addressParts = locationSource.addressParts.value,
                 )
                 delay(1000)
             }
@@ -287,6 +288,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         viewModelScope.launch {
             locationSource.weather.collect { w ->
                 _dynamic.value = _dynamic.value.copy(weather = w)
+            }
+        }
+        // 结构化地址一到就立即同步（每秒轮询最长有 1 秒延迟，拍照瞬间可能拿到旧值）
+        viewModelScope.launch {
+            locationSource.addressParts.collect { p ->
+                _dynamic.value = _dynamic.value.copy(addressParts = p)
             }
         }
 
@@ -340,6 +347,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         container.repository.rememberLastZoom(_ui.value.zoomRatio)
         pendingStartupZoom = false
         startupZoomConsumed = true
+        // 引擎释放后旧 StateFlow 不再有意义，收集器一并停掉（下次进页重新挂）
+        zoomCollectJobs.forEach { it.cancel() }
+        zoomCollectJobs = emptyList()
         engine?.release()
         engine = null
     }
@@ -361,17 +371,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val photoIdx = photoQs.indexOfFirst { it.label == e.photoQuality?.label }
             .let { if (it < 0) 0 else it }
         e.photoQuality = photoQs.getOrNull(photoIdx)
-        // 电子变焦：收集 zoomState 回流（重绑换相机实例时重挂收集）
-        zoomCollectJob?.cancel()
-        zoomCollectJob = viewModelScope.launch {
-            e.zoomRatio.collect { z -> _ui.update { it.copy(zoomRatio = z) } }
-        }
-        zoomCollectJob = viewModelScope.launch {
-            e.zoomMin.collect { m -> _ui.update { it.copy(zoomMin = m) } }
-        }
-        zoomCollectJob = viewModelScope.launch {
-            e.zoomMax.collect { m -> _ui.update { it.copy(zoomMax = m) } }
-        }
+        // 电子变焦：收集 zoomState 回流（重绑换相机实例时重挂收集）。
+        // 三个流必须各自持 Job：共用一个变量时后两个会覆盖第一个，前两个收集器
+        // 永不取消，每次重绑（切镜头/换画质/进出编辑器）都泄漏两条协程
+        zoomCollectJobs.forEach { it.cancel() }
+        zoomCollectJobs = listOf(
+            viewModelScope.launch { e.zoomRatio.collect { z -> _ui.update { it.copy(zoomRatio = z) } } },
+            viewModelScope.launch { e.zoomMin.collect { m -> _ui.update { it.copy(zoomMin = m) } } },
+            viewModelScope.launch { e.zoomMax.collect { m -> _ui.update { it.copy(zoomMax = m) } } },
+        )
         _ui.update { s ->
             s.copy(
                 lensLabels = e.backLenses.map { it.label },
