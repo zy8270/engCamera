@@ -2,26 +2,61 @@ package com.engcamera.data
 
 import kotlinx.serialization.Serializable
 
+/** 拼图格内留白（照片比例与格子不符时）的填充方式 */
+enum class CellFill {
+    /** 不填充（旧版原尺寸并排布局，无固定格子） */
+    NONE,
+
+    /** 浅灰实色 #F0F0F0（今日系参考图） */
+    GRAY,
+
+    /** 照片自身放大模糊铺满（马克系参考图） */
+    BLUR,
+}
+
 /**
- * 拼图模板（v0.6.19，用户需求 2026-11-09）。
- * 三款内置：无模板 / 客户拜访 / 工作汇报——后两款为红头文件风格。
- * 排列顺序固定为 无模板 → 客户拜访 → 工作汇报（用户拍板）。
+ * 拼图模板。
+ *
+ * 两套版式家族（v0.6.26）：
+ * - **旧版**（NONE / VISIT / REPORT）：原尺寸并排、零白边、红头公文页眉，无固定格子。
+ * - **新版**（BLUE_WORK / RED_CLIENT / RED_WORK）：固定 3:4 格子 + 照片等比内嵌 +
+ *   留白填充（灰底或模糊底）。参照 imgcache 下 马克-拼图-工作 / 今日-拼图-客户 /
+ *   今日-拼图-工作 三张图：横竖混排时照片按宽度内嵌、上下留白，竖图正好填满格子。
+ *
+ * 排列顺序固定（用户拍板：旧三款在前，新三款在后）。
  */
 enum class CollageTemplate(val id: String, val displayName: String) {
     NONE("none", "无模板"),
     VISIT("visit", "客户拜访"),
     REPORT("report", "工作汇报"),
+    BLUE_WORK("blue_work", "马克-工作"),
+    RED_CLIENT("red_client", "今日-客户"),
+    RED_WORK("red_work", "今日-工作"),
     ;
 
-    /** 红头文件风格（有红头条、分隔线、信息行、落款） */
-    val isRedHeader: Boolean get() = this != NONE
+    /** 红头文件风格（旧版两款：红头条、分隔线、信息行、落款） */
+    val isRedHeader: Boolean get() = this == VISIT || this == REPORT
+
+    /** 新版固定 3:4 等格布局（照片等比内嵌 + 留白填充） */
+    val isFixedGrid: Boolean get() = this == BLUE_WORK || this == RED_CLIENT || this == RED_WORK
+
+    /** 是否有页眉（标题/分隔线） */
+    val hasHeader: Boolean get() = this != NONE
+
+    /** 格子留白填充方式 */
+    val fill: CellFill get() = when (this) {
+        BLUE_WORK -> CellFill.BLUR
+        RED_CLIENT, RED_WORK -> CellFill.GRAY
+        else -> CellFill.NONE
+    }
 
     companion object {
         fun fromId(id: String?): CollageTemplate =
             entries.firstOrNull { it.id == id } ?: NONE
 
-        /** 模板选择器展示顺序（用户拍板：无模板 → 客户拜访 → 工作汇报） */
-        val ordered: List<CollageTemplate> get() = listOf(NONE, VISIT, REPORT)
+        /** 模板选择器展示顺序（旧三款 → 新三款） */
+        val ordered: List<CollageTemplate>
+            get() = listOf(NONE, VISIT, REPORT, BLUE_WORK, RED_CLIENT, RED_WORK)
     }
 }
 
@@ -77,14 +112,19 @@ data class CollageSettings(
             CollageTemplate.NONE -> ""
             CollageTemplate.VISIT -> "客户拜访记录"
             CollageTemplate.REPORT -> "工作汇报"
+            CollageTemplate.BLUE_WORK -> "工作汇报"
+            CollageTemplate.RED_CLIENT -> "客户拜访"
+            CollageTemplate.RED_WORK -> "工作汇报"
         }
 
         /**
-         * 各模板的字段表（用户拍板 2026-11-09）：
+         * 各模板的字段表（用户拍板 2026-11-09；新三款 v0.6.26 按参考图精简）。
          * 客户拜访 = 拜访日期〔开·自动〕/拜访地点〔开·自动〕/客户单位/拜访人/记录人签字/备注
          * 工作汇报 = 汇报日期〔开·自动〕/汇报单位/汇报人/备注
          * 无模板   = 备注
-         * 除日期与地点外全部默认关闭、手填。
+         * 蓝色工作 = 大标题/备注（参考图只有标题，无日期无信息行）
+         * 红色客户 = 大标题/日期〔开·自动〕/备注
+         * 红色工作 = 大标题/日期〔关·自动〕/备注（参考图无日期，需要可打开）
          */
         fun fieldsOf(tpl: CollageTemplate): List<CollageFieldDef> = when (tpl) {
             CollageTemplate.NONE -> listOf(
@@ -104,6 +144,20 @@ data class CollageSettings(
                 CollageFieldDef("date", "汇报日期", defaultEnabled = true, auto = true),
                 CollageFieldDef("company", "汇报单位"),
                 CollageFieldDef("reporter", "汇报人"),
+                CollageFieldDef("note", "备注"),
+            )
+
+            CollageTemplate.BLUE_WORK -> listOf(
+                CollageFieldDef("note", "备注"),
+            )
+
+            CollageTemplate.RED_CLIENT -> listOf(
+                CollageFieldDef("date", "拜访日期", defaultEnabled = true, auto = true),
+                CollageFieldDef("note", "备注"),
+            )
+
+            CollageTemplate.RED_WORK -> listOf(
+                CollageFieldDef("date", "汇报日期", defaultEnabled = false, auto = true),
                 CollageFieldDef("note", "备注"),
             )
         }

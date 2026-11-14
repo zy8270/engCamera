@@ -336,10 +336,85 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     fun attachEngine(e: CameraEngine) {
         engine = e
+        // 画质记忆（v0.6.26，用户反馈 2026-11-15「每次启动拍照画质都变最高」）：
+        // 引擎的 photoQuality 默认 null = 不限制 = 挑 4:3 最大档，所以进程重启/离开
+        // 相机页回来都会回到最高档。这里挂上待恢复标志，等 onEngineBound（相机 info
+        // 已就绪、画质列表非空）时真正套用——在 attachEngine 里直接恢复会踩到
+        // provider 尚未 init、getSupportedPhotoQualities() 返回空表的窗口
+        qualityChosenSinceAttach = false
+        pendingQualityRestore = true
         // 启动倍率（用户需求 2026-11-09）：仅本次 app 启动后的第一次进相机页应用。
         // 绑定常早于布局测量，随后的一次重绑会重置倍率，所以 pending 保持到用户
         // 手动变焦或离开相机页（离开后再回来属于"返回"，不该再重置用户倍率）
         if (!startupZoomConsumed) pendingStartupZoom = true
+    }
+
+    /** 本次 attach 后用户是否已手动改过画质（挡住迟到的 DataStore 恢复覆盖用户操作） */
+    private var qualityChosenSinceAttach = false
+
+    /** 待套用的画质恢复（attachEngine 置真，onEngineBound 消费） */
+    private var pendingQualityRestore = false
+
+    /**
+     * 画质列表是否已就绪：**分别**判断需要恢复的那一项是否非空。
+     *
+     * 不能写成 `photoQs.isNotEmpty() || videoQs.isNotEmpty()`——`getSupportedVideoQualities()`
+     * 有 `defaultQualities()` 兜底，provider 未就绪时也永远非空，于是「或」条件第一次
+     * 就成立、轮询立刻退出，而照片列表此时还是空的，恢复被跳过（实机 logcat 实锤：
+     * `waited=0 photoQs=[] savedPhoto='1600×1200'`）。
+     *
+     * 只等真正需要恢复的那一项：没存过照片画质就不必等照片列表。
+     */
+    private fun qualityListsReady(e: CameraEngine): Boolean {
+        if (!container.repository.loaded.value) return false
+        val needPhoto = container.repository.photoQualityLabel.value.isNotBlank()
+        val needVideo = container.repository.videoQualityLabel.value.isNotBlank()
+        if (!needPhoto && !needVideo) return true
+        if (needPhoto && e.getSupportedPhotoQualities().isEmpty()) return false
+        if (needVideo && e.getSupportedVideoQualities().isEmpty()) return false
+        return true
+    }
+
+    /**
+     * 套用 DataStore 里记住的照片/录像画质（v0.6.26）。
+     *
+     * 只在本次 attach 后用户尚未手动选档时生效。改完必须重绑——ImageCapture 的
+     * ResolutionSelector 是绑定期定下的，改字段不会自动生效。
+     *
+     * **不消费 pending 的三种情况**（否则恢复被永久放弃，用户看到的就是「又变最高」）：
+     * - DataStore 首读未完成
+     * - 该镜头画质列表为空（provider 未 init 时 selectedLensCameraInfo() 返回 null，
+     *   首次 bind 后立刻调 onEngineBound 正好撞上这个窗口）
+     *
+     * @return true 表示画质被改动（调用方需重绑）
+     */
+    private fun applyPendingQualityRestore(e: CameraEngine): Boolean {
+        if (!pendingQualityRestore || qualityChosenSinceAttach) return false
+        if (!container.repository.loaded.value) return false
+        // 先取列表，列表为空说明相机 info 还没就绪——此时消费 pending 会永久丢掉恢复机会
+        val photoQs = e.getSupportedPhotoQualities()
+        val videoQs = e.getSupportedVideoQualities()
+        if (photoQs.isEmpty() && videoQs.isEmpty()) return false
+        pendingQualityRestore = false
+        var changed = false
+        val photoLabel = container.repository.photoQualityLabel.value
+        if (photoLabel.isNotBlank() && photoQs.isNotEmpty()) {
+            val idx = photoQs.indexOfFirst { it.label == photoLabel }
+            // idx<0 = 该档在当前镜头不存在（切了镜头/换了设备），保持引擎默认
+            if (idx >= 0 && photoQs[idx].label != e.photoQuality?.label) {
+                e.photoQuality = photoQs[idx]
+                changed = true
+            }
+        }
+        val videoLabel = container.repository.videoQualityLabel.value
+        if (videoLabel.isNotBlank() && videoQs.isNotEmpty()) {
+            val idx = videoQs.indexOfFirst { it.label == videoLabel }
+            if (idx >= 0 && videoQs[idx].quality != e.videoQuality.quality) {
+                e.videoQuality = videoQs[idx]
+                changed = true
+            }
+        }
+        return changed
     }
 
     fun detachEngine() {
@@ -347,6 +422,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         container.repository.rememberLastZoom(_ui.value.zoomRatio)
         pendingStartupZoom = false
         startupZoomConsumed = true
+        // 画质恢复协程随引擎一起收掉（它持有旧引擎引用，留着只会在下一轮空转）
+        qualityRestoreJob?.cancel()
+        qualityRestoreJob = null
         // 引擎释放后旧 StateFlow 不再有意义，收集器一并停掉（下次进页重新挂）
         zoomCollectJobs.forEach { it.cancel() }
         zoomCollectJobs = emptyList()
@@ -360,17 +438,46 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     /** 本次进程内启动倍率是否已用掉（从编辑器/相册返回相机页不再重置） */
     private var startupZoomConsumed = false
 
+    /** 画质恢复协程（同一时刻只允许一条，避免每次重绑都新起一条） */
+    private var qualityRestoreJob: Job? = null
+
     fun onEngineBound() {
         val e = engine ?: return
+        // 画质记忆（v0.6.26）：把上次选的档位套回引擎，再强制重绑一次
+        // （ImageCapture 的 ResolutionSelector 是 bind() 里定下的，只改字段成片分辨率不变）。
+        // 恢复要等两个条件同时成立：DataStore 首读完成 + 该镜头的画质列表非空
+        // （provider 未 init 时 getSupportedPhotoQualities() 返回空表）。上一版只等
+        // loaded、且列表为空时就把 pending 消费掉了，于是恢复被永久放弃——用户看到的
+        // 就是「设了画质重启还是最高」。这里改成有界轮询，两条都满足才动手。
+        if (pendingQualityRestore && !qualityChosenSinceAttach && qualityRestoreJob?.isActive != true) {
+            qualityRestoreJob = viewModelScope.launch {
+                var waited = 0
+                // 最多等 5s（50 × 100ms）：正常 1~2 帧内就绪
+                while (waited < 50) {
+                    if (engine !== e || qualityChosenSinceAttach) return@launch
+                    if (qualityListsReady(e)) break
+                    delay(100)
+                    waited++
+                }
+                if (engine !== e || qualityChosenSinceAttach) return@launch
+                if (applyPendingQualityRestore(e)) {
+                    // 必须 force：bindKey 里的画质 label 变了才会重建 ImageCapture，
+                    // 但若恰好等于旧值（比如镜头不支持该档而回落）普通 rebind 会被去重
+                    rebindForce?.invoke()
+                }
+            }
+        }
         val qualities = e.getSupportedVideoQualities()
         val currentIdx = qualities.indexOfFirst { it.quality == e.videoQuality.quality }.coerceAtLeast(0)
         // 切镜头后所选画质可能不被新镜头支持（如前摄无 4K）：落到该镜头支持的最高档
-        e.videoQuality = qualities[currentIdx]
-        // 照片画质：按新镜头重算；之前选中的档位在新列表中存在则保持，否则落最高档
+        if (qualities.isNotEmpty()) e.videoQuality = qualities[currentIdx]
+        // 照片画质：按新镜头重算；之前选中的档位在新列表中存在则保持，否则落最高档。
+        // **列表为空时不要动字段**：provider 未 init 时 getSupportedPhotoQualities()
+        // 返回空表，此时若照旧赋 null，会把待恢复的档位抹掉（上一版"重启还是最高"的帮凶）
         val photoQs = e.getSupportedPhotoQualities()
         val photoIdx = photoQs.indexOfFirst { it.label == e.photoQuality?.label }
             .let { if (it < 0) 0 else it }
-        e.photoQuality = photoQs.getOrNull(photoIdx)
+        if (photoQs.isNotEmpty()) e.photoQuality = photoQs.getOrNull(photoIdx)
         // 电子变焦：收集 zoomState 回流（重绑换相机实例时重挂收集）。
         // 三个流必须各自持 Job：共用一个变量时后两个会覆盖第一个，前两个收集器
         // 永不取消，每次重绑（切镜头/换画质/进出编辑器）都泄漏两条协程
@@ -427,6 +534,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val qualities = _ui.value.videoQualities
         if (index !in qualities.indices) return
         e.videoQuality = qualities[index]
+        // 持久化用户选择（v0.6.26）：下次启动/回相机页沿用，不再被重置
+        qualityChosenSinceAttach = true
+        pendingQualityRestore = false
+        qualityRestoreJob?.cancel()
+        container.repository.rememberVideoQuality(qualities[index].label)
         _ui.update { it.copy(videoQualityIndex = index, showQualityMenu = false) }
         rebind?.invoke()
     }
@@ -437,6 +549,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val qualities = _ui.value.photoQualities
         if (index !in qualities.indices) return
         e.photoQuality = qualities[index]
+        // 持久化用户选择（v0.6.26）：根治"每次启动拍照画质都变最高"
+        qualityChosenSinceAttach = true
+        pendingQualityRestore = false
+        qualityRestoreJob?.cancel()
+        container.repository.rememberPhotoQuality(qualities[index].label)
         _ui.update { it.copy(photoQualityIndex = index, showQualityMenu = false) }
         rebind?.invoke()
     }
@@ -1737,6 +1854,14 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                     }
                     val rect = layout.cellRect(idx)
                     val bmp = decodeForCell(item, rect.width(), rect.height()) ?: return@forEachIndexed
+                    // 模糊底必须用**未烧水印的干净原图**生成（用户反馈 2026-11-15：
+                    // 之前用烧过水印的位图做模糊，背景里会出现一份重复的水印文字）。
+                    // 所以在 drawOnCanvas 之前先取模糊副本，画完再由 finally 统一回收
+                    val blurBg = if (layout.fixedGrid && layout.fill == com.engcamera.data.CellFill.BLUR) {
+                        runCatching { blurForFill(bmp) }.getOrNull()
+                    } else {
+                        null
+                    }
                     try {
                         // 烧水印：用该张冻结的 state/dynamic（B 语义），几何与 burnAndSave 一致。
                         // 直接在照片位图上画（bmp 内容即照片本体，无需再拷一层）
@@ -1750,15 +1875,26 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                             gravityAnchor = true,
                             antiFakeCode = antiFake,
                         )
-                        // 贴进格子：格子尺寸已按该张照片的宽高比算好（原生尺寸并排布局），
-                        // 但解码走 inSampleSize（2 的幂）只能接近目标尺寸，所以仍按
-                        // 等比 fitCenter 落位——偏差在 1~2px 内，视觉上等于无白边
-                        val dst = fitCenter(bmp.width, bmp.height, rect)
-                        canvas.drawBitmap(bmp, null, dst, Paint().apply {
-                            isFilterBitmap = true
-                            isAntiAlias = true
-                        })
+                        if (layout.fixedGrid) {
+                            // 新版固定 3:4 等格：先铺格子留白填充（干净原图的模糊底），
+                            // 再等比内嵌**已烧水印**的照片
+                            drawCellFill(canvas, rect, blurBg, layout.fill)
+                            val dst = fitInside(bmp.width, bmp.height, rect)
+                            canvas.drawBitmap(bmp, null, dst, Paint().apply {
+                                isFilterBitmap = true
+                                isAntiAlias = true
+                            })
+                        } else {
+                            // 旧版原尺寸并排：格子已按该张宽高比算好，fitCenter 落位，
+                            // 偏差在 1~2px 内，视觉上等于无白边
+                            val dst = fitCenter(bmp.width, bmp.height, rect)
+                            canvas.drawBitmap(bmp, null, dst, Paint().apply {
+                                isFilterBitmap = true
+                                isAntiAlias = true
+                            })
+                        }
                     } finally {
+                        blurBg?.recycle()
                         bmp.recycle()
                     }
                 }
@@ -1877,6 +2013,167 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private fun fitCenter(srcW: Int, srcH: Int, dst: android.graphics.Rect): android.graphics.RectF {
         if (srcW <= 0 || srcH <= 0) return android.graphics.RectF(dst)
         val sc = minOf(dst.width().toFloat() / srcW, dst.height().toFloat() / srcH)
+        val w = srcW * sc
+        val h = srcH * sc
+        val left = dst.left + (dst.width() - w) / 2f
+        val top = dst.top + (dst.height() - h) / 2f
+        return android.graphics.RectF(left, top, left + w, top + h)
+    }
+
+    /**
+     * 新版固定等格的「等比内嵌」落位（v0.6.26）：**不放大**，只缩小。
+     *
+     * 与 fitCenter 的区别：格子是 3:4 固定比例，横图内嵌后上下留白、竖图正好填满；
+     * 但解码位图可能比格子大（inSampleSize 只到 2 的幂），也可能略小。这里统一按
+     * 「只缩不放」——参考图里照片宽度恒等于格子宽度（内嵌即贴左右边），所以
+     * 优先按宽度对齐，高度居中。
+     */
+    private fun fitInside(srcW: Int, srcH: Int, dst: android.graphics.Rect): android.graphics.RectF {
+        if (srcW <= 0 || srcH <= 0) return android.graphics.RectF(dst)
+        val sc = minOf(dst.width().toFloat() / srcW, dst.height().toFloat() / srcH)
+        val w = srcW * sc
+        val h = srcH * sc
+        val left = dst.left + (dst.width() - w) / 2f
+        val top = dst.top + (dst.height() - h) / 2f
+        return android.graphics.RectF(left, top, left + w, top + h)
+    }
+
+    /**
+     * 铺格子留白（v0.6.26，按模板选择）：
+     * - [CellFill.GRAY]：浅灰实色 #F0F0F0（今日系参考图，实测 RGB 240,240,240）
+     * - [CellFill.BLUR]：**干净原图**的模糊副本放大铺满（马克系参考图）
+     * - 其余：不铺（旧版布局走不到这里）
+     *
+     * [blurBg] 由调用方在**烧水印之前**生成（用未烧水印的原图），本函数只负责贴图。
+     * 早期版本在这里直接拿烧过水印的位图做模糊，导致背景里出现一份重复的水印文字
+     * （用户反馈 2026-11-15）。传 null 表示模糊失败，退回灰底。
+     */
+    private fun drawCellFill(
+        canvas: Canvas,
+        rect: android.graphics.Rect,
+        blurBg: Bitmap?,
+        fill: com.engcamera.data.CellFill,
+    ) {
+        when (fill) {
+            com.engcamera.data.CellFill.GRAY -> {
+                canvas.drawRect(
+                    rect.left.toFloat(), rect.top.toFloat(),
+                    rect.right.toFloat(), rect.bottom.toFloat(),
+                    Paint().apply { color = CollageRenderer.FILL_GRAY },
+                )
+            }
+
+            com.engcamera.data.CellFill.BLUR -> {
+                // 模糊底只在**本格内**铺：cover 语义会把图放大到溢出格子边界，
+                // 不裁剪就会盖到相邻照片上（用户实测反馈 2026-11-15）
+                canvas.save()
+                canvas.clipRect(
+                    rect.left.toFloat(), rect.top.toFloat(),
+                    rect.right.toFloat(), rect.bottom.toFloat(),
+                )
+                if (blurBg != null) {
+                    val cover = coverRect(blurBg.width, blurBg.height, rect)
+                    canvas.drawBitmap(blurBg, null, cover, Paint().apply {
+                        isFilterBitmap = true
+                        isAntiAlias = true
+                    })
+                } else {
+                    // 模糊失败退回灰底（保证不出现白边）
+                    canvas.drawRect(
+                        rect.left.toFloat(), rect.top.toFloat(),
+                        rect.right.toFloat(), rect.bottom.toFloat(),
+                        Paint().apply { color = CollageRenderer.FILL_GRAY },
+                    )
+                }
+                canvas.restore()
+            }
+
+            com.engcamera.data.CellFill.NONE -> Unit
+        }
+    }
+
+    /**
+     * 生成一张模糊副本（格子留白 BLUR 填充的采样源；调用方负责回收）。
+     *
+     * 做法：先缩到长边 ~160px，再在这么小的图上做两趟盒式模糊（横/纵各一遍），
+     * 最后靠绘制时的双线性放大补足平滑度。全程 O(小图面积)，与照片原生分辨率无关。
+     *
+     * 强度（用户两轮反馈 2026-11-15「拉太糊了不好看」→「再调小一点」）：
+     * 48px+r2（只剩色块）→ 110px+r1 → 现在 **160px+r1**，背景仍明显虚化但保留
+     * 场景结构，看得出是同一张照片。
+     */
+    private fun blurForFill(photo: Bitmap): Bitmap? {
+        val maxDim = 160
+        val sc = maxDim.toFloat() / maxOf(photo.width, photo.height)
+        val tw = (photo.width * sc).roundToInt().coerceAtLeast(2)
+        val th = (photo.height * sc).roundToInt().coerceAtLeast(2)
+        val scaled = Bitmap.createScaledBitmap(photo, tw, th, true)
+        // 尺寸恰好相同时 createScaledBitmap 会原样返回入参——绝不能把调用方的照片位图
+        // 当模糊副本交回去（调用方会 recycle 它，随后的照片贴图就读到已回收的位图），
+        // 这里拷一份独立可变副本
+        val small = if (scaled === photo) {
+            photo.copy(Bitmap.Config.ARGB_8888, true) ?: return null
+        } else {
+            scaled
+        }
+        if (!small.isMutable) {
+            val copy = small.copy(Bitmap.Config.ARGB_8888, true) ?: return null
+            if (small !== scaled) small.recycle() else scaled.recycle()
+            return blurInPlace(copy)
+        }
+        return blurInPlace(small)
+    }
+
+    /** 对一张小图原地做两趟盒式模糊（横 + 纵），返回同一实例 */
+    private fun blurInPlace(small: Bitmap): Bitmap {
+        val w = small.width
+        val h = small.height
+        val src = IntArray(w * h).also { small.getPixels(it, 0, w, 0, 0, w, h) }
+        val tmp = IntArray(w * h)
+        boxBlurPass(src, tmp, w, h, radius = 1, horizontal = true)
+        boxBlurPass(tmp, src, w, h, radius = 1, horizontal = false)
+        small.setPixels(src, 0, w, 0, 0, w, h)
+        return small
+    }
+
+    /** 一趟盒式模糊（horizontal=true 横方向，否则纵方向） */
+    private fun boxBlurPass(
+        input: IntArray,
+        output: IntArray,
+        w: Int,
+        h: Int,
+        radius: Int,
+        horizontal: Boolean,
+    ) {
+        val outer = if (horizontal) h else w
+        val inner = if (horizontal) w else h
+        for (o in 0 until outer) {
+            for (i in 0 until inner) {
+                var a = 0
+                var r = 0
+                var g = 0
+                var b = 0
+                var n = 0
+                for (d in -radius..radius) {
+                    val j = (i + d).coerceIn(0, inner - 1)
+                    val idx = if (horizontal) o * w + j else j * w + o
+                    val px = input[idx]
+                    a += (px ushr 24) and 0xFF
+                    r += (px shr 16) and 0xFF
+                    g += (px shr 8) and 0xFF
+                    b += px and 0xFF
+                    n++
+                }
+                val outIdx = if (horizontal) o * w + i else i * w + o
+                output[outIdx] = ((a / n) shl 24) or ((r / n) shl 16) or ((g / n) shl 8) or (b / n)
+            }
+        }
+    }
+
+    /** cover 语义：铺满目标矩形（放大裁切，不改变宽高比） */
+    private fun coverRect(srcW: Int, srcH: Int, dst: android.graphics.Rect): android.graphics.RectF {
+        if (srcW <= 0 || srcH <= 0) return android.graphics.RectF(dst)
+        val sc = maxOf(dst.width().toFloat() / srcW, dst.height().toFloat() / srcH)
         val w = srcW * sc
         val h = srcH * sc
         val left = dst.left + (dst.width() - w) / 2f

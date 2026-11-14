@@ -3,8 +3,10 @@ package com.engcamera.watermark
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.Typeface
+import com.engcamera.data.CellFill
 import com.engcamera.data.CollageFieldDef
 import com.engcamera.data.CollageItem
 import com.engcamera.data.CollageSettings
@@ -18,40 +20,113 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * 拼图渲染器（v0.6.19，用户需求 2026-11-09）：版式计算 + 整页装饰绘制。
+ * 拼图渲染器：版式计算 + 整页装饰绘制。
  *
- * 职责边界：本类只管**页面骨架**（红头带 / 分隔线 / 信息行 / 白缝网格位置 / 备注 / 落款），
+ * 职责边界：本类只管**页面骨架**（页眉 / 分隔线 / 白缝网格位置 / 备注 / 落款），
  * 照片的解码、逐张烧水印、贴图由调用方（CameraViewModel.saveCollage）负责——因为那部分
  * 要按每张照片冻结的 WatermarkState 调 WatermarkRenderer.drawOnCanvas，逐张回收位图控内存。
  *
+ * 两套版式家族：
+ * - **旧版**（无模板 / 客户拜访 / 工作汇报）：原尺寸并排、零白边、红头公文页眉。
+ * - **新版**（v0.6.26，蓝色工作 / 红色客户 / 红色工作）：固定 3:4 等格，照片等比内嵌、
+ *   格子内留白用浅灰 #F0F0F0 或照片自身模糊铺满。逐项数值取自 imgcache 三张参考图
+ *   的像素实测（见各常量注释里的「实测」）。
+ *
  * 版式数值全部按**页面宽度比例**表达，因此超内存预算整体等比缩放时文字自动跟随，
- * 不需要另一套字号表。基准 mock 见 imgcache/_analysis/collage_out/。
+ * 不需要另一套字号表。
  */
 object CollageRenderer {
 
-    /** 白缝宽度 = 页宽 × 此比例（最小 8px，与 mock 一致） */
+    /** 白缝宽度 = 页宽 × 此比例（旧版；最小 8px，与 mock 一致） */
     private const val GAP_RATIO = 0.016f
 
-    /** 页面外边距 = 白缝 × 此倍数 */
+    /** 页面外边距 = 白缝 × 此倍数（旧版） */
     private const val MARGIN_GAP_MULT = 1.7f
 
-    /** 红头带高度 = 页宽 × 此比例 */
+    /** 红头带高度 = 页宽 × 此比例（旧版） */
     private const val BAND_RATIO = 0.082f
 
-    // ---- 配色（与 mock 逐项对齐）----
+    // ---- 配色（旧版，与 mock 逐项对齐）----
     const val RED = 0xFFC0272D.toInt()
     const val INK = 0xFF1C1C1E.toInt()
     const val LINE = 0xFFAAACB2.toInt()
     private const val BAND_DATE = 0xFFFFE4E4.toInt()
     private const val WHITE = Color.WHITE
 
+    // ================= 新版：3:4 固定等格（v0.6.26）=================
+
+    /** 格子宽高比（3:4 竖格；参考图实测 901/1208 = 0.7459，取标准 3:4） */
+    private const val CELL_ASPECT = 0.75f
+
+    /** 格子留白浅灰底（今日系参考图实测 RGB 240,240,240） */
+    const val FILL_GRAY = 0xFFF0F0F0.toInt()
+
+    // ---- 蓝色工作（马克-拼图-工作.jpg，2520×3557）----
+    private const val BLUE_MARGIN_R = 0.0139f // 实测左右边距 35/2520
+    private const val BLUE_GAP_R = 0.0135f // 实测缝 34/2520
+    private const val BLUE_TITLE_INK_R = 0.0516f // 实测标题墨高 130/2520
+    private const val BLUE_TITLE_TOP_R = 0.0068f // 实测标题墨顶 17/2520
+    private const val BLUE_TITLE_TO_RULE_R = 0.0167f // 实测 42/2520
+    private const val BLUE_RULE1_R = 0.00476f // 实测细线 12/2520
+    private const val BLUE_RULE_GAP_R = 0.00437f // 实测 11/2520
+    private const val BLUE_RULE2_R = 0.00873f // 实测粗线 22/2520
+    private const val BLUE_RULE_TO_GRID_R = 0.0147f // 实测 37/2520
+    const val BLUE = 0xFF2E5BFF.toInt() // 实测标题/线条同色
+
+    // ---- 今日系公共（2000 宽参考图）----
+    private const val RED_MARGIN_R = 0.044f // 实测左右边距 88/2000
+    private const val RED_GAP_R = 0.0105f // 实测缝 21/2000
+    private const val RED_RULE_R = 0.0055f // 实测分隔线 11/2000
+    const val CRIMSON = 0xFFD0011B.toInt() // 实测标题/线条同色
+    const val DATE_INK = 0xFF222222.toInt() // 实测日期字色
+
+    // ---- 红色客户（今日-拼图-客户.jpg，2000×3308）----
+    private const val RC_TITLE_TOP_R = 0.1445f // 实测标题墨顶 289/2000
+    private const val RC_TITLE_INK_R = 0.066f // 实测 132/2000
+    private const val RC_TITLE_TO_DATE_R = 0.0685f // 实测 137/2000
+    private const val RC_DATE_INK_R = 0.040f // 实测 80/2000
+    private const val RC_DATE_TO_RULE_R = 0.0415f // 实测 83/2000
+    private const val RC_RULE_TO_GRID_R = 0.0315f // 实测 63/2000
+
+    // ---- 红色工作（今日-拼图-工作.jpg，2000×2985）----
+    private const val RW_FRAME_TOP_R = 0.044f // 实测边框上沿 88/2000
+    private const val RW_FRAME_RULE_R = 0.0035f // 实测顶线 7/2000
+    private const val RW_FRAME_SIDE_R = 0.0030f // 实测侧边线宽 6/2000
+    /**
+     * 肩部曲线：对参考图外轮廓 61 个采样点做三次贝塞尔最小二乘拟合
+     * （最大残差 1.9px）。参考图的肩部是**内凹曲线**（两端接近直线、中段弯），
+     * 用圆或直线斜切都对不上，必须用贝塞尔。
+     * 四个控制点均以「左边线 / 顶线交点」为原点、按页宽取比例。
+     */
+    private const val RW_SHOULDER_P0_DX_R = 0.02400f // 起点（顶线内收点）横向
+    private const val RW_SHOULDER_P0_DY_R = 0.00350f // 起点纵向（=顶线厚度一半附近）
+    private const val RW_SHOULDER_P1_DX_R = 0.02225f
+    private const val RW_SHOULDER_P1_DY_R = 0.01643f
+    private const val RW_SHOULDER_P2_DX_R = 0.01102f
+    private const val RW_SHOULDER_P2_DY_R = 0.02701f
+    private const val RW_SHOULDER_P3_DX_R = 0.00000f // 终点（左边线顶点）
+    private const val RW_SHOULDER_P3_DY_R = 0.03350f
+    private const val RW_FRAME_TO_TITLE_R = 0.0265f // 实测 53/2000
+    private const val RW_TITLE_INK_R = 0.0685f // 实测 137/2000
+    private const val RW_TITLE_TO_BOT_R = 0.038f // 实测 76/2000
+    private const val RW_BOT_THICK_R = 0.0070f // 实测 14/2000
+    private const val RW_BOT_GAP_R = 0.0060f // 实测 12/2000
+    private const val RW_BOT_THIN_R = 0.0030f // 实测 6/2000
+    private const val RW_BOT_TO_GRID_R = 0.0095f // 实测 20/2000
+    private const val RW_TITLE_TRACKING_R = 0.010f // 实测字距 20/2000（参考图明显疏排）
+    /** 红色工作可选日期行（参考图无日期，开启后画在标题与底线之间） */
+    private const val RW_DATE_INK_R = 0.030f
+    private const val RW_DATE_GAP_R = 0.014f
+
+    /** CJK 字形墨高 ≈ 字号 × 此系数（Noto CJK 系字面实测 0.88） */
+    private const val INK_TO_TEXT_SIZE = 0.88f
+
     /**
      * 一次算好的版式。所有尺寸都是像素，`scale` 为相对原生分辨率的缩放比
      * （1.0 = 完全原生，< 1 表示因内存预算整体等比缩小）。
      *
-     * v0.6.19 起用「行内等高填满」（justified rows）布局：每行照片高度相同、
-     * 宽度按各自宽高比分配，让这一行刚好填满内容宽——**零白边、零裁切、不放大**。
-     * 代价是列边界上下不对齐（Google 相册同款观感）。
+     * 旧版用「行内等高填满」（justified rows）布局：每行照片高度相同、宽度按各自宽高比
+     * 分配。新版用「3:4 固定等格」布局：格子尺寸全页统一，照片等比内嵌，留白填充。
      */
     data class Layout(
         val pageW: Int,
@@ -76,6 +151,10 @@ object CollageRenderer {
         val noteLabel: String,
         val noteLines: List<String>,
         val signText: String,
+        /** 新版固定等格布局（true 时 cells 是格子矩形，照片需等比内嵌 + 留白填充） */
+        val fixedGrid: Boolean = false,
+        /** 格子留白填充方式（仅 fixedGrid 有效） */
+        val fill: CellFill = CellFill.NONE,
     ) {
         /** 第 index 张照片的矩形 */
         fun cellRect(index: Int): Rect = cells.getOrElse(index) { Rect(0, 0, 1, 1) }
@@ -88,11 +167,19 @@ object CollageRenderer {
 
     private val titleTypeface: Typeface by lazy { Typeface.create("sans-serif", Typeface.BOLD) }
     private val bodyTypeface: Typeface by lazy { Typeface.create("sans-serif", Typeface.NORMAL) }
+    /** 今日系标题：衬线（宋体观感，参考图为宋/明体） */
+    private val serifTypeface: Typeface by lazy { Typeface.create("serif", Typeface.BOLD) }
 
-    private fun titlePaint(size: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private fun titlePaint(size: Float, color: Int = WHITE) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = titleTypeface
         textSize = size
-        color = WHITE
+        this.color = color
+    }
+
+    private fun serifTitlePaint(size: Float, color: Int) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = serifTypeface
+        textSize = size
+        this.color = color
     }
 
     private fun bodyPaint(size: Float, color: Int = INK) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -101,18 +188,10 @@ object CollageRenderer {
         this.color = color
     }
 
+    // ---------- 版式 ----------
+
     /**
-     * 计算整页版式（行内等高填满，justified rows）。
-     *
-     * 算法：把照片按 `cols` 切成行。对每一行，求一个统一的行高 h 使该行所有照片
-     * 按各自宽高比缩放后、宽度之和 + 缝刚好等于内容宽：
-     *     h = (contentW - gap*(k-1)) / Σ(1/aspect_i)
-     * 其中 k = 该行照片数。这样**零白边、零裁切、不放大**（h 只会 ≤ 各照片原生高，
-     * 因为 Σ(1/aspect) ≥ k/aspect_max 恒成立……实际实现里对 h 取 min 与原生高，
-     * 保证不会把小图放大到糊）。
-     *
-     * 页宽先按「目标照片宽度」定：取所有照片里最大的原生宽（1 列 1 张时即 1:1），
-     * 再据页宽反推内容宽，逐行求 h。超内存预算时整体等比缩 scale。
+     * 计算整页版式。按模板家族分派：旧版走 justified rows，新版走 3:4 固定等格。
      *
      * @param items 连拍照片（按用户排序后的顺序），至少 1 张
      * @param cols 列数 1~4
@@ -120,6 +199,211 @@ object CollageRenderer {
      * @param maxPixels 画布像素预算；超了整体等比缩小
      */
     fun layout(
+        items: List<CollageItem>,
+        cols: Int,
+        settings: CollageSettings,
+        maxPixels: Long,
+    ): Layout {
+        val tpl = settings.template
+        return if (tpl.isFixedGrid) layoutFixed(items, cols, settings, maxPixels)
+        else layoutJustified(items, cols, settings, maxPixels)
+    }
+
+    // ---------------- 新版：3:4 固定等格 ----------------
+
+    /** 模板家族的水平几何（边距/缝比例） */
+    private fun marginRatioOf(tpl: CollageTemplate): Float =
+        if (tpl == CollageTemplate.BLUE_WORK) BLUE_MARGIN_R else RED_MARGIN_R
+
+    private fun gapRatioOf(tpl: CollageTemplate): Float =
+        if (tpl == CollageTemplate.BLUE_WORK) BLUE_GAP_R else RED_GAP_R
+
+    /**
+     * 页眉总高（从页面顶到网格顶），按页宽比例算。数值来自参考图像素实测，
+     * 每项含义见常量注释。[dateOn] 只影响红色工作（可选日期行）。
+     */
+    private fun fixedHeaderH(tpl: CollageTemplate, pageW: Int, dateOn: Boolean): Int {
+        val w = pageW.toFloat()
+        return when (tpl) {
+            CollageTemplate.BLUE_WORK ->
+                (w * (BLUE_TITLE_TOP_R + BLUE_TITLE_INK_R + BLUE_TITLE_TO_RULE_R +
+                    BLUE_RULE1_R + BLUE_RULE_GAP_R + BLUE_RULE2_R + BLUE_RULE_TO_GRID_R)).roundToInt()
+
+            CollageTemplate.RED_CLIENT -> {
+                val dateBlock = if (dateOn) w * (RC_TITLE_TO_DATE_R + RC_DATE_INK_R) else 0f
+                (w * (RC_TITLE_TOP_R + RC_TITLE_INK_R + RC_DATE_TO_RULE_R +
+                    RED_RULE_R + RC_RULE_TO_GRID_R) + dateBlock).roundToInt()
+            }
+
+            CollageTemplate.RED_WORK -> {
+                val dateBlock = if (dateOn) w * (RW_DATE_GAP_R + RW_DATE_INK_R) else 0f
+                // 肩部竖向跨度用贝塞尔终点 P3 的 dy（拟合值），不是旧的外扩常量
+                (w * (RW_FRAME_TOP_R + RW_SHOULDER_P3_DY_R + RW_FRAME_TO_TITLE_R +
+                    RW_TITLE_INK_R + RW_TITLE_TO_BOT_R + RW_BOT_THICK_R + RW_BOT_GAP_R +
+                    RW_BOT_THIN_R + RW_BOT_TO_GRID_R) + dateBlock).roundToInt()
+            }
+
+            else -> 0
+        }
+    }
+
+    /** 该模板的页眉日期是否启用（红色客户默认开、红色工作默认关） */
+    private fun headerDateOn(tpl: CollageTemplate, settings: CollageSettings): Boolean {
+        val def = CollageSettings.fieldsOf(tpl).firstOrNull { it.key == "date" } ?: return false
+        return settings.enabledOf(def)
+    }
+
+    /**
+     * 新版布局：格子宽高比固定 3:4，页宽由「不放大任一照片」反推，再按像素预算整体缩。
+     *
+     * 页宽闭式解：contentW = pageW·(1-2·marginR)，cellW = (contentW - gap·(c-1))/c，
+     * 代入 gap = pageW·gapR 得 pageW = cellW·c / (1 - 2·marginR - gapR·(c-1))。
+     */
+    private fun layoutFixed(
+        items: List<CollageItem>,
+        cols: Int,
+        settings: CollageSettings,
+        maxPixels: Long,
+    ): Layout {
+        val c = cols.coerceIn(1, 4)
+        val tpl = settings.template
+        val n = items.size
+        val rows = max(1, (n + c - 1) / c)
+        val marginR = marginRatioOf(tpl)
+        val gapR = gapRatioOf(tpl)
+
+        /** cellW → pageW 的闭式反解 */
+        fun pageWidthFor(cellW: Float): Int {
+            val denom = (1f - 2 * marginR - gapR * (c - 1)).coerceAtLeast(0.1f)
+            return (cellW * c / denom).roundToInt().coerceAtLeast(c * 8 + 16)
+        }
+
+        // 不放大任一照片的最大格子宽：横图受宽度限制、竖图受高度（=cellW/CELL_ASPECT）限制
+        val noUpscaleCellW = items.minOf { it2 ->
+            val a = it2.aspect.coerceAtLeast(0.01f)
+            val w = it2.uprightWidth.toFloat()
+            if (a >= CELL_ASPECT) w else w * CELL_ASPECT / a
+        }.coerceAtLeast(1f)
+
+        // 先按原生尺寸估总像素，超预算求整体缩放比（迭代收敛：页眉页脚按页宽比例自动跟随）
+        var scale = 1f
+        repeat(6) {
+            val pw = pageWidthFor(noUpscaleCellW * scale)
+            val gap = max(8, (pw * gapR).roundToInt())
+            val margin = (pw * marginR).roundToInt()
+            val cellW = ((pw - 2 * margin - gap * (c - 1)).toFloat() / c).coerceAtLeast(1f)
+            val cellH = cellW / CELL_ASPECT
+            val gridH = rows * cellH + (rows - 1) * gap
+            val ph = fixedHeaderH(tpl, pw, headerDateOn(tpl, settings)) + gridH + gap * 2 +
+                fixedFooterH(tpl, pw, settings) + margin
+            val total = pw.toDouble() * ph
+            if (total <= maxPixels) return@repeat
+            val next = scale * sqrt(maxPixels.toDouble() / total).toFloat() * 0.98f
+            if (next >= scale) return@repeat
+            scale = next.coerceAtLeast(0.05f)
+        }
+
+        val pageW = pageWidthFor(noUpscaleCellW * scale)
+        val gap = max(8, (pageW * gapR).roundToInt())
+        val margin = (pageW * marginR).roundToInt()
+        val contentW = (pageW - 2 * margin).coerceAtLeast(1)
+        val cellW = ((contentW - gap * (c - 1)).toFloat() / c).coerceAtLeast(1f)
+        val cellH = cellW / CELL_ASPECT
+        val headerH = fixedHeaderH(tpl, pageW, headerDateOn(tpl, settings))
+
+        // ---- 文字内容 ----
+        val noteDef = CollageSettings.fieldsOf(tpl).firstOrNull { it.key == "note" }
+        val noteOn = noteDef != null && settings.enabledOf(noteDef)
+        val noteLabel = if (noteOn) "${I18n.t("备注")}：" else ""
+        val noteText = if (noteOn) settings.valueOf(noteDef!!) else ""
+        val notePaint = bodyPaint(pageW * 0.0235f)
+        val noteMaxW = (pageW - 2 * margin - notePaint.measureText(noteLabel)).coerceAtLeast(pageW * 0.2f)
+        val noteLines = if (noteOn) wrapText(notePaint, noteText, noteMaxW) else emptyList()
+        val noteLH = (pageW * 0.0235f * 1.75f).roundToInt()
+
+        val headerDate = fixedHeaderDate(tpl, settings, items)
+
+        val gridTop = headerH
+        val gridH = (rows * cellH).roundToInt() + (rows - 1) * gap
+        val footerH = noteLines.size * noteLH
+        val pageH = gridTop + gridH + gap * 2 + footerH + margin
+
+        // ---- 逐格落矩形（全页统一尺寸，左对齐 + 末行居中）----
+        val cells = ArrayList<Rect>(n)
+        for (r in 0 until rows) {
+            val from = r * c
+            val to = min((r + 1) * c, n)
+            if (to <= from) break
+            val count = to - from
+            val usedW = count * cellW + (count - 1) * gap
+            var x = margin + ((contentW - usedW) / 2f)
+            val y = gridTop + r * (cellH + gap)
+            for (i in from until to) {
+                cells.add(
+                    Rect(
+                        x.roundToInt(), y.roundToInt(),
+                        (x + cellW).roundToInt(), (y + cellH).roundToInt(),
+                    ),
+                )
+                x += cellW + gap
+            }
+        }
+
+        return Layout(
+            pageW = pageW,
+            pageH = pageH,
+            scale = scale,
+            clamped = scale < 1f,
+            cols = c,
+            rows = rows,
+            gap = gap,
+            margin = margin,
+            bandH = 0,
+            headerH = headerH,
+            footerH = footerH,
+            gridTop = gridTop,
+            cells = cells,
+            title = settings.titleOf(tpl),
+            bandDate = headerDate,
+            infoRows = emptyList(),
+            noteLabel = noteLabel,
+            noteLines = noteLines,
+            signText = "",
+            fixedGrid = true,
+            fill = tpl.fill,
+        )
+    }
+
+    /** 新版页脚高（只有备注折行，无落款） */
+    private fun fixedFooterH(tpl: CollageTemplate, pageW: Int, settings: CollageSettings): Int {
+        val noteDef = CollageSettings.fieldsOf(tpl).firstOrNull { it.key == "note" } ?: return 0
+        if (!settings.enabledOf(noteDef)) return 0
+        val noteLH = (pageW * 0.0235f * 1.75f).roundToInt()
+        val est = max(1, (settings.valueOf(noteDef).length + 27) / 28)
+        return est * noteLH
+    }
+
+    /** 新版页眉里的日期文本（红色客户/红色工作支持；关闭或蓝版返回空） */
+    private fun fixedHeaderDate(
+        tpl: CollageTemplate,
+        settings: CollageSettings,
+        items: List<CollageItem>,
+    ): String {
+        val def = CollageSettings.fieldsOf(tpl).firstOrNull { it.key == "date" } ?: return ""
+        if (!settings.enabledOf(def)) return ""
+        // 参考图版式：2026年11月15日（中文模板）；英文环境退回 ISO 短日期
+        val iso = autoValueOf(def, items)
+        if (iso.length < 10) return iso
+        if (!I18n.isZh()) return iso
+        val y = iso.substring(0, 4)
+        val mo = iso.substring(5, 7).trimStart('0')
+        val d = iso.substring(8, 10).trimStart('0')
+        return "${y}年${mo}月${d}日"
+    }
+
+    // ---------------- 旧版：原尺寸并排（justified rows）----------------
+
+    private fun layoutJustified(
         items: List<CollageItem>,
         cols: Int,
         settings: CollageSettings,
@@ -142,10 +426,6 @@ object CollageRenderer {
         /**
          * 行布局：**每张照片保持原生尺寸**（完全不缩放、不裁剪，用户拍板 2026-11-10），
          * 行内按原生宽并排，行高 = 该行最高照片的原生高。
-         *
-         * 这样同方向的照片（相机输出恒 3:4）行内严丝合缝、零白边；混方向时白边
-         * 只出现在较矮那张的上下（面积最小），而不会像"等宽格子"那样让竖图两侧
-         * 各留一大条——那才是用户抱怨的"无意义白边"。
          */
         fun computeRows(sc: Float = 1f): List<RowLayout> {
             return (0 until rows).map { r ->
@@ -366,7 +646,7 @@ object CollageRenderer {
         val key = when (tpl) {
             CollageTemplate.VISIT -> "signer"
             CollageTemplate.REPORT -> "reporter"
-            CollageTemplate.NONE -> return ""
+            else -> return ""
         }
         val def = CollageSettings.fieldsOf(tpl).firstOrNull { it.key == key } ?: return ""
         if (!settings.enabledOf(def)) return ""
@@ -374,10 +654,14 @@ object CollageRenderer {
         return if (v.isBlank()) "${I18n.t(def.label)}：____________" else "${I18n.t(def.label)}：$v"
     }
 
-    // ---------- 绘制 ----------
+    // ---------- 绘制：页眉 ----------
 
-    /** 画页眉（红头带 + 分隔线 + 信息行）。无模板时什么都不画。 */
+    /** 画页眉。无模板什么都不画；旧版红头/新版各自版式。 */
     fun drawHeader(canvas: Canvas, L: Layout, tpl: CollageTemplate) {
+        if (L.fixedGrid) {
+            drawFixedHeader(canvas, L, tpl)
+            return
+        }
         if (!tpl.isRedHeader) return
         val m = L.margin.toFloat()
         val innerW = (L.pageW - 2 * L.margin).toFloat()
@@ -445,8 +729,6 @@ object CollageRenderer {
         }
         val infoLH = L.pageW * 0.0245f * 2.4f
         // 文字在行内垂直居中：baseline = 行顶 + (行高 - 字高)/2 - ascent
-        // （旧写法 y + ascent + 0.55*infoSize 在 ascent 绝对值大时会算到行顶之上，
-        //   实测把「拜访地点」压进了红头带——v0.6.19 截图时发现）
         val textH = ip.fontMetrics.descent - ip.fontMetrics.ascent
         for ((label, value) in L.infoRows) {
             val textTop = y + (infoLH - textH) / 2f
@@ -463,7 +745,160 @@ object CollageRenderer {
         }
     }
 
-    /** 画页脚（备注折行 + 右下落款） */
+    /**
+     * 新版页眉（三种版式）：
+     * - 蓝色工作：居中粗黑体标题 + 蓝色细线 + 粗线（双线）
+     * - 红色客户：居中宋体标题 + 日期 + 单红细线
+     * - 红色工作：公文装饰边框（外扩角 + 双侧边线 + 底部粗细双线）+ 疏排宋体标题
+     */
+    private fun drawFixedHeader(canvas: Canvas, L: Layout, tpl: CollageTemplate) {
+        val w = L.pageW.toFloat()
+        val m = L.margin.toFloat()
+        val innerW = L.pageW - 2 * L.margin.toFloat()
+
+        when (tpl) {
+            CollageTemplate.BLUE_WORK -> {
+                val titleInk = w * BLUE_TITLE_INK_R
+                val tp = titlePaint(titleInk / INK_TO_TEXT_SIZE, BLUE)
+                val bandTop = w * BLUE_TITLE_TOP_R
+                // 墨顶对齐：baseline = 墨顶 + 墨高
+                val baseline = bandTop + titleInk
+                val tw = tp.measureText(L.title)
+                canvas.drawText(L.title, (L.pageW - tw) / 2f, baseline, tp)
+
+                val bluePaint = Paint().apply { color = BLUE }
+                var y = bandTop + titleInk + w * BLUE_TITLE_TO_RULE_R
+                val rule1 = w * BLUE_RULE1_R
+                canvas.drawRect(m, y, m + innerW, y + rule1, bluePaint)
+                y += rule1 + w * BLUE_RULE_GAP_R
+                val rule2 = w * BLUE_RULE2_R
+                canvas.drawRect(m, y, m + innerW, y + rule2, bluePaint)
+            }
+
+            CollageTemplate.RED_CLIENT -> {
+                val titleInk = w * RC_TITLE_INK_R
+                val tp = serifTitlePaint(titleInk / INK_TO_TEXT_SIZE, CRIMSON)
+                val bandTop = w * RC_TITLE_TOP_R
+                val baseline = bandTop + titleInk
+                val tw = tp.measureText(L.title)
+                canvas.drawText(L.title, (L.pageW - tw) / 2f, baseline, tp)
+
+                var y = bandTop + titleInk + w * RC_TITLE_TO_DATE_R
+                if (L.bandDate.isNotEmpty()) {
+                    val dateInk = w * RC_DATE_INK_R
+                    val dp = bodyPaint(dateInk / INK_TO_TEXT_SIZE, DATE_INK)
+                    val dw = dp.measureText(L.bandDate)
+                    canvas.drawText(L.bandDate, (L.pageW - dw) / 2f, y + dateInk, dp)
+                    y += dateInk
+                }
+                y += w * RC_DATE_TO_RULE_R
+                val rule = w * RED_RULE_R
+                canvas.drawRect(m, y, m + innerW, y + rule, Paint().apply { color = CRIMSON })
+            }
+
+            CollageTemplate.RED_WORK -> {
+                val frameTop = w * RW_FRAME_TOP_R
+                val ruleH = w * RW_FRAME_RULE_R
+                val shoulderDy = w * RW_SHOULDER_P3_DY_R
+                val sideW = w * RW_FRAME_SIDE_R
+                val titleInk = w * RW_TITLE_INK_R
+                val thick = w * RW_BOT_THICK_R
+                val botGap = w * RW_BOT_GAP_R
+                val thin = w * RW_BOT_THIN_R
+
+                // 标题基线（先算，边框底要接在标题之后）
+                val titleTop = frameTop + ruleH + shoulderDy + w * RW_FRAME_TO_TITLE_R
+                val titleBaseline = titleTop + titleInk
+                // 可选日期行（默认关；开启后占位，参考图无此行）
+                val hasDate = L.bandDate.isNotEmpty()
+                val dateInk = w * RW_DATE_INK_R
+                val dateBlock = if (hasDate) w * RW_DATE_GAP_R + dateInk else 0f
+                // 边框底（粗线顶）
+                val botThickTop = titleTop + titleInk + dateBlock + w * RW_TITLE_TO_BOT_R
+                val frameBottom = botThickTop + thick + botGap + thin
+
+                val redPaint = Paint().apply {
+                    color = CRIMSON
+                    style = Paint.Style.STROKE
+                    strokeWidth = ruleH
+                    isAntiAlias = true
+                    strokeCap = Paint.Cap.BUTT
+                    strokeJoin = Paint.Join.MITER
+                }
+                // 左右两条肩部曲线：三次贝塞尔（对参考图轮廓最小二乘拟合，残差 1.9px）。
+                // 参考图的肩部是内凹曲线，直线斜切与圆弧都对不上形状
+                val leftSide = m + sideW / 2f
+                val rightSide = m + innerW - sideW / 2f
+                // 曲线原点 = 左边线/顶线交点（右上角镜像用右边界）
+                val ox = leftSide
+                val oy = frameTop + ruleH / 2f
+                val p0x = ox + w * RW_SHOULDER_P0_DX_R
+                val p0y = oy + w * RW_SHOULDER_P0_DY_R
+                val p1x = ox + w * RW_SHOULDER_P1_DX_R
+                val p1y = oy + w * RW_SHOULDER_P1_DY_R
+                val p2x = ox + w * RW_SHOULDER_P2_DX_R
+                val p2y = oy + w * RW_SHOULDER_P2_DY_R
+                val p3x = ox + w * RW_SHOULDER_P3_DX_R
+                val p3y = oy + w * RW_SHOULDER_P3_DY_R
+                val shoulderBot = p3y
+
+                val path = Path()
+                // 顶线：两端内收到肩部起点
+                path.moveTo(p0x, oy)
+                path.lineTo(2 * (m + innerW / 2f) - p0x, oy)
+
+                // 左肩：起点(p0) → 控制点(p1,p2) → 左边线顶点(p3)
+                path.moveTo(p0x, p0y)
+                path.cubicTo(p1x, p1y, p2x, p2y, p3x, p3y)
+
+                // 右肩（以页面中轴对称镜像）
+                val mirror = { v: Float -> 2 * (m + innerW / 2f) - v }
+                path.moveTo(mirror(p0x), p0y)
+                path.cubicTo(mirror(p1x), p1y, mirror(p2x), p2y, mirror(p3x), p3y)
+
+                // 双侧竖线（肩部曲线落点 → 边框底）
+                path.moveTo(p3x, p3y)
+                path.lineTo(p3x, frameBottom)
+                path.moveTo(mirror(p3x), p3y)
+                path.lineTo(mirror(p3x), frameBottom)
+                canvas.drawPath(path, redPaint)
+
+                // 底部粗线 + 细线
+                val solid = Paint().apply { color = CRIMSON }
+                canvas.drawRect(m, botThickTop, m + innerW, botThickTop + thick, solid)
+                canvas.drawRect(m, botThickTop + thick + botGap, m + innerW, frameBottom, solid)
+
+                // 标题（宋体 + 疏排）
+                val tp = serifTitlePaint(titleInk / INK_TO_TEXT_SIZE, CRIMSON)
+                val tracking = w * RW_TITLE_TRACKING_R
+                val widths = L.title.map { tp.measureText(it.toString()) }
+                val total = widths.sum() + tracking * (L.title.length - 1).coerceAtLeast(0)
+                var x = (L.pageW - total) / 2f
+                L.title.forEachIndexed { i, ch ->
+                    canvas.drawText(ch.toString(), x, titleBaseline, tp)
+                    x += widths[i] + tracking
+                }
+
+                // 可选日期（居中，画在标题下方）
+                if (hasDate) {
+                    val dp = bodyPaint(dateInk / INK_TO_TEXT_SIZE, DATE_INK)
+                    val dw = dp.measureText(L.bandDate)
+                    canvas.drawText(
+                        L.bandDate,
+                        (L.pageW - dw) / 2f,
+                        titleTop + titleInk + w * RW_DATE_GAP_R + dateInk,
+                        dp,
+                    )
+                }
+            }
+
+            else -> Unit
+        }
+    }
+
+    // ---------- 绘制：页脚 ----------
+
+    /** 画页脚（备注折行 + 旧版右下落款） */
     fun drawFooter(canvas: Canvas, L: Layout, tpl: CollageTemplate) {
         val m = L.margin.toFloat()
         val innerW = (L.pageW - 2 * L.margin).toFloat()
@@ -482,7 +917,7 @@ object CollageRenderer {
             y += L.noteLines.size * noteLH
         }
 
-        // 落款：右下红小字
+        // 落款：右下红小字（仅旧版红头模板）
         if (L.signText.isNotEmpty() && tpl.isRedHeader) {
             val sp = bodyPaint(L.pageW * 0.019f, RED)
             val sy = L.pageH - L.margin - sp.fontMetrics.descent

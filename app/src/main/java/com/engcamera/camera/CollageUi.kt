@@ -66,6 +66,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -134,21 +135,25 @@ fun CollageSettingsDialog(
                     )
                 }
 
-                // ---- 模板三选一 ----
+                // ---- 模板选择（6 款，每行 3 个两行）----
                 Text(I18n.t("拼图模板"), fontWeight = FontWeight.Medium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CollageTemplate.ordered.forEach { t ->
-                        TemplateCard(
-                            template = t,
-                            selected = t == tpl,
-                            modifier = Modifier.weight(1f),
-                            onClick = { onChange(settings.copy(templateId = t.id)) },
-                        )
+                CollageTemplate.ordered.chunked(3).forEach { rowTemplates ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowTemplates.forEach { t ->
+                            TemplateCard(
+                                template = t,
+                                selected = t == tpl,
+                                modifier = Modifier.weight(1f),
+                                onClick = { onChange(settings.copy(templateId = t.id)) },
+                            )
+                        }
+                        // 末行不足 3 个时补占位，保持卡片等宽
+                        repeat(3 - rowTemplates.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
 
-                // ---- 大标题（仅红头模板）----
-                if (tpl.isRedHeader) {
+                // ---- 大标题（有页眉的模板都可改）----
+                if (tpl.hasHeader) {
                     Text(I18n.t("大标题"), fontWeight = FontWeight.Medium)
                     OutlinedTextField(
                         value = settings.titleOf(tpl),
@@ -204,10 +209,16 @@ private fun TemplateCard(
     ) {
         TemplateMiniPreview(template, Modifier.fillMaxWidth().aspectRatio(3f / 4f))
         Spacer(Modifier.height(4.dp))
+        // 强制单行：三列布局下卡片很窄，模板名（如「马克-工作」）必须不换行、不撑宽。
+        // maxLines 只管行数，还得 softWrap=false + Ellipsis，否则长名会把卡片挤到溢出
         Text(
             I18n.t(template.displayName),
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
             color = if (selected) primary else MaterialTheme.colorScheme.onSurface,
         )
     }
@@ -220,8 +231,11 @@ private fun TemplateCard(
 @Composable
 private fun TemplateMiniPreview(template: CollageTemplate, modifier: Modifier = Modifier) {
     val red = Color(0xFFC0272D)
+    val crimson = Color(0xFFD0011B)
+    val blue = Color(0xFF2E5BFF)
     val line = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
     val cell = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+    val grayCell = Color(0xFFF0F0F0)
     Box(
         modifier
             .clip(RoundedCornerShape(3.dp))
@@ -229,24 +243,76 @@ private fun TemplateMiniPreview(template: CollageTemplate, modifier: Modifier = 
             .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(3.dp)),
     ) {
         Column(Modifier.fillMaxSize().padding(3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (template.isRedHeader) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(9.dp)
-                        .background(red),
-                )
-                // 信息行
-                repeat(if (template == CollageTemplate.VISIT) 2 else 1) {
+            when {
+                // 旧版红头：红条 + 信息行
+                template.isRedHeader -> {
                     Box(
                         Modifier
-                            .fillMaxWidth(0.7f)
-                            .height(2.dp)
-                            .background(line),
+                            .fillMaxWidth()
+                            .height(9.dp)
+                            .background(red),
                     )
+                    repeat(if (template == CollageTemplate.VISIT) 2 else 1) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(0.7f)
+                                .height(2.dp)
+                                .background(line),
+                        )
+                    }
+                }
+                // 蓝色工作：居中标题 + 蓝色双线
+                template == CollageTemplate.BLUE_WORK -> {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.45f)
+                            .height(5.dp)
+                            .background(blue)
+                            .align(Alignment.CenterHorizontally),
+                    )
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(blue))
+                    Box(Modifier.fillMaxWidth().height(2.dp).background(blue))
+                }
+                // 红色客户：居中标题 + 日期 + 红细线
+                template == CollageTemplate.RED_CLIENT -> {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.5f)
+                            .height(5.dp)
+                            .background(crimson)
+                            .align(Alignment.CenterHorizontally),
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.42f)
+                            .height(3.dp)
+                            .background(line)
+                            .align(Alignment.CenterHorizontally),
+                    )
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(crimson))
+                }
+                // 红色工作：装饰边框 + 疏排标题 + 底部双线
+                template == CollageTemplate.RED_WORK -> {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(13.dp)
+                            .border(1.dp, crimson, RoundedCornerShape(2.dp)),
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(0.5f)
+                                .height(4.dp)
+                                .background(crimson)
+                                .align(Alignment.Center),
+                        )
+                    }
+                    Box(Modifier.fillMaxWidth().height(2.dp).background(crimson))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(crimson))
                 }
             }
-            // 2×2 照片网格
+            // 2×2 照片网格（新版固定 3:4 等格用竖格 + 灰底示意）
+            val isFixed = template.isFixedGrid
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 repeat(2) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -254,9 +320,20 @@ private fun TemplateMiniPreview(template: CollageTemplate, modifier: Modifier = 
                             Box(
                                 Modifier
                                     .weight(1f)
-                                    .aspectRatio(0.9f)
-                                    .background(cell),
-                            )
+                                    .aspectRatio(if (isFixed) 0.75f else 0.9f)
+                                    .background(if (isFixed) grayCell else cell),
+                            ) {
+                                // 新版：格子内画一条居中的横条示意「照片内嵌 + 留白」
+                                if (isFixed) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .fillMaxHeight(0.55f)
+                                            .align(Alignment.Center)
+                                            .background(cell),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

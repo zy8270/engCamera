@@ -53,6 +53,10 @@ class WatermarkRepository(private val context: Context) {
     private val restoreLastZoomKey = booleanPreferencesKey("restore_last_zoom")
     private val lastZoomKey = floatPreferencesKey("last_zoom_ratio")
     private val collageKey = stringPreferencesKey("collage_v1") // 拼图设置（v0.6.19）
+    // 画质记忆（v0.6.26，用户反馈 2026-11-15「每次启动拍照画质都被重置成最高」）：
+    // 按 label 存（分辨率字符串跨重启稳定），空串 = 未设置过（首次启动仍落最高档）
+    private val photoQualityKey = stringPreferencesKey("photo_quality_label")
+    private val videoQualityKey = stringPreferencesKey("video_quality_label")
 
     private val _state = MutableStateFlow(WatermarkState())
     val state: StateFlow<WatermarkState> = _state.asStateFlow()
@@ -119,6 +123,19 @@ class WatermarkRepository(private val context: Context) {
     /** 上次使用的变焦倍率（相机页退出时写入，供「恢复上次倍率」使用） */
     private val _lastZoom = MutableStateFlow(1f)
     val lastZoom: StateFlow<Float> = _lastZoom.asStateFlow()
+
+    /**
+     * 上次选择的照片画质 label（分辨率字符串，如 "4000×3000"）。
+     * 空串 = 从未设置过 → 首次启动仍由引擎挑最高档。
+     * v0.6.26：用户反馈「每次启动拍照画质都被重置成最高」，根因是引擎的
+     * photoQuality 默认 null（=不限制=挑最大），且从未持久化过选择。
+     */
+    private val _photoQualityLabel = MutableStateFlow("")
+    val photoQualityLabel: StateFlow<String> = _photoQualityLabel.asStateFlow()
+
+    /** 上次选择的录像画质 label（同上；空串=未设置过） */
+    private val _videoQualityLabel = MutableStateFlow("")
+    val videoQualityLabel: StateFlow<String> = _videoQualityLabel.asStateFlow()
 
     /** DataStore 首读完成（相机绑定可能早于此，启动倍率需等它再决定） */
     private val _loaded = MutableStateFlow(false)
@@ -197,6 +214,8 @@ class WatermarkRepository(private val context: Context) {
             _defaultZoom.value = (context.appDataStore.data.first()[defaultZoomKey] ?: 1f).coerceIn(0.5f, 10f)
             _restoreLastZoom.value = context.appDataStore.data.first()[restoreLastZoomKey] ?: false
             _lastZoom.value = (context.appDataStore.data.first()[lastZoomKey] ?: 1f).coerceIn(0.5f, 10f)
+            _photoQualityLabel.value = context.appDataStore.data.first()[photoQualityKey] ?: ""
+            _videoQualityLabel.value = context.appDataStore.data.first()[videoQualityKey] ?: ""
             // 一次性迁移：计数默认关闭（2026-10-11）——已有状态里的计数也关一次，用户可再手动开
             if (context.appDataStore.data.first()[booleanPreferencesKey("count_default_off_migrated")] != true) {
                 _state.value = _state.value.copy(
@@ -623,6 +642,24 @@ class WatermarkRepository(private val context: Context) {
         _lastZoom.value = v
         scope.launch {
             context.appDataStore.edit { it[lastZoomKey] = v }
+        }
+    }
+
+    /** 记录上次选择的照片画质（label=分辨率字符串；跨重启沿用，v0.6.26） */
+    fun rememberPhotoQuality(label: String) {
+        if (label == _photoQualityLabel.value) return
+        _photoQualityLabel.value = label
+        scope.launch {
+            context.appDataStore.edit { it[photoQualityKey] = label }
+        }
+    }
+
+    /** 记录上次选择的录像画质（v0.6.26） */
+    fun rememberVideoQuality(label: String) {
+        if (label == _videoQualityLabel.value) return
+        _videoQualityLabel.value = label
+        scope.launch {
+            context.appDataStore.edit { it[videoQualityKey] = label }
         }
     }
 

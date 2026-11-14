@@ -1704,7 +1704,7 @@ private fun PreviewArea(
             CollageMinimap(
                 columns = collageColumns,
                 taken = ui.collageItems.size,
-                redHeader = collageTemplate.isRedHeader,
+                redHeader = collageTemplate.hasHeader,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
