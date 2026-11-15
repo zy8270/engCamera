@@ -1385,8 +1385,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         if (saveOriginal) {
             runCatching { MediaSaver.saveBitmap(context, photo, takenAt, treeUri = saveTreeUri(), projectName = pName) }
         }
-        if (noWatermark && antiFakeCode == null) {
-            // 水印全关且防伪码关：成片=画面本身；存标注版一张（+可选原图）
+        if (noWatermark && antiFakeCode == null && !wmState.brandBadge) {
+            // 水印全关且防伪码/品牌角标都关：成片=画面本身；存标注版一张（+可选原图）
             MediaSaver.saveBitmap(context, annotated, takenAt + 1000, treeUri = saveTreeUri(), projectName = pName)
             tempFile.delete()
             return
@@ -1412,10 +1412,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private suspend fun burnAndSave(tempFile: File, frameRotation: Int) {
         val upright = decodeUpright(tempFile)
         // 水印全关时成片=原图：只保存一张（即使"保存原图"开着也不重复存两张）；
-        // 但防伪码开着时仍须走烧录路径（右下角要印码）
+        // 但防伪码或品牌角标开着时仍须走烧录路径（右下角要印东西）
         val noWatermark = effectiveWatermark.value.fields.none { it.enabled }
         val antiFakeOn = effectiveWatermark.value.antiFake
-        if (noWatermark && !antiFakeOn) {
+        // 品牌角标（v0.6.31）：默认开，必须算进守卫，否则全字段关闭时角标被跳过
+        val badgeOn = effectiveWatermark.value.brandBadge
+        if (noWatermark && !antiFakeOn && !badgeOn) {
             MediaSaver.saveBitmap(context, upright, System.currentTimeMillis(), treeUri = saveTreeUri(), projectName = currentProjectName())
             upright.recycle()
             tempFile.delete()

@@ -458,19 +458,32 @@ fun WatermarkOverlay(
             )
             }
         }
-        // 防伪码预览（v0.6.16）：只显示占位符 EngCameraRnzhy（真实码按成片画面内容算，拍照时才生成）。
-        // 必须与烧录**同一套原生绘制**（同一画笔/字号/留白/重力换算）才能所见即所得——
+        // 防伪码 + 品牌角标预览（v0.6.16 / v0.6.31）：防伪码只显示占位符 EngCameraRnzhy
+        // （真实码按成片画面内容算，拍照时才生成）；角标按 state.brandBadge 独立开关。
+        // 必须与烧录**同一套原生绘制**（同一函数/画笔/字号/留白/重力换算）才能所见即所得——
         // 用 Compose Text 会因字号基准（sp vs px）与边距不同而位置样式都偏。
-        // 叠在最后 = 最上层，与烧录顺序一致（水印块拖到右下角时码仍可见）。
-        if (state.antiFake && widthPx > 0 && heightPx > 0) {
+        // 叠在最后 = 最上层，与烧录顺序一致（水印块拖到右下角时它们仍可见）。
+        if ((state.antiFake || state.brandBadge) && widthPx > 0 && heightPx > 0) {
+            // 角标位图在组合期取一次（current 会查表/解码），不能放进逐帧 draw lambda
+            val badgeBmp = remember(state.brandBadge, state.brandBadgeFile) {
+                if (state.brandBadge) {
+                    com.engcamera.util.BrandBadgeImage.current(state.brandBadgeFile)
+                } else {
+                    null
+                }
+            }
             androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                 // drawContext.canvas 是 Compose 的 Canvas，nativeCanvas 才是 android.graphics.Canvas
-                com.engcamera.util.AntiCounterfeit.drawStripRotated(
+                com.engcamera.util.BottomMarks.drawBottomCorner(
                     this.drawContext.canvas.nativeCanvas,
                     size.width.roundToInt(),
                     size.height.roundToInt(),
-                    com.engcamera.util.AntiCounterfeit.PLACEHOLDER,
-                    gravityRollDeg,
+                    code = if (state.antiFake) com.engcamera.util.AntiCounterfeit.PLACEHOLDER else null,
+                    badgeImage = badgeBmp,
+                    rollDeg = gravityRollDeg,
+                    line1 = state.brandBadgeLine1,
+                    line2 = state.brandBadgeLine2,
+                    pill = state.brandBadgePill,
                 )
             }
         }

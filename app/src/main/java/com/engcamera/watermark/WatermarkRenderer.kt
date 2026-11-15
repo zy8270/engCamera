@@ -63,6 +63,8 @@ object WatermarkRenderer {
                 Typeface.createFromAsset(context.assets, "fonts/noto_sc_bold.ttf")
             }.getOrNull()
         }
+        // 右下角品牌角标的 CJK 粗体（v0.6.31）：单独一份子集，不动巡逻用的那份
+        com.engcamera.util.BottomMarks.ensureFonts(context)
     }
 
     /** 渲染好的整块水印。带阴影外沿的布局（今日·打卡/打卡1）：位图四周含透明外沿，
@@ -2591,7 +2593,7 @@ object WatermarkRenderer {
      * @param skipGlassCard 液态玻璃只画文本块、跳过玻璃卡（视频合成：玻璃由 GPU 折射效果
      *      单独处理，文字层经本函数逐秒重渲实现时间流动）
      * @param antiFakeCode 防伪码（v0.6.16）：非空且 state.antiFake 开时画到图片右下角。
-     *      传 null = 不画（视频/预览占位走 WatermarkOverlay，不在本函数）
+     *      传 null = 不画防伪条（品牌角标另由 state.brandBadge 控制，不受本参数影响）
      */
     fun drawOnCanvas(
         canvas: Canvas,
@@ -2653,8 +2655,8 @@ object WatermarkRenderer {
             render(renderState, basis, dynamic)
         }
         if (block.width <= 1) {
-            // 水印全关（无字段）时防伪码照样要画
-            drawAntiFake(canvas, canvasW, canvasH, state, antiFakeCode)
+            // 水印全关（无字段）时防伪码/品牌角标照样要画
+            drawBottomMarks(canvas, canvasW, canvasH, state, antiFakeCode)
             return
         }
         // 网页位图按固定宽渲染（WebTemplateRenderer.RENDER_WIDTH），绘制时缩放到
@@ -2709,14 +2711,26 @@ object WatermarkRenderer {
         canvas.restore()
         // 网页模板的位图归 WebTemplateRenderer 缓存所有，不能回收
         if (!isWeb || renderState !== state) block.bitmap.recycle()
-        // 防伪码最后画：水印块拖到右下角时码仍在最上层可见
-        drawAntiFake(canvas, canvasW, canvasH, state, antiFakeCode)
+        // 防伪码/品牌角标最后画：水印块拖到右下角时它们仍在最上层可见
+        drawBottomMarks(canvas, canvasW, canvasH, state, antiFakeCode)
     }
 
-    /** 防伪码条：图片坐标系右下角，不随水印锚点/旋转移动（v0.6.16） */
-    private fun drawAntiFake(canvas: Canvas, canvasW: Int, canvasH: Int, state: WatermarkState, code: String?) {
-        if (!state.antiFake || code.isNullOrBlank()) return
-        com.engcamera.util.AntiCounterfeit.drawStrip(canvas, canvasW, canvasH, code)
+    /** 防伪码 + 品牌角标（v0.6.31）：图片坐标系右下角固定块，不随水印锚点/旋转移动。
+     *  两者共用 [com.engcamera.util.BottomMarks.drawBottomCorner] 的同一个旋转矩阵，
+     *  避免预览与成片错位。开关互相独立：防伪码默认关、品牌角标默认开。 */
+    private fun drawBottomMarks(canvas: Canvas, canvasW: Int, canvasH: Int, state: WatermarkState, code: String?) {
+        val showCode = state.antiFake && !code.isNullOrBlank()
+        val showBadge = state.brandBadge
+        if (!showCode && !showBadge) return
+        com.engcamera.util.BottomMarks.drawBottomCorner(
+            canvas, canvasW, canvasH,
+            code = if (showCode) code else null,
+            badgeImage = if (showBadge) com.engcamera.util.BrandBadgeImage.current(state.brandBadgeFile) else null,
+            // 角标文字可自定义（v0.6.31 用户需求）：空值由 BottomMarks 回退默认文案
+            line1 = state.brandBadgeLine1,
+            line2 = state.brandBadgeLine2,
+            pill = state.brandBadgePill,
+        )
     }
 
     /** 渐变底栏"拉满整张照片宽度"模式：水印宽度滑杆拉到最大（>=99.9%） */

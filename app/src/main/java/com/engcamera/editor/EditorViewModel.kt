@@ -180,6 +180,48 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     fun logoBitmap(): android.graphics.Bitmap? =
         com.engcamera.util.BrandLogo.current(repo.state.value.logoFile)
 
+    // ---------- v0.6.31 右下角品牌角标（Issue #5） ----------
+
+    /** 品牌角标开关（默认开：内置默认文字角标） */
+    fun setBrandBadge(on: Boolean) = repo.update { it.copy(brandBadge = on) }
+
+    /**
+     * 选图存盘并替换角标图片。与 [setLogo] 同款：一次原子更新完成换文件 + 开开关，
+     * 随后清理旧文件。图片只能外部导入（用户需求：不能把别人的 logo 做进 app 里）。
+     */
+    fun setBrandBadgeImage(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        val old = repo.state.value.brandBadgeFile
+        viewModelScope.launch {
+            val name = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.engcamera.util.BrandBadgeImage.save(ctx, uri)
+            } ?: return@launch
+            repo.update { it.copy(brandBadgeFile = name, brandBadge = true) }
+            if (old.isNotBlank() && old != name) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.engcamera.util.BrandBadgeImage.deleteOld(ctx, name)
+                }
+            }
+        }
+    }
+
+    /** 重置角标图片：回内置默认文字角标（保留开关状态，与 logo 重置语义不同） */
+    fun resetBrandBadgeImage() = repo.update { it.copy(brandBadgeFile = "") }
+
+    /** 角标三行文字自定义（v0.6.31）：空串 = 该行回退默认文案 */
+    fun setBrandBadgeLine1(text: String) = repo.update { it.copy(brandBadgeLine1 = text) }
+    fun setBrandBadgeLine2(text: String) = repo.update { it.copy(brandBadgeLine2 = text) }
+    fun setBrandBadgePill(text: String) = repo.update { it.copy(brandBadgePill = text) }
+
+    /** 重置角标文字：三行一起回默认文案（用户需求「点击重置也」清空自定义文字） */
+    fun resetBrandBadgeText() = repo.update {
+        it.copy(brandBadgeLine1 = "", brandBadgeLine2 = "", brandBadgePill = "")
+    }
+
+    /** 当前生效的角标图片（UI 缩略图用；null = 内置默认文字角标） */
+    fun brandBadgeBitmap(): android.graphics.Bitmap? =
+        com.engcamera.util.BrandBadgeImage.current(repo.state.value.brandBadgeFile)
+
     /** 滑杆拖动落盘防抖：拖动每帧只写内存（update persist=false），停手 400ms 后一次性写盘（与锚点拖动同款） */
     private var scalarPersistJob: Job? = null
 

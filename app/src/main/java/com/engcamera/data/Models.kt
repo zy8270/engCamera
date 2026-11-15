@@ -167,6 +167,26 @@ data class WatermarkState(
     val logoEnabled: Boolean = false,
     /** 自定义 logo 文件名（空=用 app 图标；实际文件在 filesDir/brand_logo/ 下） */
     val logoFile: String = "",
+    // ---- v0.6.31 右下角品牌角标（Issue #5 用户需求 2026-11-15）----
+    /**
+     * 常驻图片右下角的品牌角标开关（**默认开**：内置默认标识，
+     * 与防伪码是两个独立开关——防伪码默认关，角标默认开）。
+     * 角标画在「防伪 码」行正上方，两者共用同一个重力旋转矩阵。
+     */
+    val brandBadge: Boolean = true,
+    /**
+     * 外部导入的角标图片文件名（空 = 内置默认文字角标「工程水印 / 相机 真实可验」，
+     * 代码绘制不打包图片；实际文件在 filesDir/brand_badge/ 下）。
+     */
+    val brandBadgeFile: String = "",
+    /**
+     * 角标三行文字的自定义值（v0.6.31 用户需求 2026-11-15「文字也加入可以自定义编辑」）。
+     * 空 = 用默认文案（工程水印 / 相机 / 真实可验）。
+     * 只在「未导入图片」时生效——导入图片后整块由图片替代，文字不再绘制。
+     */
+    val brandBadgeLine1: String = "",
+    val brandBadgeLine2: String = "",
+    val brandBadgePill: String = "",
 )
 
 /** 拍照瞬间填充的动态值 */

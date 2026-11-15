@@ -443,6 +443,21 @@ private val EN_DICT: Map<String, String> = mapOf(
     "已使用自定义 logo" to "Custom logo in use",
     "使用默认 app 图标" to "Using the default app icon",
     "仅工程类模板（经典工程蓝/马克·工程/马克·工程白/今日·工程）支持品牌 logo" to "Only the four engineering templates support a brand logo",
+    // ---------- v0.6.31 右下角品牌角标（Issue #5） ----------
+    // 注意：角标上烧进照片的品牌名「工程水印 / 相机 / 真实可验」不进词典——
+    // 那是品牌标识本身，与 app_name「工程水印相机」一致，中英文都保持中文
+    "防伪码&品牌" to "Anti-forgery & brand",
+    "品牌角标（右下角，可导入图片替换）" to "Brand badge (bottom-right, replaceable with your own image)",
+    "仅品牌角标" to "Brand badge only",
+    "未启用" to "Not enabled",
+    "选择图片" to "Select image",
+    "编辑文字" to "Edit text",
+    "第一行（默认：{d}）" to "Line 1 (default: {d})",
+    "第二行（默认：{d}）" to "Line 2 (default: {d})",
+    "角标文字（默认：{d}）" to "Badge text (default: {d})",
+    "已使用自定义文字" to "Custom text in use",
+    "使用默认角标" to "Using the default badge",
+    "已使用自定义图片" to "Custom image in use",
     // ---------- v0.6.19 拼图（连拍拼图） ----------
     "拼图" to "Collage",
     "拼图模板设置" to "Collage template",

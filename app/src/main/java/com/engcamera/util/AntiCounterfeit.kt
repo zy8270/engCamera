@@ -189,47 +189,28 @@ object AntiCounterfeit {
      * 画到成片右下角（图片坐标系）。
      * gravityRollDeg=0 即烧录路径（成片显示系=重力系）；非 0 供预览把「重力右下角」
      * 换算到屏幕系——同一函数、同一画笔、同一留白，保证所见即所得。
+     *
+     * v0.6.31 起整块绘制（防伪条 + 品牌角标）统一由 [BottomMarks.drawBottomCorner]
+     * 负责：两者必须共用同一个旋转矩阵，否则预览与成片会错位。
      */
-    fun drawStrip(canvas: Canvas, canvasW: Int, canvasH: Int, code: String, gravityRollDeg: Float = 0f) {
-        if (code.isBlank()) return
-        drawStripRotated(canvas, canvasW, canvasH, code, gravityRollDeg)
+    fun drawStrip(
+        canvas: Canvas,
+        canvasW: Int,
+        canvasH: Int,
+        code: String,
+        gravityRollDeg: Float = 0f,
+        badgeImage: Bitmap? = null,
+    ) {
+        if (code.isBlank() && badgeImage == null) return
+        BottomMarks.drawBottomCorner(canvas, canvasW, canvasH, code, badgeImage, gravityRollDeg)
     }
 
     /**
-     * 按重力角把条文字旋转后贴到「重力方向的右下角」。
-     *
-     * 换算方式与 WatermarkRenderer.drawOnCanvas 完全同构：把画面中心视为原点，
-     * 目标角点先在画面坐标系里求出（右下角），再按 roll 反向旋回屏幕系。
-     * 文字本身也要跟着转 roll（重力系里的「正着写」在屏幕上就是斜的/倒的）。
+     * 只画防伪条（不含品牌角标）。保留给需要独立画条的场景；
+     * 正常路径请直接用 [BottomMarks.drawBottomCorner]。
      */
     fun drawStripRotated(canvas: Canvas, canvasW: Int, canvasH: Int, code: String, rollDeg: Float) {
         if (code.isBlank()) return
-        val w = canvasW.coerceAtLeast(1).toFloat()
-        val h = canvasH.coerceAtLeast(1).toFloat()
-        val paint = stripPaint(w)
-        val text = stripText(code)
-        val norm = ((rollDeg.roundToInt() % 360) + 360) % 360
-        // 文字右下角在「重力系」里的落点（画面坐标系）
-        val right = w - stripRightInset(w)
-        val bottom = h - stripBottomInset(h)
-        if (norm == 0) {
-            canvas.drawText(text, right - paint.measureText(text), bottom, paint)
-            return
-        }
-        // 重力系角点 → 屏幕系（与 rotateAnchor 同一套矩阵）；然后绕该角点转 +roll，
-        // 让文字在重力系里保持正着写（屏幕上看起来是跟着持机方向转的）
-        val rad = Math.toRadians(norm.toDouble())
-        val cos = kotlin.math.cos(rad).toFloat()
-        val sin = kotlin.math.sin(rad).toFloat()
-        val vx = right / w - 0.5f
-        val vy = bottom / h - 0.5f
-        val sx = (0.5f + (vx * cos - vy * sin)) * w
-        val sy = (0.5f + (vx * sin + vy * cos)) * h
-        // 绕角点转 +roll 后，「向左上写」的文本在屏幕里仍朝向重力系的右下方——
-        // 画布转了，所以这里仍按未旋转的 (sx - 文本宽, sy) 起笔即可（rotate 已包含基线方向）
-        canvas.save()
-        canvas.rotate(norm.toFloat(), sx, sy)
-        canvas.drawText(text, sx - paint.measureText(text), sy, paint)
-        canvas.restore()
+        BottomMarks.drawBottomCorner(canvas, canvasW, canvasH, code, null, rollDeg)
     }
 }

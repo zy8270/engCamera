@@ -620,6 +620,7 @@ fun EditorScreen(onBack: () -> Unit) {
                         AntiFakeRow(
                             enabled = state.antiFake,
                             manualCode = state.antiFakeCode,
+                            badgeEnabled = state.brandBadge,
                             watermarkTooHigh = state.anchorY < 0.75f,
                             onToggle = vm::setAntiFake,
                             onOpen = { showAntiFakeDialog = true },
@@ -634,6 +635,7 @@ fun EditorScreen(onBack: () -> Unit) {
                     AntiFakeRow(
                         enabled = state.antiFake,
                         manualCode = state.antiFakeCode,
+                        badgeEnabled = state.brandBadge,
                         watermarkTooHigh = state.anchorY < 0.75f,
                         onToggle = vm::setAntiFake,
                         onOpen = { showAntiFakeDialog = true },
@@ -755,16 +757,29 @@ fun EditorScreen(onBack: () -> Unit) {
     if (showAntiFakeDialog) {
         AntiFakeDialog(
             manualCode = state.antiFakeCode,
+            badgeEnabled = state.brandBadge,
+            badgeFile = state.brandBadgeFile,
+            badgeLine1 = state.brandBadgeLine1,
+            badgeLine2 = state.brandBadgeLine2,
+            badgePill = state.brandBadgePill,
             onConfirm = { code ->
                 vm.setAntiFakeCode(code)
                 vm.setAntiFake(true)
                 showAntiFakeDialog = false
             },
+            // 自动生成（标题右侧）：清空手动码 = 回到按画面内容计算
             onAutoGenerate = {
                 vm.setAntiFakeCode("")
                 vm.setAntiFake(true)
-                showAntiFakeDialog = false
             },
+            // 品牌角标：即时生效，不走「确定」提交（与 LogoRow 同款交互）
+            onBadgeEnabledChange = { vm.setBrandBadge(it) },
+            onPickBadge = { uri -> vm.setBrandBadgeImage(uri) },
+            onResetBadge = { vm.resetBrandBadgeImage() },
+            onLine1Change = { vm.setBrandBadgeLine1(it) },
+            onLine2Change = { vm.setBrandBadgeLine2(it) },
+            onPillChange = { vm.setBrandBadgePill(it) },
+            onResetBadgeText = { vm.resetBrandBadgeText() },
             onDismiss = { showAntiFakeDialog = false },
         )
     }
@@ -782,13 +797,15 @@ fun EditorScreen(onBack: () -> Unit) {
 }
 
 /**
- * 防伪码行（v0.6.16）：字段列表末尾，标题+开关，副行点开手动编辑对话框。
+ * 防伪码 & 品牌行（v0.6.16 / v0.6.31）：字段列表末尾，标题+开关，副行点开编辑对话框。
+ * 行开关**只管防伪码**（角标有自己独立的开关，在对话框里）。
  * 水印锚点高于画面 3/4 时副行转橙提示（指纹采样区是上部 62.5%，水印压进来会污染）。
  */
 @Composable
 private fun AntiFakeRow(
     enabled: Boolean,
     manualCode: String,
+    badgeEnabled: Boolean,
     watermarkTooHigh: Boolean,
     onToggle: (Boolean) -> Unit,
     onOpen: () -> Unit,
@@ -812,15 +829,18 @@ private fun AntiFakeRow(
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(onClick = onOpen),
             ) {
-                Text(I18n.t("防伪码"), fontWeight = FontWeight.Medium)
+                Text(I18n.t("防伪码&品牌"), fontWeight = FontWeight.Medium)
                 Text(
                     when {
-                        manualCode.isNotBlank() -> I18n.t("手动：{c}").replace("{c}", manualCode)
-                        watermarkTooHigh -> I18n.t("水印位置过高，防伪校验会失真")
-                        else -> I18n.t("自动：按画面内容计算")
+                        enabled && manualCode.isNotBlank() -> I18n.t("手动：{c}").replace("{c}", manualCode)
+                        enabled && watermarkTooHigh -> I18n.t("水印位置过高，防伪校验会失真")
+                        enabled -> I18n.t("自动：按画面内容计算")
+                        // 防伪码关但角标开着：说明右下角仍有东西，别让用户以为整块没启用
+                        badgeEnabled -> I18n.t("仅品牌角标")
+                        else -> I18n.t("未启用")
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (watermarkTooHigh && manualCode.isBlank()) Color(0xFFFFB300)
+                    color = if (enabled && watermarkTooHigh && manualCode.isBlank()) Color(0xFFFFB300)
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -830,20 +850,69 @@ private fun AntiFakeRow(
     }
 }
 
-/** 防伪码编辑对话框：14 位手动输入 + 自动生成（清空手动值回到按内容计算）+ 三行边界说明 */
+/**
+ * 防伪码 & 品牌编辑对话框（v0.6.31）：
+ * 上段=防伪码（14 位输入 + 三行边界说明），「自动生成」移到**标题右侧**
+ * （用户需求：像位置/天气那样，不占正文空间）；
+ * 下段=品牌角标（开关 / 选图 / 编辑文字 / 重置），全部即时生效。
+ * 「编辑文字」展开抽屉（对话框随之加高），三个输入框改三行文案。
+ */
 @Composable
 private fun AntiFakeDialog(
     manualCode: String,
+    badgeEnabled: Boolean,
+    badgeFile: String,
+    badgeLine1: String,
+    badgeLine2: String,
+    badgePill: String,
     onConfirm: (String) -> Unit,
     onAutoGenerate: () -> Unit,
+    onBadgeEnabledChange: (Boolean) -> Unit,
+    onPickBadge: (android.net.Uri) -> Unit,
+    onResetBadge: () -> Unit,
+    onLine1Change: (String) -> Unit,
+    onLine2Change: (String) -> Unit,
+    onPillChange: (String) -> Unit,
+    onResetBadgeText: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var text by remember { mutableStateOf(manualCode) }
+    // 文字编辑抽屉展开状态（用户需求：点击展开把窗口加高）
+    var textExpanded by remember { mutableStateOf(false) }
+    val badgePickLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) onPickBadge(uri) }
+    // 位图随 badgeFile 变化重建（选图后立刻换缩略图）
+    val badgeBmp = remember(badgeFile) {
+        com.engcamera.util.BrandBadgeImage.current(badgeFile)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(I18n.t("防伪码")) },
+        title = {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(I18n.t("防伪码&品牌"), modifier = Modifier.weight(1f))
+                // 「自动生成」移到标题右侧（用户需求 2026-11-15，与刷新定位/天气同款位置）
+                TextButton(
+                    onClick = onAutoGenerate,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(I18n.t("自动生成"), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 抽屉展开后内容可能超高 → 允许滚动（对话框本身不滚动）
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // ---------- 上段：防伪码 ----------
+                Text(I18n.t("防伪码"), fontWeight = FontWeight.Medium)
                 OutlinedTextField(
                     value = text,
                     onValueChange = {
@@ -852,11 +921,6 @@ private fun AntiFakeDialog(
                     label = { Text(I18n.t("防伪码内容（14 位大写字母+数字，留空=自动）")) },
                     singleLine = true,
                 )
-                TextButton(onClick = onAutoGenerate) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(I18n.t("自动生成"))
-                }
                 Text(
                     I18n.t("手动填写的码不参与内容校验，只影响图上显示的文字"),
                     style = MaterialTheme.typography.bodySmall,
@@ -867,11 +931,121 @@ private fun AntiFakeDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                // ---------- 下段：品牌角标 ----------
+                Text(I18n.t("品牌角标（右下角，可导入图片替换）"), fontWeight = FontWeight.Medium)
+                // 按钮行：**强制单行不换行**（用户明确要求），元素超宽时压缩
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Switch(checked = badgeEnabled, onCheckedChange = onBadgeEnabledChange)
+                    // 选图
+                    TextButton(
+                        onClick = {
+                            badgePickLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    ) {
+                        // 有自定义图就显示缩略图，否则只显示按钮文字
+                        if (badgeBmp != null && !badgeBmp.isRecycled) {
+                            Image(
+                                bitmap = badgeBmp.asImageBitmap(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color.White),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        Text(
+                            I18n.t("选择图片"),
+                            maxLines = 1,
+                            softWrap = false,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    // 编辑文字（带展开 V 标）
+                    TextButton(
+                        onClick = { textExpanded = !textExpanded },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            I18n.t("编辑文字"),
+                            maxLines = 1,
+                            softWrap = false,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Icon(
+                            // 展开时 V 标翻转（与模板选项折叠组同款交互）
+                            if (textExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // 重置（同时清图片与文字，用户需求「点击重置也…」）
+                    TextButton(
+                        onClick = {
+                            onResetBadge()
+                            onResetBadgeText()
+                        },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            I18n.t("重置"),
+                            maxLines = 1,
+                            softWrap = false,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
                 Text(
-                    I18n.t("水印请留在画面下方 2/3 之外，位置过高会污染指纹"),
+                    when {
+                        badgeFile.isNotBlank() -> I18n.t("已使用自定义图片")
+                        badgeLine1.isNotBlank() || badgeLine2.isNotBlank() || badgePill.isNotBlank() ->
+                            I18n.t("已使用自定义文字")
+                        else -> I18n.t("使用默认角标")
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // ---------- 文字编辑抽屉 ----------
+                AnimatedVisibility(visible = textExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = badgeLine1,
+                            onValueChange = onLine1Change,
+                            label = { Text(I18n.t("第一行（默认：{d}）").replace("{d}", com.engcamera.util.BottomMarks.DEFAULT_LINE1)) },
+                            placeholder = { Text(com.engcamera.util.BottomMarks.DEFAULT_LINE1) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = badgeLine2,
+                            onValueChange = onLine2Change,
+                            label = { Text(I18n.t("第二行（默认：{d}）").replace("{d}", com.engcamera.util.BottomMarks.DEFAULT_LINE2)) },
+                            placeholder = { Text(com.engcamera.util.BottomMarks.DEFAULT_LINE2) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = badgePill,
+                            onValueChange = onPillChange,
+                            label = { Text(I18n.t("角标文字（默认：{d}）").replace("{d}", com.engcamera.util.BottomMarks.DEFAULT_PILL)) },
+                            placeholder = { Text(com.engcamera.util.BottomMarks.DEFAULT_PILL) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
             }
         },
         confirmButton = {

@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.30/engCamera-v0.6.30-292.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.31/engCamera-v0.6.31-293.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.30 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.31 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -80,6 +80,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Auto weather + emoji**: fetched with location (e.g. "☀️ 晴 26℃"), flat emoji per condition (sunny/cloudy/overcast/rain/snow/storm/fog…), toggleable, manual entry & refresh supported
 - **Counter field**: auto +1 per saved photo (off by default, enable in settings)
 - **Anti-forgery code** (off by default): a 14-character alphanumeric **content fingerprint** (salted with `EngCameraRnzhy`, computed from the image itself, not random) is burned into the bottom-right corner of every photo; the bundled `verify_anticounterfeit.py` script checks whether a photo has been modified and reports a deviation percentage. It **ignores the watermark and ignores annotations** — the fingerprint is computed on the raw, un-watermarked, un-annotated frame, so only the annotation-free copy is verifiable. Survives JPEG recompression / platform denoising / resizing / global color grading (measured ≤5% deviation), but it is a content fingerprint, not a cryptographic signature: small local edits (~2% of the frame) are not detectable. See [交付说明](交付说明.md) (Chinese) for limits. The editor lets you enter a code manually; the preview shows a placeholder and follows gravity to the physical bottom-right corner
+- **Bottom-right brand badge** (on by default, v0.6.31): a brand mark sits in the bottom-right corner of every photo, sharing the same corner and the same gravity rotation matrix as the anti-forgery code (so it stays at the physical bottom-right corner when shooting landscape or upside down). The built-in default reads "工程水印 / 相机 · 真实可验" in two lines — **both lines are equal width and right-aligned**, the first line larger and the second smaller next to a semi-transparent rounded chip; **all three text strings are editable** (editor → "Anti-forgery & brand" → "Edit text" expands a drawer; leave blank to restore defaults); you can also import your own image from the gallery to replace the whole block (scaled to 0.16W, automatically leaving room for the code line). The badge and the anti-forgery code are **two independent switches** (code off by default, badge on by default)
 - **Brand logo** (4 engineering templates): Classic Blue / Mark Site / Mark Site White / Today Site can show a logo container at the left of the title bar — default is the app icon, or pick any photo from the gallery (any aspect ratio scaled to fit, transparent PNG supported, white container background); a "logo size" slider sets the container edge (capped at 50% of watermark width), the title row grows to match and the title text centers in the remaining right half, wrapping first and then ellipsizing; rounded templates clip the container's outer corners automatically. Picking a logo turns the record dot off
 
 ### Gallery & batch
