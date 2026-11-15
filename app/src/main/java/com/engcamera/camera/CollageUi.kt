@@ -439,13 +439,39 @@ fun CollagePreviewOverlay(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    I18n.t("已连拍 {n} 张").replace("{n}", "${items.size}"),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onSyncWatermark, enabled = items.isNotEmpty() && !saving) {
+                // 标题（主）+ 一行小字提示（次）：标题放大到 titleLarge，
+                // 提示用 bodySmall 弱色，形成主次对比（用户需求 2026-11-15）。
+                // Column 吃满剩余宽度：既把右侧按钮顶到最右（用户需求 2026-11-15
+                // 「同步当前水印」右对齐），又给标题一个有限宽度让 Ellipsis 生效
+                // （英文放大后会挤到按钮上，宁可省略也不能压重叠）
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        // 混入相册图片后「已连拍」不再准确（v0.6.32）
+                        if (items.any { it.fromGallery }) {
+                            I18n.t("已添加 {n} 张").replace("{n}", "${items.size}")
+                        } else {
+                            I18n.t("已连拍 {n} 张").replace("{n}", "${items.size}")
+                        },
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // 有照片才提示：0 张时没东西可拖，1 张也排不出顺序
+                    if (items.size > 1) {
+                        Text(
+                            I18n.t("长按可拖动排序"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = onSyncWatermark,
+                    // 相册导入的图不烧水印，全是从相册来的就没什么可同步
+                    enabled = items.any { !it.fromGallery } && !saving,
+                ) {
                     Text(I18n.t("同步当前水印"))
                 }
             }
@@ -850,6 +876,23 @@ private fun CollageCell(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
+        // 相册导入标记（左下角）：这类图不烧水印，标出来便于用户区分（v0.6.32）
+        if (item.fromGallery) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xAA000000))
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    I18n.t("相册"),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
         // 删除按钮（右上角）
         Box(
             Modifier

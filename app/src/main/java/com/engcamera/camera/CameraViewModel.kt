@@ -1764,6 +1764,86 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         return if (deg == 90 || deg == 270) h to w else w to h
     }
 
+    /**
+     * 从相册选图加入拼图（v0.6.32，用户需求 2026-11-15）：可以边拍边加边拼。
+     *
+     * 相册图**不烧水印**（用户明确要求：相册里什么样拼图里就什么样），
+     * 所以只把文件拷进 collage 缓存目录 + 读尺寸，watermark/dynamic 存当前值占位。
+     */
+    fun onCollagePicked(uris: List<Uri>) {
+        val st = _ui.value
+        if (!st.collageMode || st.collageSaving || uris.isEmpty()) return
+        _ui.update {
+            it.copy(
+                toast = I18n.t("正在导入 {n} 张图片…").replace("{n}", "${uris.size}"),
+            )
+        }
+        // 占位值：相册图不渲染水印，但 CollageItem 字段非空，存一份当前状态即可
+        val placeholderWatermark = effectiveWatermark.value
+        val placeholderDynamic = dynamic.value
+        viewModelScope.launch(Dispatchers.IO) {
+            val added = mutableListOf<com.engcamera.data.CollageItem>()
+            var failed = 0
+            uris.forEach { uri ->
+                runCatching {
+                    val seq = ++collageSeq
+                    val dest = File(collageDir, String.format(Locale.US, "g_%04d.%s", seq, extOf(uri)))
+                    context.contentResolver.openInputStream(uri)?.use { ins ->
+                        dest.outputStream().use { outs -> ins.copyTo(outs) }
+                    } ?: error("open failed")
+                    val (w, h) = uprightSizeOf(dest)
+                    if (w <= 1 || h <= 1) {
+                        dest.delete()
+                        error("decode failed")
+                    }
+                    com.engcamera.data.CollageItem(
+                        id = System.currentTimeMillis() * 1000 + seq,
+                        file = dest,
+                        watermark = placeholderWatermark,
+                        dynamic = placeholderDynamic,
+                        frameRotation = 0,
+                        rotationDeg = 0f,
+                        uprightWidth = w,
+                        uprightHeight = h,
+                        fromGallery = true,
+                    )
+                }.onSuccess { added += it }.onFailure {
+                    it.printStackTrace()
+                    failed++
+                }
+            }
+            if (added.isEmpty()) {
+                _ui.update { it.copy(toast = I18n.t("图片读取失败")) }
+                return@launch
+            }
+            _ui.update { s ->
+                s.copy(
+                    collageItems = s.collageItems + added,
+                    toast = if (failed > 0) {
+                        I18n.t("已添加 {n} 张，{f} 张读取失败")
+                            .replace("{n}", "${added.size}")
+                            .replace("{f}", "$failed")
+                    } else {
+                        I18n.t("已添加 {n} 张图片").replace("{n}", "${added.size}")
+                    },
+                )
+            }
+        }
+    }
+
+    /** 相册 URI 的落盘扩展名（按 MIME 猜，解码按内容不按扩展名） */
+    private fun extOf(uri: Uri): String {
+        val mime = runCatching {
+            context.contentResolver.getType(uri)
+        }.getOrNull()?.lowercase(Locale.US) ?: ""
+        return when {
+            mime.contains("png") -> "png"
+            mime.contains("webp") -> "webp"
+            mime.contains("heic") || mime.contains("heif") -> "heic"
+            else -> "jpg"
+        }
+    }
+
     /** 删除一张连拍（UI 侧二次确认由调用方负责） */
     fun deleteCollageItem(id: Long) {
         val target = _ui.value.collageItems.firstOrNull { it.id == id } ?: return
@@ -1789,7 +1869,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     fun syncCollageWatermark() {
         val cur = effectiveWatermark.value
         _ui.update { s ->
-            s.copy(collageItems = s.collageItems.map { it.copy(watermark = cur) })
+            // 相册导入的图本来就不烧水印，跳过它们（改了也没用）
+            s.copy(collageItems = s.collageItems.map { if (it.fromGallery) it else it.copy(watermark = cur) })
         }
         _ui.update { it.copy(toast = I18n.t("已同步水印")) }
     }
@@ -1866,17 +1947,20 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                     }
                     try {
                         // 烧水印：用该张冻结的 state/dynamic（B 语义），几何与 burnAndSave 一致。
-                        // 直接在照片位图上画（bmp 内容即照片本体，无需再拷一层）
-                        val antiFake = antiFakeCodeFor(item.watermark, bmp)
-                        WatermarkRenderer.drawOnCanvas(
-                            Canvas(bmp),
-                            bmp.width, bmp.height,
-                            item.watermark, item.dynamic,
-                            item.rotationDeg, item.frameRotation,
-                            backdrop = bmp,
-                            gravityAnchor = true,
-                            antiFakeCode = antiFake,
-                        )
+                        // 直接在照片位图上画（bmp 内容即照片本体，无需再拷一层）。
+                        // 相册导入的图**不烧水印**（用户需求 2026-11-15：相册里什么样就是什么样）
+                        if (!item.fromGallery) {
+                            val antiFake = antiFakeCodeFor(item.watermark, bmp)
+                            WatermarkRenderer.drawOnCanvas(
+                                Canvas(bmp),
+                                bmp.width, bmp.height,
+                                item.watermark, item.dynamic,
+                                item.rotationDeg, item.frameRotation,
+                                backdrop = bmp,
+                                gravityAnchor = true,
+                                antiFakeCode = antiFake,
+                            )
+                        }
                         if (layout.fixedGrid) {
                             // 新版固定 3:4 等格：先铺格子留白填充（干净原图的模糊底），
                             // 再等比内嵌**已烧水印**的照片

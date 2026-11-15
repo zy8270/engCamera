@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.31/engCamera-v0.6.31-293.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.32/engCamera-v0.6.32-296.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.31 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.32 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -58,11 +58,11 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 ### Burst collage
 
 - **Entry**: the collage icon at the right of the bottom bar (where the quality picker used to be — quality moved into the settings drawer). Tapping it enters burst-collage mode and the top title switches to "Burst collage"
-- **Burst capture**: shots go to a cache first, **not** to the gallery, and each one burns the watermark frozen at its own shutter moment (template / style / text / time & location all frozen — editing the watermark mid-burst only affects later shots)
+- **Burst capture + gallery mixing** (v0.6.32): shots go to a cache first, **not** to the gallery, and each one burns the watermark frozen at its own shutter moment (template / style / text / time & location all frozen — editing the watermark mid-burst only affects later shots). The ⊕ button in the middle of the capsule above the shutter opens the **system photo picker for multi-select**, so gallery photos can be mixed in with bursts — shoot, add and stitch in any order. **Gallery photos are never watermarked** (whatever is in the gallery is what lands in the collage); such cells carry a small "Gallery" tag in the corner
 - **Minimap**: a live grid of "columns × rows" in the middle of the viewfinder; captured cells turn yellow, pending cells stay transparent, and templates with a header get a red strip on top
 - **Templates**: six built in, in two layout families. **Document style** (No template / Client visit / Work report): native-size side-by-side with zero white edges; the latter two are red-header document styles (solid red title band, thick+thin rules, info rows, notes, signature line). **3:4 grid style** (Mark · Work / Today · Client / Today · Work): fixed 3:4 portrait cells with photos fitted inside and the leftover space filled — portrait shots fill the cell, landscape shots fit the width and leave light-grey (`#F0F0F0`) or **blurred clean-original** bands above and below (Mark · Work). Headers are respectively a centered bold title with blue double rules, a centered serif title with date and a thin red rule, and an ornamental document frame with **bezier-curved shoulders** plus tracked serif title. Template and column count (1–4, default 1) are **remembered** for next time
 - **Configurable fields**: templates have their own title and field inputs — visit/report date and location (auto-filled from shot time and GPS) on by default; client, visitor, signature, department, reporter and notes off by default, each toggleable
-- **Burst review**: the bottom-left button (thumbnail background with an outlined "N photos" label centered on top) opens the review panel — a grid matching the column count, a trash icon per cell, **long-press drag to reorder** (the dragged cell lifts and follows your finger while the others spring out of the way; single column dodges vertically), and Template / Back / Save buttons at the bottom. "Apply current watermark" at the top overwrites every captured photo's frozen watermark at once
+- **Burst review**: the bottom-left button (thumbnail background with an outlined "N photos" label centered on top) opens the review panel — a grid matching the column count, a trash icon per cell, **long-press drag to reorder** (the dragged cell lifts and follows your finger while the others spring out of the way; single column dodges vertically), and Template / Back / Save buttons at the bottom. A "Long-press to reorder" hint sits under the title, and "Apply current watermark" at the top-right overwrites every burst photo's frozen watermark at once (gallery imports are skipped)
 - **Saving**: full-resolution composite — every photo keeps its **native size with no scaling and no cropping**; photos sit side by side with equal white gaps. JPEG q98, encoded exactly once. If the total exceeds the memory budget the whole page is scaled down proportionally and the actual output size is reported. A **ring progress + percentage + cancel button** is shown while compositing; cancelling keeps the burst cache so you can retry
 - **Confirmation on destructive actions**: exiting collage mode, generating, applying the watermark and deleting a shot all ask first
 

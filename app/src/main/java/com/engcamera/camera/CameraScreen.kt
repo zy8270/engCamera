@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
@@ -258,6 +259,14 @@ fun CameraScreen(
         ActivityResultContracts.PickMultipleVisualMedia(30),
     ) { uris ->
         vm.onAnnotatePicked(uris)
+    }
+
+    // 拼图模式：从相册加图（v0.6.32，用户需求 2026-11-15）。支持多选，
+    // 可与连拍混排（相册图不烧水印，进来什么样就什么样）
+    val collagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(50),
+    ) { uris ->
+        vm.onCollagePicked(uris)
     }
 
     fun startRecordingWithPermission(quick: Boolean = false) {
@@ -628,6 +637,21 @@ fun CameraScreen(
                     onRequestExitCollage = ::requestExitCollage,
                     onConfirmCollage = ::requestConfirmCollage,
                     onEnterCollage = { vm.enterCollage() },
+                    onAddFromGallery = {
+                        // 先 Toast 说明用途，再跳系统照片选择器（用户需求 2026-11-15）。
+                        // 直接弹系统 Toast 而不是走 ui.toast：走状态的话组合会在
+                        // 启动选择器 Activity 时暂停，Toast 要等回到本页才出现
+                        android.widget.Toast.makeText(
+                            context,
+                            I18n.t("可从相册选取图片添加到拼图里"),
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        collagePicker.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            ),
+                        )
+                    },
                 )
             }
 
@@ -762,8 +786,9 @@ fun CameraScreen(
                     title = { Text(I18n.t("同步当前水印？")) },
                     text = {
                         Text(
+                            // 只数连拍的照片：相册导入的图不烧水印，同步对它们无效
                             I18n.t("将把当前水印设置覆盖到已拍的 {n} 张照片上，覆盖后无法撤销。")
-                                .replace("{n}", "${ui.collageItems.size}"),
+                                .replace("{n}", "${ui.collageItems.count { !it.fromGallery }}"),
                         )
                     },
                     confirmButton = {
@@ -2102,6 +2127,7 @@ private fun BottomBar(
     onRequestExitCollage: () -> Unit = {},
     onConfirmCollage: () -> Unit = {},
     onEnterCollage: () -> Unit = {},
+    onAddFromGallery: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -2176,7 +2202,8 @@ private fun BottomBar(
             ) { modeState ->
                 val annotUi = modeState == 1
                 if (modeState == 2) {
-                    // 拼图模式（v0.6.19，用户需求 2026-11-09）：模板设置 + X 退出 两个图标
+                    // 拼图模式（v0.6.19，用户需求 2026-11-09）：模板设置 + X 退出 两个图标。
+                    // v0.6.32 中间加「相册加图」（圆圈+号）：边拍边从相册加、边拼
                     Row(
                         Modifier
                             .height(CapsuleHeight)
@@ -2187,6 +2214,14 @@ private fun BottomBar(
                             Icon(
                                 Icons.Default.GridView,
                                 contentDescription = I18n.t("拼图模板设置"),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.rotate(rot.toFloat()),
+                            )
+                        }
+                        IconButton(onClick = onAddFromGallery, modifier = Modifier.size(CapsuleHeight)) {
+                            Icon(
+                                Icons.Default.AddCircle,
+                                contentDescription = I18n.t("从相册添加图片"),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.rotate(rot.toFloat()),
                             )

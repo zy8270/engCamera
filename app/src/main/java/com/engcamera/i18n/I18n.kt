@@ -496,7 +496,7 @@ private val EN_DICT: Map<String, String> = mapOf(
     "生成" to "Create",
     "连拍预览" to "Burst preview",
     "{n}张" to "{n} photos",
-    "已连拍 {n} 张" to "{n} photos captured",
+    "已连拍 {n} 张" to "{n} captured",
     "同步当前水印" to "Apply current watermark",
     "同步当前水印？" to "Apply current watermark?",
     "将把当前水印设置覆盖到已拍的 {n} 张照片上，覆盖后无法撤销。" to
@@ -511,6 +511,15 @@ private val EN_DICT: Map<String, String> = mapOf(
     "拼图已保存" to "Collage saved",
     "拼图已保存（{w}×{h}）" to "Collage saved ({w}×{h})",
     "拍照失败：{msg}" to "Capture failed: {msg}",
+    // ---------- v0.6.32 拼图从相册加图（用户需求 2026-11-15） ----------
+    "从相册添加图片" to "Add from gallery",
+    "相册" to "Gallery",
+    "可从相册选取图片添加到拼图里" to "Pick photos from the gallery to add to the collage",
+    "正在导入 {n} 张图片…" to "Importing {n} photos…",
+    "已添加 {n} 张" to "{n} added",
+    "已添加 {n} 张图片" to "Added {n} photos",
+    "长按可拖动排序" to "Long-press to reorder",
+    "已添加 {n} 张，{f} 张读取失败" to "Added {n} photos, {f} failed",
     // ---------- v0.6.19 顶部模式标题（用户需求 2026-11-10） ----------
     "确认&标注" to "Confirm & annotate",
     "添加水印" to "Add watermark",

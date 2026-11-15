@@ -176,6 +176,8 @@ data class CollageSettings(
  * @param frameRotation 屏幕系→成片系换算角
  * @param rotationDeg 水印块旋转角（=快门瞬间的量化重力角）
  * @param uprightWidth/uprightHeight 按 EXIF 转正后的像素尺寸（布局用，不解码像素）
+ * @param fromGallery 来自相册选图（v0.6.32，用户需求 2026-11-15）：
+ *   **不烧水印**——相册里是什么样，拼图里就是什么样。水印字段仅为占位，不参与渲染
  */
 data class CollageItem(
     val id: Long,
@@ -186,6 +188,7 @@ data class CollageItem(
     val rotationDeg: Float,
     val uprightWidth: Int,
     val uprightHeight: Int,
+    val fromGallery: Boolean = false,
 ) {
     /** 宽高比（宽/高），已按 EXIF 转正 */
     val aspect: Float
