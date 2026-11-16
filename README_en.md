@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.32/engCamera-v0.6.32-296.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.36/engCamera-v0.6.36-300.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.32 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.36 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -75,9 +75,10 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Editor live camera preview (eye toggle)**: tap the "eye" in the editor to swap the background for the live rear camera — liquid glass refracts it live; closed eye = viewfinder freeze-frame background (settings toggle; off = flat dual-mountain artwork, dark/light variants)
 - **Project groups**: one-tap switch between complete watermark configs (create = copy current, rename, bulk delete, reset), current project shown in the editor title; a persistent quick entry sits left of the bottom mode switch so multi-site users never open the editor just to swap; a new group's name can auto-fill its watermark title (setting)
 - **Configurable fields**: project name (title), time, location, weather, note, counter, custom fields; add/remove/reorder/enable per field; time/location/weather support manual freeze (marked "custom") with one-tap reset; field editing offers "OK & Save" — saves and returns straight to the camera to shoot the next shot
-- **Address options**: expandable inside the location field — split into 8 levels (country / province-state / city / district-street / road / place-community / coordinates / postal code), each with its own **toggle** and **reorder arrows**, applied live to the preview; country and postal code hidden by default (matching previous output), settings carried across templates
-- **Auto location + Chinese addresses**: multi-device fallback chain (system Geocoder structured fields → online reverse-geocode), degrades to coordinates offline; address/weather cached across restarts; refresh shows a loading spinner
+- **Address options**: a row of always-visible **chips** inside the location field (filled = shown, outlined = hidden; tap to toggle, long-press to drag-reorder) splitting the address into 8 levels (country / province-state / city / district-street / road / place-community / coordinates / postal code), applied live to the preview; country and postal code hidden by default (matching previous output), settings carried across templates. **State is visible without expanding** — you can see at a glance which levels are on
+- **Auto location + Chinese addresses**: multi-device fallback chain (system Geocoder structured fields → online reverse-geocode), degrades to coordinates offline; address/weather cached across restarts; refresh shows a loading spinner. **Acquires a fix on startup first, then drops to low-frequency polling** (see "Location strategy & battery" below)
 - **Auto weather + emoji**: fetched with location (e.g. "☀️ 晴 26℃"), flat emoji per condition (sunny/cloudy/overcast/rain/snow/storm/fog…), toggleable, manual entry & refresh supported
+- **Failure reasons surfaced** (v0.6.36): when location or weather fails, a **red error line** is appended under "Auto location: …" / "Auto weather: …" (e.g. `⚠ Last error: TIMEOUT_8000ms`, `DNS_FAIL`, `NULL_FIX`, `REFRESH_TIMEOUT`), with the previous value still shown above — so you can tell "the last value" from "why this refresh didn't update"
 - **Counter field**: auto +1 per saved photo (off by default, enable in settings)
 - **Anti-forgery code** (off by default): a 14-character alphanumeric **content fingerprint** (salted with `EngCameraRnzhy`, computed from the image itself, not random) is burned into the bottom-right corner of every photo; the bundled `verify_anticounterfeit.py` script checks whether a photo has been modified and reports a deviation percentage. It **ignores the watermark and ignores annotations** — the fingerprint is computed on the raw, un-watermarked, un-annotated frame, so only the annotation-free copy is verifiable. Survives JPEG recompression / platform denoising / resizing / global color grading (measured ≤5% deviation), but it is a content fingerprint, not a cryptographic signature: small local edits (~2% of the frame) are not detectable. See [交付说明](交付说明.md) (Chinese) for limits. The editor lets you enter a code manually; the preview shows a placeholder and follows gravity to the physical bottom-right corner
 - **Bottom-right brand badge** (on by default, v0.6.31): a brand mark sits in the bottom-right corner of every photo, sharing the same corner and the same gravity rotation matrix as the anti-forgery code (so it stays at the physical bottom-right corner when shooting landscape or upside down). The built-in default reads "工程水印 / 相机 · 真实可验" in two lines — **both lines are equal width and right-aligned**, the first line larger and the second smaller next to a semi-transparent rounded chip; **all three text strings are editable** (editor → "Anti-forgery & brand" → "Edit text" expands a drawer; leave blank to restore defaults); you can also import your own image from the gallery to replace the whole block (scaled to 0.16W, automatically leaving room for the code line). The badge and the anti-forgery code are **two independent switches** (code off by default, badge on by default)
@@ -102,6 +103,19 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 | Gallery | MediaStore + Coil |
 
 minSdk 24 (Android 7.0+), targetSdk 36.
+
+### Location strategy & battery (v0.6.36)
+
+Location is the source of the watermark address and weather, and it is also the easiest thing to burn battery with silently. This version uses a **two-phase** strategy:
+
+| Phase | Behaviour | Status-bar location icon |
+|---|---|---|
+| Startup / page entry (first fix) | `HIGH_ACCURACY`, every 2s, up to 8s | On (expected) |
+| Steady-state polling | **all persistent registrations removed**; one `setMaxUpdates(1)` single fix every 30s (`BALANCED`, does not power up the GPS chip) | On only for the 1–2s of the fix |
+
+An extra high-accuracy single fix is requested on shutter press and on "Refresh location/weather". Sessions are released immediately when the app goes to the background (the camera page and the editor each hold a ref-counted owner; the session is torn down only when the last one leaves).
+
+Measured (Redmi Note 12 Turbo / Android 15): before the change `dumpsys location` showed gps + network providers registered every 2s with the icon permanently on; after, all three providers sit at `ProviderRequest[OFF]` in steady state and stay `OFF` after pressing Home. In `dumpsys batterystats` location (gnss) accounts for ~6% of the app's total power draw — the bulk is camera and CPU, so **the point of throttling is to stop continuously waking the GPS chip, not that location was the biggest drain**.
 
 ## Build
 

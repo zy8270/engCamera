@@ -17,6 +17,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.engcamera.data.AddressParts
 import com.engcamera.data.appDataStore
 import com.engcamera.data.assembleAddress
+import com.engcamera.i18n.I18n
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -153,6 +154,20 @@ class LocationSource(private val context: Context) {
     private val _refreshingWeather = MutableStateFlow(false)
     val refreshingWeather: StateFlow<Boolean> = _refreshingWeather.asStateFlow()
 
+    /**
+     * 定位失败诊断（v0.6.35，用户需求 2026-11-16：「位置和天气经常出问题，需要显示日志了」）。
+     *
+     * 此前所有失败都被 `runCatching` 静默吞掉，用户只能看到「未获取定位」，无法区分
+     * 是权限、开关、室内无星还是超时。这里把**错误码 + 超时原因**带出来，界面直接
+     * 追加在「自动定位：…」那一行（红字）。空串 = 当前无错误。
+     */
+    private val _locationError = MutableStateFlow("")
+    val locationError: StateFlow<String> = _locationError.asStateFlow()
+
+    /** 天气失败诊断（同上）：超时毫秒数、DNS/TLS/HTTP 状态码等 */
+    private val _weatherError = MutableStateFlow("")
+    val weatherError: StateFlow<String> = _weatherError.asStateFlow()
+
     // 地址缓存：定位回调很频繁（1-2 秒一次），每次都先显示坐标再等联网反查，
     // 会让中文地址"一下消失一下恢复"。缓存 60 秒或位移超 50 米才刷新文本。
     private var cachedAtMs = 0L
@@ -163,7 +178,11 @@ class LocationSource(private val context: Context) {
     @Volatile private var refreshing = false
     private var refreshTimeoutJob: Job? = null
 
-    private companion object {
+    companion object {
+        /** 定位会话持有者标识（v0.6.33）：相机页与编辑器各持一份，最后一个离开才解绑 */
+        const val OWNER_CAMERA = "camera"
+        const val OWNER_EDITOR = "editor"
+
         const val CACHE_TTL_MS = 60_000L
         const val CACHE_MOVE_METERS = 50f
         /** 融合定位首帧看门狗窗口：室内/冷启动正常也要几秒，8s 足够区分"慢"与"死" */
@@ -172,6 +191,30 @@ class LocationSource(private val context: Context) {
         const val REFRESH_TIMEOUT_MS = 12_000L
         /** 权限/定位开关健康巡检周期（改完系统设置回来自愈用） */
         const val HEALTH_INTERVAL_MS = 5_000L
+
+        /**
+         * 启动阶段的高精度窗口（v0.6.35，用户需求 2026-11-16：「启动 app 时要确保拿到位置，
+         * 才进入轮询」）。
+         *
+         * 冷启动没有缓存点时用 HIGH_ACCURACY + 2 秒一次，快速把首点拿到；一旦拿到**新鲜点**
+         * 就自动降到 [IDLE_INTERVAL_MS] 的 BALANCED 低频档——高频档只是"启动抢首点"，
+         * 不是常态。此窗口内没拿到点也不死等，到点就降频（否则室内永远高频耗电）。
+         */
+        const val ACQUIRE_INTERVAL_MS = 2_000L
+
+        /**
+         * 常态轮询间隔（v0.6.35）。原先是 HIGH_ACCURACY + 2 秒一直跑，`dumpsys location`
+         * 实测 gps/network 两个 provider 都在 2 秒一次，通知栏定位标志全程长亮
+         * （电池实测 gnss 1.21mAh/1h25m，占 app 总耗电约 6%）。
+         * 30 秒 + BALANCED 档（只走 Wi-Fi/基站，不启 GPS 芯片）足够写水印地址，
+         * 点刷新/进编辑器/按快门时再单独做一次高精度单次取点。
+         */
+        const val IDLE_INTERVAL_MS = 30_000L
+
+        /** 天气请求超时（v0.6.35）：实测 api.open-meteo.com 单次可达 5.3s（TLS 握手 5.0s），
+         *  原来 5s 必然误判超时——这正是「天气时好时坏」的机制 */
+        const val WEATHER_CONNECT_TIMEOUT_MS = 8_000
+        const val WEATHER_READ_TIMEOUT_MS = 8_000
     }
 
     private fun cacheValid(location: Location): Boolean {
@@ -184,13 +227,38 @@ class LocationSource(private val context: Context) {
 
     private var fusedCallback: LocationCallback? = null
     private var lmListener: LocationListener? = null
+    /** 系统 LocationManager 已注册的 provider（网络通道常驻 + GPS 按需，去重用） */
+    private val lmProviders = mutableSetOf<String>()
 
     /** 首帧看门狗：融合定位注册后迟迟不给点（关开关/无 GMS/被系统压制）就降级 */
     private var watchdogJob: Job? = null
+    /** 常态低频单次取点循环（v0.6.35）：拿到首点后每 30 秒取一次，不留常驻注册 */
+    private var idleJob: Job? = null
     /** 健康巡检：用户在设置里开关定位、权限被系统收回/恢复，无需重启 app 也能自愈 */
     private var healthJob: Job? = null
-    /** 本次融合定位是否已收到任何结果（区分"还没热身"与"彻底没点"） */
-    @Volatile private var gotAnyFix = false
+
+    /**
+     * 本次会话是否已收到**新鲜**定位（v0.6.33 修）。
+     *
+     * 关键：只由定位回调置真，**不能**由 `client.lastLocation` 置真——那只是系统缓存的
+     * 旧点（用户实测 2026-11-16：室内 GPS 一颗星都没有，融合定位只注册了 gps provider，
+     * 迟迟不出点，但 lastLocation 成功回调把看门狗骗过去，降级路径永远不启用）。
+     */
+    @Volatile private var gotFreshFix = false
+
+    /**
+     * 是否处于"启动抢首点"阶段（v0.6.35）。true = 高精度高频（[ACQUIRE_INTERVAL_MS]），
+     * 拿到新鲜点或看门狗超时后转 false，走 [IDLE_INTERVAL_MS] 低频档。
+     */
+    @Volatile private var acquiring = false
+
+    /**
+     * 定位会话持有者（v0.6.33）。相机页与水印编辑器都要定位，而 NavHost 切页时
+     * **新页先组合、旧页后 dispose**——若各自 start/stop，编辑器刚启动就被相机页的
+     * stop 拆掉（用户实测：编辑器里定位图标闪一下就灭）。改成按名字登记持有者，
+     * 最后一个离开时才真正解绑。
+     */
+    private val sessionOwners = mutableSetOf<String>()
 
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
@@ -239,30 +307,72 @@ class LocationSource(private val context: Context) {
         true // 探测失败时不要误报，交给定位回调本身
     }
 
-    fun start() {
+    /**
+     * 请求开始定位（v0.6.33 会话化）。
+     *
+     * 相机页与水印编辑器都需要持续定位，而 NavHost 切页时新页先组合、旧页后 dispose：
+     * 各自 start/stop 会让编辑器刚启动就被相机页的 stop 拆掉（用户实测 2026-11-16：
+     * 编辑器里系统定位图标闪一下就灭，而地图软件长亮）。这里按 owner 登记，
+     * 只有最后一个持有者离开才真正解绑。
+     *
+     * @param owner 持有者标识（"camera" / "editor"），同一 owner 重复调用无副作用
+     */
+    fun start(owner: String = OWNER_CAMERA) {
+        sessionOwners += owner
+        startLocked()
+    }
+
+    /**
+     * 释放某个持有者（v0.6.33）：还有其他持有者时不真的停，避免切页期间
+     * "新页先组合、旧页后 dispose" 把正在用的定位会话拆掉。
+     */
+    fun stop(owner: String = OWNER_CAMERA) {
+        sessionOwners -= owner
+        if (sessionOwners.isNotEmpty()) return
+        stopLocked()
+    }
+
+    /** 真正建立定位会话（幂等：已在跑就直接返回） */
+    private fun startLocked() {
         // 巡检先行：即使此刻权限缺失/开关关闭也持续复查，用户改完设置回来能自愈
         startHealthMonitor()
         if (!hasLocationPermission()) {
             // 权限缺失（含"仅本次允许"被系统撤销）：曾授权过的用户要提示，首次没同意的不打扰
             notePermission(false)
+            _locationError.value = I18n.t("无定位权限（PERM_DENIED）")
             return
         }
         notePermission(true)
         // 定位总开关关闭：先标状态（界面提示跳设置），仍尝试一次——部分 ROM 关开关时
         // 仍能拿到缓存点；拿不到由下面的看门狗降级
-        noteServiceEnabled(isLocationServiceEnabled())
+        val serviceOn = isLocationServiceEnabled()
+        noteServiceEnabled(serviceOn)
+        if (!serviceOn) {
+            _locationError.value = I18n.t("系统定位开关关闭（SVC_OFF）")
+        }
         if (fusedCallback != null || lmListener != null) return
-        gotAnyFix = false
+        // 已在低频轮询模式（v0.6.35）：只补一次高精度单次取点，不要重开抢首点会话——
+        // 否则每次进页面都会把 GPS 芯片拉起来跑满 8 秒
+        if (idleJob?.isActive == true) {
+            singleShot(Priority.PRIORITY_HIGH_ACCURACY)
+            return
+        }
+        gotFreshFix = false
+        acquiring = true
         try {
             val client = LocationServices.getFusedLocationProviderClient(context)
-            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000L)
-                .setMinUpdateIntervalMillis(1000L)
+            // 启动抢首点用高精度（v0.6.35）：用户明确要求"启动 app 时要确保拿到位置，
+            // 才进入轮询"。拿到新鲜点后 requestAcquire→requestIdle 自动降频
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, ACQUIRE_INTERVAL_MS)
+                .setMinUpdateIntervalMillis(1_000L)
                 .build()
             val callback = object : LocationCallback() {
                 override fun onLocationResult(result: LocationResult) {
                     result.lastLocation?.let {
-                        gotAnyFix = true
+                        gotFreshFix = true
                         onLocation(it)
+                        // 首点到手：立刻降到低频档，别让高精度会话一直挂着耗电
+                        enterIdleMode()
                     }
                 }
             }
@@ -271,23 +381,64 @@ class LocationSource(private val context: Context) {
                 // v0.6.14 修复：此前只挂 addOnSuccessListener，关定位开关时 Task 以
                 // RESOLUTION_REQUIRED 失败、被静默吞掉，且 fusedCallback 已置非空导致
                 // start() 后续全部早退，降级路径永不启用（用户侧表现=永远"未获取定位"）
-                .addOnFailureListener {
+                .addOnFailureListener { t ->
                     if (fusedCallback === callback) {
                         dropFused(callback)
+                        // 错误码带出来（v0.6.35）：RESOLUTION_REQUIRED=定位开关未开，
+                        // 其余多为 GMS 缺失/被 ROM 压制
+                        _locationError.value = I18n.t("融合定位注册失败（{msg}）")
+                            .replace("{msg}", locationFailureReason(t))
                         startFallback()
                     }
                 }
             client.lastLocation
-                .addOnSuccessListener { it?.let { loc -> gotAnyFix = true; onLocation(loc) } }
+                .addOnSuccessListener { loc ->
+                    // v0.6.33：lastLocation 只是系统缓存的**旧点**，可以拿来先显示，
+                    // 但**不能**置 gotFreshFix——否则看门狗被它骗过去，室内（GPS 无星、
+                    // 融合定位只注册了 gps provider）永远不降级网络通道（用户实测 2026-11-16）
+                    loc?.let { onLocation(it) }
+                }
                 .addOnFailureListener {
                     // lastLocation 失败无害（无缓存），真正的判定交给看门狗
                 }
+            // 网络通道常驻（v0.6.33）：融合定位在室内常常只挂 GPS、迟迟不出点，
+            // 而系统 network provider 一直有新鲜点（Wi-Fi/基站，精度足够写水印地址）。
+            // 与融合定位并行挂上，谁先给点用谁——不依赖看门狗超时，地址能立刻出来
+            startNetworkFallback()
             startWatchdog()
             startHealthMonitor()
         } catch (t: Throwable) {
-            // 无 GMS 服务等场景，降级系统定位
+            // 无 GMS 服务等场景，降级系统定位。
+            // 也要起看门狗（v0.6.35）：否则 acquiring 永远为真，provider 注册会一直挂着、
+            // 定位标志长亮——8 秒后由看门狗转进低频单次取点模式
+            _locationError.value = I18n.t("融合定位不可用（{msg}）")
+                .replace("{msg}", locationFailureReason(t))
             startFallback()
+            startWatchdog()
         }
+    }
+
+    /** 真正拆掉定位会话（所有持有者都离开了） */
+    private fun stopLocked() {
+        watchdogJob?.cancel()
+        watchdogJob = null
+        idleJob?.cancel()
+        idleJob = null
+        healthJob?.cancel()
+        healthJob = null
+        acquiring = false
+        try {
+            fusedCallback?.let { LocationServices.getFusedLocationProviderClient(context).removeLocationUpdates(it) }
+        } catch (_: Throwable) {
+        }
+        fusedCallback = null
+        try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            lmListener?.let { lm.removeUpdates(it) }
+        } catch (_: Throwable) {
+        }
+        lmListener = null
+        lmProviders.clear()
     }
 
     /**
@@ -320,31 +471,118 @@ class LocationSource(private val context: Context) {
                 // 只在"由不可用转可用"的瞬间重注册一次：普通失败不轮询重试，避免耗电
                 if (wasBlocked) {
                     wasBlocked = false
-                    start()
+                    // 必须走 startLocked 而不是 start()（v0.6.35 修）：start() 默认会登记
+                    // OWNER_CAMERA，在只有编辑器持有时会凭空多一个持有者，
+                    // 之后编辑器 stop 也解绑不掉——定位会话永久泄漏、通知栏长亮
+                    startLocked()
                 }
             }
         }
     }
 
     /**
-     * 首帧看门狗：注册融合定位后 8 秒内一个点都没拿到，视为该通道不可用（无完整 GMS、
-     * 定位被 ROM 压制、开关关闭且无缓存点），解绑并降级系统 LocationManager。
+     * 首帧看门狗：注册融合定位后 8 秒内一个**新鲜**点都没拿到，视为该通道不可用
+     * （无完整 GMS、定位被 ROM 压制、开关关闭且无缓存点）。
      * 旧逻辑只在同步抛异常时才降级，异步失败场景永远降不了。
+     *
+     * v0.6.33：判据从 gotAnyFix 改成 gotFreshFix——`client.lastLocation` 成功回调
+     * 只是系统缓存旧点，此前把它当"拿到点"，室内 GPS 无星时看门狗被永久骗过。
      */
     private fun startWatchdog() {
         watchdogJob?.cancel()
         watchdogJob = scope.launch {
             delay(WATCHDOG_MS)
             if (!isActive) return@launch
-            if (gotAnyFix) return@launch
+            if (gotFreshFix) return@launch
             noteServiceEnabled(isLocationServiceEnabled())
-            fusedCallback?.let { cb ->
-                if (lmListener == null) {
-                    dropFused(cb)
-                    startFallback()
-                }
+            if (_locationError.value.isBlank()) {
+                _locationError.value = I18n.t("8 秒内未拿到定位（TIMEOUT_8S）")
+            }
+            // 8 秒还没首点（室内 GPS 无星就是这个场景）：不再死等高精度，
+            // 转低频单次取点模式，别让 GPS 芯片一直醒着
+            enterIdleMode()
+        }
+    }
+
+    /**
+     * 进入常态低频模式（v0.6.35，用户需求 2026-11-16）。
+     *
+     * 关键设计：**拆掉所有持续注册**，改由 [idleJob] 每 [IDLE_INTERVAL_MS] 做一次
+     * 单次取点。持续注册会让通知栏定位标志全程长亮（`dumpsys location` 实测原先
+     * gps/network 两个 provider 都是 2 秒一次）；单次取点只在取的那一两秒亮一下。
+     *
+     * 用户要求「启动时确保拿到位置，才进入轮询」——抢首点阶段是 [beginAcquire]，
+     * 拿到点（或看门狗超时）才走到这里。
+     */
+    private fun enterIdleMode() {
+        // 幂等（v0.6.35）：首点可能由融合定位与系统 provider 同时送来，
+        // 重复进入会把刚建好的 idleJob 反复拆建
+        if (!acquiring && idleJob?.isActive == true) return
+        acquiring = false
+        watchdogJob?.cancel()
+        watchdogJob = null
+        // 拆掉持续注册（这一步才让定位标志熄灭）
+        fusedCallback?.let { dropFused(it) }
+        removeLmProviders()
+        if (idleJob?.isActive == true) return
+        idleJob = scope.launch {
+            while (isActive) {
+                delay(IDLE_INTERVAL_MS)
+                if (!isActive) break
+                if (sessionOwners.isEmpty()) break
+                // BALANCED：只走 Wi-Fi/基站，不启 GPS 芯片
+                singleShot(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
             }
         }
+    }
+
+    /**
+     * 单次取点（v0.6.35）：`setMaxUpdates(1)` 让系统拿到一个点就自动停，
+     * 不会留下常驻注册（定位标志自动熄灭）。
+     */
+    private fun singleShot(priority: Int) {
+        try {
+            val client = LocationServices.getFusedLocationProviderClient(context)
+            val request = LocationRequest.Builder(priority, 1_000L)
+                .setMaxUpdates(1)
+                .build()
+            val callback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    result.lastLocation?.let { loc ->
+                        gotFreshFix = true
+                        onLocation(loc)
+                    }
+                    // 显式解绑，避免个别 ROM 不遵守 maxUpdates
+                    runCatching { client.removeLocationUpdates(this) }
+                }
+            }
+            client.requestLocationUpdates(request, callback, Looper.getMainLooper())
+        } catch (_: Throwable) {
+            // 单次取点失败不报错：下一轮 30 秒后还会再试，避免刷屏
+        }
+    }
+
+    /**
+     * 按需取一次新鲜点（v0.6.35）：拍照前、进编辑器、点刷新时调用。
+     * 与 idle 的单次取点区别是**高精度**——这些时刻用户马上要写地址进水印。
+     */
+    fun requestFreshFix() {
+        if (!hasLocationPermission()) return
+        // 已在抢首点阶段：那边本来就在高精度高频跑，不必叠加
+        if (acquiring) return
+        singleShot(Priority.PRIORITY_HIGH_ACCURACY)
+    }
+
+    /**
+     * 把定位异常翻成用户能看懂的短标签（v0.6.35 用户需求「显示错误代码」）。
+     * 不直接抛原始异常 message（长且中英混杂），保留可搜索的英文代号。
+     */
+    private fun locationFailureReason(t: Throwable): String = when {
+        t is SecurityException -> "SEC"
+        t.message?.contains("RESOLUTION_REQUIRED", true) == true -> "RESOLUTION_REQUIRED"
+        t.message?.contains("TIMEOUT", true) == true -> "TIMEOUT"
+        t.message?.contains("unavailable", true) == true -> "UNAVAILABLE"
+        else -> t.javaClass.simpleName.ifBlank { "UNKNOWN" }
     }
 
     private fun dropFused(cb: LocationCallback) {
@@ -355,50 +593,68 @@ class LocationSource(private val context: Context) {
         if (fusedCallback === cb) fusedCallback = null
     }
 
+    /**
+     * 系统 LocationManager 通道（v0.6.33）。与融合定位并行常驻，而不是等看门狗超时——
+     * 用户实测 2026-11-16：室内融合定位只注册了 gps provider（一颗星都没有），
+     * 系统 network provider 却一直有新鲜点（Wi-Fi/基站，hAcc≈30m，写水印地址绰绰有余）。
+     */
     private fun startFallback() {
-        if (lmListener != null) return
-        try {
-            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val listener = LocationListener { location ->
-                gotAnyFix = true
-                onLocation(location)
-            }
-            var registered = 0
-            listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).forEach { provider ->
-                try {
-                    if (lm.isProviderEnabled(provider)) {
-                        lm.requestLocationUpdates(provider, 2000L, 1f, listener, Looper.getMainLooper())
-                        registered++
-                    }
-                } catch (_: SecurityException) {
-                    // 无权限的 provider 直接跳过
-                }
-            }
-            // 一个 provider 都没注册上（定位开关关闭）：不要把监听器留成非空，
-            // 否则 start() 的早退判断会让"用户后来打开定位"永远不再重试
-            if (registered == 0) return
-            lmListener = listener
-        } catch (_: Throwable) {
-            // 定位完全不可用时保持“未获取定位”，不阻塞拍照
-        }
+        startNetworkFallback()
+        startGpsFallback()
     }
 
-    fun stop() {
-        watchdogJob?.cancel()
-        watchdogJob = null
-        healthJob?.cancel()
-        healthJob = null
-        try {
-            fusedCallback?.let { LocationServices.getFusedLocationProviderClient(context).removeLocationUpdates(it) }
-        } catch (_: Throwable) {
-        }
-        fusedCallback = null
+    /** 网络通道：一直挂着（室内唯一可靠的来源），按 provider 去重 */
+    private fun startNetworkFallback() {
+        registerLmProvider(LocationManager.NETWORK_PROVIDER)
+    }
+
+    /** GPS 通道：室外精度更好，与网络通道并行，谁先给点用谁 */
+    private fun startGpsFallback() {
+        registerLmProvider(LocationManager.GPS_PROVIDER)
+    }
+
+    /** 拆掉所有系统 provider 注册（v0.6.35：进低频模式时用，让定位标志熄灭） */
+    private fun removeLmProviders() {
+        if (lmProviders.isEmpty()) return
         try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
             lmListener?.let { lm.removeUpdates(it) }
         } catch (_: Throwable) {
         }
+        lmProviders.clear()
+        // 必须清空监听器引用（v0.6.35）：startLocked 的早退判据是 `lmListener != null`，
+        // 留着旧引用会让下次进页面直接早退、连单次取点都不做
         lmListener = null
+    }
+
+    private fun registerLmProvider(provider: String) {
+        if (provider in lmProviders) return
+        try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            if (!lm.isProviderEnabled(provider)) {
+                _locationError.value = I18n.t("provider {p} 未启用（PROVIDER_OFF）")
+                    .replace("{p}", provider)
+                return
+            }
+            val listener = lmListener ?: LocationListener { location ->
+                gotFreshFix = true
+                onLocation(location)
+                // 系统 provider 拿到点也算首点到手，转低频档（v0.6.35）
+                enterIdleMode()
+            }.also { lmListener = it }
+            // 抢首点期间 2 秒一次（快速拿点），之后由 enterIdleMode 全部拆掉改单次取点。
+            // 原先无条件 2 秒常驻是通知栏定位标志长亮的直接原因（v0.6.35）
+            lm.requestLocationUpdates(
+                provider,
+                if (acquiring) ACQUIRE_INTERVAL_MS else IDLE_INTERVAL_MS,
+                1f, listener, Looper.getMainLooper(),
+            )
+            lmProviders += provider
+        } catch (_: SecurityException) {
+            // 无权限的 provider 直接跳过
+        } catch (_: Throwable) {
+            // 定位完全不可用时保持"未获取定位"，不阻塞拍照
+        }
     }
 
     /** 手动刷新：立即请求一次当前位置（编辑器"刷新定位"按钮用），结果通过 text 流通知 */
@@ -406,10 +662,13 @@ class LocationSource(private val context: Context) {
         if (!hasLocationPermission()) {
             // 无权限时不要假装在定位：界面据此提示去授权（"仅本次允许"离前台会被系统撤销）
             notePermission(false)
+            _locationError.value = I18n.t("无定位权限（PERM_DENIED）")
             return
         }
         notePermission(true)
-        noteServiceEnabled(isLocationServiceEnabled())
+        val serviceOn = isLocationServiceEnabled()
+        noteServiceEnabled(serviceOn)
+        if (!serviceOn) _locationError.value = I18n.t("系统定位开关关闭（SVC_OFF）")
         cachedAtMs = 0L // 强制绕过缓存
         prevTextBeforeRefresh = _text.value
         refreshing = true
@@ -426,12 +685,19 @@ class LocationSource(private val context: Context) {
                     delivered = true
                     // 成功回调但 location 为 null（无缓存点、GPS 未定位，很常见）：
                     // 旧代码 delivered=true 就吞掉降级，文本永久停在"定位中…"
-                    if (location != null) onLocation(location) else startFallbackOnce()
+                    if (location != null) onLocation(location) else {
+                        _locationError.value = I18n.t("单次取点返回空（NULL_FIX）")
+                        startFallbackOnce()
+                    }
                 }
-                .addOnFailureListener {
+                .addOnFailureListener { t ->
+                    _locationError.value = I18n.t("单次取点失败（{msg}）")
+                        .replace("{msg}", locationFailureReason(t))
                     if (!delivered) startFallbackOnce()
                 }
         } catch (t: Throwable) {
+            _locationError.value = I18n.t("单次取点异常（{msg}）")
+                .replace("{msg}", locationFailureReason(t))
             startFallbackOnce()
         }
     }
@@ -444,6 +710,9 @@ class LocationSource(private val context: Context) {
             if (!isActive) return@launch
             if (refreshing) {
                 noteServiceEnabled(isLocationServiceEnabled())
+                // 超时原因写进诊断（v0.6.35）：这是"点了刷新一直转圈"的实情
+                _locationError.value = I18n.t("刷新超时 {s}s（REFRESH_TIMEOUT）")
+                    .replace("{s}", (REFRESH_TIMEOUT_MS / 1000).toString())
                 finishRefresh()
             }
         }
@@ -501,6 +770,7 @@ class LocationSource(private val context: Context) {
         hintDismissed = false // 定位真恢复了：复位，下次再出问题还会提示一次
         noteServiceEnabled(true) // 能拿到点说明通道是通的，清掉提示
         notePermission(true)
+        _locationError.value = "" // 拿到点即清错误（v0.6.35）
         // 手动刷新拿到结果：结束刷新态，取消超时回退（否则 12s 后会把新地址覆盖回旧值）
         val wasRefreshing = refreshing
         refreshing = false
@@ -533,24 +803,61 @@ class LocationSource(private val context: Context) {
         }
     }
 
-    /** Open-Meteo 当前天气（免费无 key），WMO 代码映射中文；失败静默保留旧值 */
+    /** Open-Meteo 当前天气（免费无 key），WMO 代码映射中文；失败把原因写进 [weatherError] */
     private suspend fun fetchWeather(location: Location) = withContext(Dispatchers.IO) {
-        runCatching {
-            val url = java.net.URL(
-                "https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}" +
-                    "&longitude=${location.longitude}&current_weather=true",
-            )
-            val json = url.openConnection().let { it as java.net.HttpURLConnection }.apply {
-                connectTimeout = 5000
-                readTimeout = 5000
-            }.inputStream.bufferedReader().use { it.readText() }
-            val temp = Regex("\"temperature\":(-?[0-9.]+)").find(json)?.groupValues?.get(1)
-            val code = Regex("\"weathercode\":([0-9]+)").find(json)?.groupValues?.get(1)?.toIntOrNull()
-            if (temp != null && code != null) {
-                _weather.value = "${wmoText(code)} ${temp.trimEnd('0').trimEnd('.')}℃"
-                persistCache()
+        // 超时从 5s 放宽到 8s（v0.6.35）：实机连测 api.open-meteo.com 单次可达 5.36s
+        // （TLS 握手 5.04s），5s 必然误判——这就是「天气时好时坏」的机制
+        val urlText = "https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}" +
+            "&longitude=${location.longitude}&current_weather=true"
+        var lastReason = ""
+        // 一次重试：慢多半发生在 DNS/TLS 握手，第二个请求通常走已建好的连接池
+        for (attempt in 1..2) {
+            val result = runCatching {
+                val conn = java.net.URL(urlText).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = WEATHER_CONNECT_TIMEOUT_MS
+                conn.readTimeout = WEATHER_READ_TIMEOUT_MS
+                try {
+                    val code = conn.responseCode
+                    if (code != 200) {
+                        lastReason = "HTTP_$code"
+                        return@runCatching null
+                    }
+                    val json = conn.inputStream.bufferedReader().use { it.readText() }
+                    val temp = Regex("\"temperature\":(-?[0-9.]+)").find(json)?.groupValues?.get(1)
+                    val wmo = Regex("\"weathercode\":([0-9]+)").find(json)?.groupValues?.get(1)?.toIntOrNull()
+                    if (temp == null || wmo == null) {
+                        lastReason = "PARSE"
+                        null
+                    } else {
+                        "${wmoText(wmo)} ${temp.trimEnd('0').trimEnd('.')}℃"
+                    }
+                } finally {
+                    runCatching { conn.disconnect() }
+                }
             }
+            val text = result.getOrNull()
+            if (text != null) {
+                _weather.value = text
+                _weatherError.value = ""
+                persistCache()
+                return@withContext
+            }
+            // 异常路径：把异常类型/超时翻成可读代号
+            result.exceptionOrNull()?.let { lastReason = weatherFailureReason(it) }
+            if (attempt == 1) delay(600)
         }
+        _weatherError.value = lastReason.ifBlank { "UNKNOWN" }
+    }
+
+    /** 天气请求失败原因（v0.6.35）：超时/DNS/TLS/HTTP 各自可辨认 */
+    private fun weatherFailureReason(t: Throwable): String = when {
+        t is java.net.SocketTimeoutException -> "TIMEOUT_${WEATHER_CONNECT_TIMEOUT_MS}ms"
+        t is java.net.UnknownHostException -> "DNS_FAIL"
+        t is javax.net.ssl.SSLException -> "TLS_FAIL"
+        t is java.net.ConnectException -> "CONNECT_FAIL"
+        t is java.io.IOException && t.message?.contains("timeout", true) == true ->
+            "TIMEOUT_${WEATHER_CONNECT_TIMEOUT_MS}ms"
+        else -> t.javaClass.simpleName.ifBlank { "UNKNOWN" }
     }
 
     /** 手动刷新天气：用最近一次定位坐标强制重取（编辑器"刷新天气"按钮用） */
@@ -559,15 +866,23 @@ class LocationSource(private val context: Context) {
             latitude = cachedLat
             longitude = cachedLon
         }
-        if (loc.latitude == 0.0 && loc.longitude == 0.0) return
+        if (loc.latitude == 0.0 && loc.longitude == 0.0) {
+            // 没有坐标就没法问天气：明确告诉用户先解决定位（v0.6.35）
+            _weatherError.value = I18n.t("无坐标（NO_COORD）")
+            return
+        }
         _refreshingWeather.value = true
         scope.launch {
             try {
-                // 总预算兜底（v0.6.25）：connect+read 各 5s，极端情况下仍可能卡住，
-                // 用 withTimeout 保证转圈一定会停
-                kotlinx.coroutines.withTimeout(12_000L) { fetchWeather(loc) }
+                // 总预算兜底（v0.6.25）：connect+read 各 8s，且失败会重试一次，
+                // 最坏 16s+ 才结束——预算必须比内部两轮加起来更长，否则
+                // withTimeout 会抢在 fetchWeather 之前掐断，转圈停了但错误没写进诊断
+                kotlinx.coroutines.withTimeout(20_000L) { fetchWeather(loc) }
             } catch (_: Throwable) {
-                // 超时/失败都静默保留旧值（与原行为一致）
+                // 超时：写诊断，不把用户卡在转圈上（旧值保留）
+                if (_weatherError.value.isBlank()) {
+                    _weatherError.value = "TIMEOUT_20s"
+                }
             } finally {
                 // 无论成功失败都要收掉转圈
                 _refreshingWeather.value = false

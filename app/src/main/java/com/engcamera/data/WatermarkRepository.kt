@@ -165,7 +165,7 @@ class WatermarkRepository(private val context: Context) {
                                                 migrateWebOpacity(
                                                     migrateShadowAlpha(
                                                         migrateLiquidGlass(
-                                                            migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it)))),
+                                                            migrateAddressOrder(migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it))))),
                                                         ),
                                                     ),
                                                 ),
@@ -250,7 +250,7 @@ class WatermarkRepository(private val context: Context) {
                                                 migrateWebScale(
                                                     migrateWebOpacity(
                                                         migrateShadowAlpha(
-                                                            migrateLiquidGlass(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state)))),
+                                                            migrateLiquidGlass(migrateAddressOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state))))),
                                                         ),
                                                     ),
                                                 ),
@@ -314,6 +314,20 @@ class WatermarkRepository(private val context: Context) {
     private fun ensureCountField(s: WatermarkState): WatermarkState =
         if (s.fields.none { it.type == FieldType.COUNT }) {
             s.copy(fields = s.fields + WatermarkField("f_count", FieldType.COUNT, "计数", "1"))
+        } else {
+            s
+        }
+
+    /**
+     * 存量数据迁移（v0.6.34，用户拍板 2026-11-16）：地址层级默认顺序改为**国家排最前**。
+     *
+     * 仅当 order 恰好等于旧默认值时替换——用户自己调过顺序的不动；替换后特征消失，幂等。
+     * 国家默认仍隐藏（DEFAULT_HIDDEN），所以默认输出与升级前完全一致，
+     * 只有用户打开「国家」开关时才会看到它出现在最前面。
+     */
+    private fun migrateAddressOrder(s: WatermarkState): WatermarkState =
+        if (s.style.addressOrder == AddressParts.LEGACY_DEFAULT_ORDER) {
+            s.copy(style = s.style.copy(addressOrder = AddressParts.DEFAULT_ORDER))
         } else {
             s
         }

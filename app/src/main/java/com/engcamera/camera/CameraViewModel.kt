@@ -856,7 +856,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     fun startSensors() {
         gravitySensor.start()
-        locationSource.start()
+        // 会话化（v0.6.33）：编辑器也要定位，切页期间谁都不许把对方拆掉
+        locationSource.start(com.engcamera.location.LocationSource.OWNER_CAMERA)
     }
 
     fun stopEverything() {
@@ -872,7 +873,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // 主动 unbind 会导致恢复时需要整体重绑（白屏诱因之一）
         if (_ui.value.recording) stopRecording()
         gravitySensor.stop()
-        locationSource.stop()
+        locationSource.stop(com.engcamera.location.LocationSource.OWNER_CAMERA)
     }
 
     /** 拖动落盘防抖：拖动期间只改内存，停手 400ms 后写一次盘 */
@@ -1060,6 +1061,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
             return
         }
         _ui.update { it.copy(capturing = true) }
+        // 按下快门补一次高精度取点（v0.6.35）：常态是 30 秒低频轮询，用户可能已经
+        // 走了几十米。这里不阻塞拍照——拿到的点会立刻更新 dynamic，本次若赶不上
+        // 就用最近一次的值（水印里坐标误差最多几十米，但绝大多数情况几秒内就到）
+        locationSource.requestFreshFix()
         playShutterIfNeeded()
         val frameRotation = frameRotationFor(quantizedRoll.value)
         val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")

@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntOffsetAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -24,11 +25,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -53,6 +56,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -101,6 +105,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -162,6 +172,9 @@ fun EditorScreen(onBack: () -> Unit) {
     val weatherText by vm.weatherText.collectAsState()
     val refreshingLocation by vm.refreshingLocation.collectAsState()
     val refreshingWeather by vm.refreshingWeather.collectAsState()
+    // 失败诊断（v0.6.35）：错误码/超时原因，追加在自动定位/自动天气后面红字显示
+    val locationError by vm.locationError.collectAsState()
+    val weatherError by vm.weatherError.collectAsState()
     val fieldHistory by vm.fieldHistory.collectAsState()
     val groups by vm.projects.collectAsState()
     // 定位异常（与相机页同一份状态：用户在相机页点过提示条的 X，这里也不再提示）
@@ -215,6 +228,31 @@ fun EditorScreen(onBack: () -> Unit) {
                 ),
             )
             locDisabled -> openLocationSettings()
+        }
+    }
+
+    // 编辑器内的定位会话（v0.6.33，用户反馈 2026-11-16）：相机页 onDispose 会把定位解绑，
+    // 而 NavHost 切页是"新页先组合、旧页后 dispose"——不在这里持有一份，编辑器里就没有
+    // 任何持续定位注册，点刷新只能拿到一次性结果（系统定位图标闪一下就灭），
+    // 「自动定位：…」与水印预览也不会自己更新。
+    //
+    // v0.6.35 补：编辑器同样要按生命周期释放。此前只有 onDispose（离开页面）才解绑，
+    // 用户按 Home 退到后台时注册仍在——加上相机页的持有者，通知栏定位标志会一直亮。
+    // 这里挂 ON_PAUSE/ON_RESUME，退后台立刻让出定位（编辑器后台没有实时预览的需求）。
+    val editorLifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(editorLifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> vm.startLocationSession()
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> vm.stopLocationSession()
+                else -> Unit
+            }
+        }
+        editorLifecycle.lifecycle.addObserver(observer)
+        vm.startLocationSession()
+        onDispose {
+            editorLifecycle.lifecycle.removeObserver(observer)
+            vm.stopLocationSession()
         }
     }
 
@@ -676,6 +714,9 @@ fun EditorScreen(onBack: () -> Unit) {
             autoWeather = weatherText,
             refreshingLocation = refreshingLocation,
             refreshingWeather = refreshingWeather,
+            // 失败诊断（v0.6.35）：有错误时追加在原值后面红字显示，旧值仍可见
+            locationError = locationError,
+            weatherError = weatherError,
             currentTime = dynamic.time,
             weatherEmojiOn = state.style.weatherEmoji,
             onWeatherEmojiChange = { vm.setTemplateSwitch("weatherEmoji", it) },
@@ -893,10 +934,26 @@ private fun AntiFakeDialog(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(I18n.t("防伪码&品牌"), modifier = Modifier.weight(1f))
+                Text(I18n.t("防伪码&品牌"))
+                // 「自定义」tag（v0.6.34，用户需求 2026-11-16）：防伪码也是"自动生成"类——
+                // 默认按画面内容算，用户填了手动码才叫自定义；点「自动生成」清空后 tag 立刻消失
+                if (text.isNotBlank()) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        I18n.t("自定义"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFFB300),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
                 // 「自动生成」移到标题右侧（用户需求 2026-11-15，与刷新定位/天气同款位置）
                 TextButton(
-                    onClick = onAutoGenerate,
+                    onClick = {
+                        // 同时清掉对话框本地输入框（v0.6.34）：只改 VM 的话输入框还留着
+                        // 刚才的手动码，「自定义」tag 也不会消失——用户会以为按钮没生效
+                        text = ""
+                        onAutoGenerate()
+                    },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1277,8 +1334,47 @@ private fun LocationHintInline(
     }
 }
 
+/**
+ * 失败诊断行（v0.6.35，用户需求 2026-11-16：「把错误代码和超时原因显式展示」）。
+ *
+ * 红字高亮、小号、可换行——错误码（TIMEOUT_8000ms / DNS_FAIL / NULL_FIX 等）可能较长，
+ * 必须允许折行而不是省略号截断，否则用户看不到真正的原因。
+ */
+@Composable
+private fun ErrorLine(text: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            Icons.Default.ErrorOutline,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 /** 支持品牌 logo 的布局（用户需求 2026-11-04：仅 4 款工程类模板） */
 private val LOGO_LAYOUTS = setOf("CLASSIC", "TODAY_CARD", "MARK_CARD", "MARK_CARD_LIGHT")
+
+/**
+ * 「会自动生成内容」的字段类型（v0.6.34，用户需求 2026-11-16）。
+ *
+ * 只有这几类字段才存在"自定义"语义：内容本来由系统按拍照时刻自动填写，
+ * 用户手动改写才叫定格。备注/标题/施工单位等本来就是用户自己填的，不显示「自定义」。
+ *
+ * 防伪码不在这份清单里——它不是 WatermarkField，是独立的开关+手动码
+ * （见 [AntiFakeRow] 与防伪码对话框的标题 tag）。
+ */
+private val AUTO_FIELD_TYPES = setOf(FieldType.DATETIME, FieldType.LOCATION, FieldType.WEATHER)
 
 @Composable
 private fun EditFieldDialog(
@@ -1289,6 +1385,9 @@ private fun EditFieldDialog(
     // v0.6.25 刷新加载态（用户反馈 2026-11-12：点刷新后看不到任何反馈）
     refreshingLocation: Boolean,
     refreshingWeather: Boolean,
+    // v0.6.35 失败诊断（用户需求 2026-11-16）：错误码 + 超时原因，追加在原值后红字显示
+    locationError: String,
+    weatherError: String,
     currentTime: String,
     weatherEmojiOn: Boolean,
     onWeatherEmojiChange: (Boolean) -> Unit,
@@ -1360,23 +1459,54 @@ private fun EditFieldDialog(
         )
     }
     /**
-     * 用户是否真正编辑过 input 内容（用户需求 2026-11-12）。
+     * 用户是否真正编辑过 input 内容（用户需求 2026-11-12，v0.6.33 修订）。
      *
-     * 只有它才应该让字段进入"自定义"（写入非空 value = 定格、不再跟随自动刷新）。
-     * 地址选项的开关/排序会回填 input（[setValueText]），那是**预览**不是编辑——
-     * 若把回填当成编辑，用户只点了个开关再按确定，位置就被锁定不再自动定位了。
+     * **只有用户自己打字**才算自定义（写入非空 value = 定格、不再跟随自动刷新）。
      */
     var inputEdited by remember(field.id) { mutableStateOf(false) }
-    /** 程序回填（地址选项预览）专用：改文本但不置 inputEdited */
-    fun setPreviewText(t: String) {
+    /**
+     * 本次对话框里是否有过**程序回填**（地址选项开关/排序、刷新定位/天气后的跟随）。
+     *
+     * v0.6.33 修复（用户反馈 2026-11-16）：此前程序回填只改文本、不动 [inputEdited]，
+     * 于是"打字 → 点地址选项 → 确定"会把自定义状态留在 true，字段被锁在用户早先打的
+     * 那几个字上，而输入框里明明显示的是自动拼装的地址——不符合直觉。
+     * 现在按用户拍板的语义：只要 input 被**程序**改写过，就清掉自定义，
+     * 提交时写空 = 继续跟随自动定位，水印就是输入框里看到的内容。
+     */
+    var autoFilled by remember(field.id) { mutableStateOf(false) }
+    /** 用户输入（打字、点历史记录）：进入自定义 */
+    fun markUserEdit(t: String) {
         setValueText(t)
+        inputEdited = true
+        autoFilled = false
+    }
+    /** 程序回填（地址选项预览、刷新跟随）：改文本并清除自定义 */
+    fun applyAutoText(t: String) {
+        setValueText(t)
+        inputEdited = false
+        autoFilled = true
     }
     /**
-     * 提交时决定 value：
-     * - 编辑过 → 写入输入框内容（进入"自定义"，定格不再跟随自动刷新）
-     * - 没编辑过 → 保持字段原值（原本为空就仍为空 = 继续跟随自动定位）
+     * 提交时决定 value（v0.6.33 三态）：
+     * - 用户打过字 → 写入输入框内容（进入"自定义"，定格不再跟随自动刷新）
+     * - 只被程序回填过 → 写空（清掉自定义，继续跟随自动；水印与输入框所见一致）
+     * - 什么都没动 → 保持字段原值（打开看一眼再点确定不该改变任何东西）
      */
-    fun effectiveValue(): String = if (inputEdited) value else field.value
+    fun effectiveValue(): String = when {
+        inputEdited -> value
+        autoFilled -> ""
+        else -> field.value
+    }
+    /**
+     * 提交后这个字段是否会处于"自定义"状态（对话框标题右侧标签用）。
+     *
+     * v0.6.34（用户反馈 2026-11-16）：**只有会自动生成的字段**才有「自定义」这个概念——
+     * 时间/位置/天气本来由系统自动填写，用户改写它才叫"自定义"；备注/标题这类本来就是
+     * 用户自己填的字段，永远谈不上自定义，标题处不该冒出这个 tag。
+     * 所以这里必须同时满足：字段类型是自动类型 + 确实被用户改过（或原本就有手动值）。
+     */
+    fun willBeCustom(): Boolean = field.type in AUTO_FIELD_TYPES &&
+        (inputEdited || (!autoFilled && field.value.isNotBlank()))
     var isTitle by remember(field.id) { mutableStateOf(field.isTitle) }
     // 时间字段手动值二次确认：非空时间会定格后续所有拍照，防误触（预填值+随手点确定）
     var confirmTimeFreeze by remember(field.id) { mutableStateOf(false) }
@@ -1400,12 +1530,13 @@ private fun EditFieldDialog(
                     showLatLng = showLatLngOn,
                 ),
             ) ?: autoLocation.takeIf { !isLocationPlaceholder(it) }
-            shown?.let { setValueText(it) }
+            // 程序回填：同时清掉自定义（v0.6.33，用户拍板"用户驱动 app 编辑输入框都要清自定义"）
+            shown?.let { applyAutoText(it) }
         }
     }
     LaunchedEffect(followWeather, autoWeather) {
         if (followWeather && autoWeather.isNotBlank()) {
-            setValueText(autoWeather)
+            applyAutoText(autoWeather)
         }
     }
     val isCount = field.type == FieldType.COUNT
@@ -1434,7 +1565,19 @@ private fun EditFieldDialog(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(I18n.t("编辑字段"), modifier = Modifier.weight(1f))
+                Text(I18n.t("编辑字段"))
+                // 「自定义」标签（v0.6.33，用户需求 2026-11-16）：与字段列表里的 tag 同语义，
+                // 只是挪到对话框标题右边——用户改完就能在标题处确认这个字段现在是不是被定格了。
+                // 跟着输入实时变化（打字亮、地址选项/刷新清掉后灭）。
+                if (willBeCustom()) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        I18n.t("自定义"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFFB300),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
                 if (isLocation || isWeather) {
                     val busy = if (isLocation) refreshingLocation else refreshingWeather
                     TextButton(
@@ -1505,6 +1648,7 @@ private fun EditFieldDialog(
                         followWeather = false
                         // 真正动过 input 才算自定义（见 inputEdited 注释）
                         inputEdited = true
+                        autoFilled = false
                     },
                     modifier = Modifier.focusRequester(valueFocus),
                     label = {
@@ -1574,6 +1718,11 @@ private fun EditFieldDialog(
                                 .padding(vertical = 4.dp),
                         )
                     }
+                    // 失败原因（v0.6.35，用户需求 2026-11-16）：追加在「自动天气：…」下方红字，
+                    // 旧值仍保留在上面——用户能同时看到"上次的值"和"这次为什么没更新"
+                    if (weatherError.isNotBlank()) {
+                        ErrorLine(text = I18n.t("上次失败：{e}").replace("{e}", weatherError))
+                    }
                 }
                 if (isLocation) {
                     if (locationHint != null) {
@@ -1622,6 +1771,11 @@ private fun EditFieldDialog(
                             )
                         }
                     }
+                    // 定位失败原因（v0.6.35）：权限/开关类已经由上方 LocationHintInline 表达，
+                    // 这里只补"有权限也拿不到点"的技术原因（超时/空点/provider 未启用）
+                    if (locationError.isNotBlank() && locationHint == null) {
+                        ErrorLine(text = I18n.t("上次失败：{e}").replace("{e}", locationError))
+                    }
                     // 地址选项（v0.6.21，Issue #3）：原先这里只有一个「显示经纬度」开关，
                     // 现在经纬度并入可排序列表（开关状态仍写 style.showLatLng，单一真相源），
                     // 其余层级（国家/省/市/区/路/地点/邮编）都可自由开关与排序
@@ -1633,7 +1787,7 @@ private fun EditFieldDialog(
                         onOrderChange = onAddressOrderChange,
                         onHiddenChange = onAddressHiddenChange,
                         onShowCoordsChange = onLatLngChange,
-                        onAssembledChange = { t -> setPreviewText(t) },
+                        onAssembledChange = { t -> applyAutoText(t) },
                     )
                 }
                 // 历史记录快速填充（按标签，最近在前）：最多显示 5 行可上下滚动，右侧滚动条
@@ -1666,7 +1820,8 @@ private fun EditFieldDialog(
                                         .clickable {
                                             focusManager.clearFocus()
                                             keyboard?.hide()
-                                            setValueText(item)
+                                            // 用户主动挑选历史值 = 自定义（与打字同语义）
+                                            markUserEdit(item)
                                         }
                                         .padding(horizontal = 8.dp, vertical = 6.dp),
                                 )
@@ -1789,20 +1944,30 @@ private fun DialogActionText(text: String, onClick: () -> Unit) {
 }
 
 /**
- * 「地址选项」可展开区块（v0.6.21，Issue #3 用户需求 2026-11-12）。
+ * 「地址选项」胶囊按钮组（v0.6.21 引入，v0.6.33 改版，用户需求 2026-11-16）。
  *
  * 背景：此前位置文本是系统 Geocoder 整行原文，巴西场景自带「邮政编码: 69100-000」，
  * 用户既关不掉邮编也控制不了任何层级。这里把各级拆开供自由开关与排序。
  *
- * 交互：入口行右侧 `>`，展开时转 90° 变 `∨`（默认收起）。展开后每行 = 层级名 +
- * ↑/↓（移动一位）+ 开关。「经纬度」的开关写回 style.showLatLng（与历史开关同一真相源）。
+ * 改版原因（用户 2026-11-16 提的）：原来是一个「地址选项 >」可展开区块，收起时
+ * **完全看不到当前哪些层级是开的**——用户实测水印「位置：」整行为空，却不知道
+ * 是因为 5 个层级全被关掉了，只能在展开后才看得见。
  *
- * 展开时自动收起输入法（用户需求 2026-11-12）：选项列表和键盘抢同一块屏幕，
- * 键盘占着会让 8 行列表只剩两三行可见。
+ * 现在：一排胶囊按钮常驻可见，每个层级一个。
+ * - **实心填色 = 显示**，**空心描边 = 隐藏**，一眼看清当前状态
+ * - 点按切换显隐
+ * - **长按拖动调整顺序**（用户明确要的方式；比 ↑/↓ 箭头快，也不用展开）
  *
- * 每次开关/排序都会把最新拼装结果回填到位置输入框（[onAssembledChange]），
- * 让用户当场看到改动效果；但回填**不等于**进入自定义——见对话框里 `inputEdited` 判定。
+ * 为什么用自动换行而不是硬塞成一排：8 个按钮（国家/省·州/市/区·街道/路/地点·小区/
+ * 经纬度/邮编）在手机对话框宽度下放不进一行，硬塞只能横向滚动，而横向滚动会和
+ * 长按拖动抢手势。自动换行后全部一眼可见，拖动也不冲突。
+ *
+ * 「经纬度」的开关仍写回 style.showLatLng（与历史开关同一真相源）。
+ *
+ * 每次开关/排序都会把最新拼装结果回填到位置输入框（[onAssembledChange]）；
+ * 回填会清掉「自定义」状态（v0.6.33）——见对话框里 `applyAutoText` 的说明。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AddressOptionsSection(
     order: String,
@@ -1814,9 +1979,6 @@ private fun AddressOptionsSection(
     onShowCoordsChange: (Boolean) -> Unit,
     onAssembledChange: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val keyboard = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
     // 直接算，不用 remember/derivedStateOf：解析 8 项逗号串的开销可忽略，而
     // remember(无 key) + derivedStateOf 会永久捕获首次组合的 order（参数变化读不到旧值），
     // 那才是"开关改了列表不动"的真凶
@@ -1824,11 +1986,7 @@ private fun AddressOptionsSection(
         .let { keys -> keys + AddressParts.ALL_KEYS.filterNot { it in keys } }
     val hiddenSet = parseAddressKeys(hidden).toSet()
 
-    /**
-     * 把当前选项应用到输入框（用户需求 2026-11-12：改开关要实时看到结果）。
-     * 直接用结构化数据拼装，不靠文本猜——坐标段在这里剥掉，因为输入框里的位置
-     * 是"地址"，坐标由「经纬度」开关在渲染时以括号形式附加。
-     */
+    /** 把当前选项应用到输入框（改开关要实时看到结果） */
     fun preview(orderedNow: List<String>, hiddenNow: Set<String>, coordsOn: Boolean) {
         if (!addressParts.hasStructured() && !addressParts.hasCoords()) return
         onAssembledChange(
@@ -1841,148 +1999,302 @@ private fun AddressOptionsSection(
         )
     }
 
-    fun move(key: String, delta: Int) {
-        val list = orderedKeys.toMutableList()
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    // 长按计时要跑在协程里（静止手指不产生事件，手势循环内测不了超时）
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // 拖动中/点击时都要用**最新**状态。AddressChip 的 pointerInput 不会因这些参数变化
+    // 而重启，闭包会停在首次组合的值——这正是 v0.6.33「邮编关掉后再点打不开」的根因
+    // （第二次点击用的还是第一次点击前的 hiddenSet，于是"关闭"又执行了一遍）。
+    val currentOrderedKeys by rememberUpdatedState(orderedKeys)
+    val currentHiddenSet by rememberUpdatedState(hiddenSet)
+    val currentShowCoords by rememberUpdatedState(showCoords)
+    val currentOnOrderChange by rememberUpdatedState(onOrderChange)
+    val currentOnHiddenChange by rememberUpdatedState(onHiddenChange)
+    val currentOnShowCoordsChange by rememberUpdatedState(onShowCoordsChange)
+    val currentPreview by rememberUpdatedState<(List<String>, Set<String>, Boolean) -> Unit>(::preview)
+
+    /** 点按切换某一层级的显隐（经纬度走独立字段，与历史开关同一真相源） */
+    fun toggleKey(key: String) {
+        if (key == AddressParts.KEY_COORDS) {
+            val next = !currentShowCoords
+            currentOnShowCoordsChange(next)
+            currentPreview(currentOrderedKeys, currentHiddenSet, next)
+            return
+        }
+        val wasOn = key !in currentHiddenSet
+        val next = currentHiddenSet.toMutableSet()
+        if (wasOn) next.add(key) else next.remove(key)
+        currentOnHiddenChange(next.joinToString(","))
+        currentPreview(currentOrderedKeys, next, currentShowCoords)
+    }
+
+    /** 把 key 移到 targetIndex（拖动中实时换位用） */
+    fun moveToIndex(key: String, targetIndex: Int) {
+        val list = currentOrderedKeys.toMutableList()
         val from = list.indexOf(key)
-        val to = from + delta
-        if (from < 0 || to !in list.indices) return
+        if (from < 0) return
+        val to = targetIndex.coerceIn(0, list.lastIndex)
+        if (from == to) return
         list.removeAt(from)
         list.add(to, key)
-        onOrderChange(list.joinToString(","))
-        preview(list, hiddenSet, showCoords)
+        currentOnOrderChange(list.joinToString(","))
+        currentPreview(list, currentHiddenSet, currentShowCoords)
     }
 
-    fun toggle(key: String, on: Boolean) {
-        val next = hiddenSet.toMutableSet()
-        if (on) next.remove(key) else next.add(key)
-        onHiddenChange(next.joinToString(","))
-        preview(orderedKeys, next, if (key == AddressParts.KEY_COORDS) on else showCoords)
-    }
+    // ---------- 自布局 + 让位动画 ----------
+    // 不用 FlowRow：FlowRow 换位时胶囊会"瞬移"，做不到用户要的「其他开关让出空位带逃离
+    // 动画」（用户需求 2026-11-16）。这里自己算每个胶囊的槽位坐标，配合
+    // animateIntOffsetAsState 让非拖动的胶囊平滑滑向新位置。
+    val density = LocalDensity.current
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val chipTextStyle = MaterialTheme.typography.labelLarge
+    val padH = 12.dp
+    val padV = 7.dp
+    val gap = 6.dp
 
-    // 箭头旋转用轻量动画（只动 graphicsLayer，不触发重新测量）
-    val arrowAngle by animateFloatAsState(
-        targetValue = if (expanded) 90f else 0f,
-        label = "addressArrow",
-    )
-
-    // 展开后收起输入法（用户需求 2026-11-12）：必须放到动画之后——若在点击的同一帧
-    // 调 hide()，窗口 inset 动画会和展开动画抢同一批帧，用户看到的就是"展开很卡"。
-    // 先让展开动画播完（150ms）再收键盘，两段动画串行，视觉上反而更顺。
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            kotlinx.coroutines.delay(160)
-            focusManager.clearFocus()
-            keyboard?.hide()
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val maxW = with(density) { maxWidth.toPx() }
+        val padHPx = with(density) { padH.toPx() }
+        val padVPx = with(density) { padV.toPx() }
+        val gapPx = with(density) { gap.toPx() }
+        // 量一遍所有标签的宽度（8 个短标签，开销可忽略；随语言变化自动重算）
+        val chipSizes = remember(orderedKeys, chipTextStyle, maxW, padHPx, padVPx) {
+            orderedKeys.associateWith { key ->
+                val label = addressKeyLabel(key)
+                val t = measurer.measure(
+                    androidx.compose.ui.text.AnnotatedString(label),
+                    style = chipTextStyle,
+                )
+                androidx.compose.ui.geometry.Size(
+                    t.size.width + padHPx * 2,
+                    t.size.height + padVPx * 2,
+                )
+            }
         }
-    }
+        // 按顺序折行算出每个 key 的槽位左上角
+        val slotOf = remember(chipSizes, orderedKeys, maxW, gapPx) {
+            val out = linkedMapOf<String, Offset>()
+            var x = 0f
+            var y = 0f
+            var rowH = 0f
+            orderedKeys.forEach { key ->
+                val s = chipSizes.getValue(key)
+                if (x > 0f && x + s.width > maxW) {
+                    x = 0f
+                    y += rowH + gapPx
+                    rowH = 0f
+                }
+                out[key] = Offset(x, y)
+                x += s.width + gapPx
+                rowH = maxOf(rowH, s.height)
+            }
+            out
+        }
+        val totalH = remember(slotOf, chipSizes) {
+            slotOf.entries.maxOfOrNull { (k, p) -> p.y + chipSizes.getValue(k).height } ?: 0f
+        }
 
-    Column(Modifier.fillMaxWidth()) {
-        // 入口行（照 TimeFormatRow 的样式）
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(role = Role.Button) { expanded = !expanded }
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        var draggingKey by remember { mutableStateOf<String?>(null) }
+        /** 拖动中胶囊左上角在**容器**内的坐标（容器不移动，坐标稳定） */
+        var dragPos by remember { mutableStateOf(Offset.Zero) }
+        /** 抓取偏移：按下点相对胶囊左上角的位移，拖动中保持它不变才算"跟手" */
+        var grabOffset by remember { mutableStateOf(Offset.Zero) }
+        /**
+         * 拖动开始那一刻的槽位网格（v0.6.35）。
+         *
+         * 为什么必须冻结：若用"实时槽位 + 最近中心"算插入位，换位后被拖胶囊自己的
+         * 槽位也会跟着挪，判定目标跟着变 → 它一路追到末尾，"拖出去就回不来"
+         * （用户反馈 2026-11-16）。冻结后网格固定：手指回到原槽位 = 回到原下标，
+         * 中途反悔完全可行。
+         */
+        var frozenSlots by remember { mutableStateOf<Map<String, Offset>>(emptyMap()) }
+        var frozenOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+        // pointerInput(Unit) 手势期间不重启，块内直接读 orderedKeys/slotOf 拿到的是
+        // 手势开始时的旧值，统一经 rememberUpdatedState 取最新（命中判定用）
+        val liveOrder by rememberUpdatedState(orderedKeys)
+        val liveSlots by rememberUpdatedState(slotOf)
+        val liveSizes by rememberUpdatedState(chipSizes)
+
+        Column(Modifier.fillMaxWidth()) {
             Text(
-                I18n.t("地址选项"),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
+                I18n.t("点按开关显示，长按拖动调整顺序"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 6.dp),
             )
-            Icon(
-                Icons.Default.KeyboardArrowRight,
-                contentDescription = I18n.t("展开地址选项"),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(20.dp)
-                    // 展开时 `>` 转 90° 变 `∨`（用户要求的视觉反馈）。
-                    // 用 graphicsLayer 旋转，只动绘制不动布局
-                    .graphicsLayer { rotationZ = arrowAngle },
-            )
-        }
-        // 展开动画：默认的 expandVertically 每帧都要重新测量整棵子树（8 行 × 箭头/开关），
-        // 叠加 keyboard.hide() 引起的窗口 inset 变化会明显掉帧。改成只淡入淡出 +
-        // 一次性的高度动画，且淡入用轻量 spec（用户反馈"展开动画很卡" 2026-11-12）
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn(animationSpec = tween(150)),
-            exit = fadeOut(animationSpec = tween(100)),
-        ) {
-            // 8 行会撑爆 AlertDialog：限高 + 可滚动
-            Column(
+            Box(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 260.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 8.dp, end = 4.dp),
+                    .height(with(density) { totalH.toDp() })
+                    // 手势挂在**容器**上（v0.6.35 重写）：此前挂在每个胶囊上，而胶囊
+                    // 拖动时自身会被 offset 搬走，指针坐标是"胶囊本地系"的——胶囊跟着
+                    // 手指移动，本地位移反而互相抵消，位置算不准（用户反馈 2026-11-16
+                    // 「按钮不在手指戳中的坐标」）。容器不动，坐标就是稳定的容器系。
+                    .pointerInput(Unit) {
+                        val slop = with(density) { 4.dp.toPx() }
+                        val longPressMs = viewConfiguration.longPressTimeoutMillis
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            // 命中哪个胶囊：用当前槽位直接判（容器系坐标）
+                            val hit = liveOrder.firstOrNull { k ->
+                                val s = liveSlots[k] ?: return@firstOrNull false
+                                val sz = liveSizes.getValue(k)
+                                down.position.x >= s.x && down.position.x <= s.x + sz.width &&
+                                    down.position.y >= s.y && down.position.y <= s.y + sz.height
+                            } ?: return@awaitEachGesture
+                            val startSlot = liveSlots.getValue(hit)
+                            val chipSize = liveSizes.getValue(hit)
+
+                            var fired = false
+                            var moved = 0f
+                            // 长按计时放子协程：静止手指不产生事件，循环内测不了超时
+                            val timer = scope.launch {
+                                delay(longPressMs)
+                                fired = true
+                                draggingKey = hit
+                                grabOffset = down.position - startSlot
+                                dragPos = startSlot
+                                // 冻结槽位网格：整个拖动期间的插入位都以它为基准，
+                                // 手指回到原槽位就回到原下标（可反悔）
+                                frozenSlots = liveSlots.toMap()
+                                frozenOrder = liveOrder
+                                haptic.performHapticFeedback(
+                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
+                                )
+                            }
+                            try {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val ch = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!ch.pressed) break
+                                    if (fired) {
+                                        ch.consume()
+                                        // 手指在容器内的位置 − 抓取偏移 = 胶囊左上角
+                                        dragPos = ch.position - grabOffset
+                                        // 插入位：拿胶囊中心跟**冻结网格**里每个槽位中心比，
+                                        // 取最近的。网格是拖动开始那一刻的，不随换位变化——
+                                        // 手指拖回原槽位就回到原下标，可以随时反悔。
+                                        val dc = Offset(
+                                            dragPos.x + chipSize.width / 2,
+                                            dragPos.y + chipSize.height / 2,
+                                        )
+                                        var bestIdx = 0
+                                        var bestDist = Float.MAX_VALUE
+                                        frozenOrder.forEachIndexed { i, k ->
+                                            val s = frozenSlots[k] ?: return@forEachIndexed
+                                            val sz = liveSizes.getValue(k)
+                                            val sc = Offset(s.x + sz.width / 2, s.y + sz.height / 2)
+                                            val dx = dc.x - sc.x
+                                            val dy = dc.y - sc.y
+                                            val d = dx * dx + dy * dy
+                                            if (d < bestDist) {
+                                                bestDist = d
+                                                bestIdx = i
+                                            }
+                                        }
+                                        val curIdx = liveOrder.indexOf(hit)
+                                        if (curIdx >= 0 && bestIdx != curIdx) moveToIndex(hit, bestIdx)
+                                    } else {
+                                        moved += (ch.position - ch.previousPosition).getDistance()
+                                        // 长按没到就滑开 → 让给外层滚动，不接管
+                                        if (moved > slop) break
+                                    }
+                                }
+                            } finally {
+                                timer.cancel()
+                                if (fired) {
+                                    draggingKey = null
+                                } else if (moved <= slop) {
+                                    // 没动也没长按 = 点按，切换显隐
+                                    toggleKey(hit)
+                                }
+                            }
+                        }
+                    },
             ) {
-                Text(
-                    I18n.t("点击箭头调整顺序，开关控制是否显示"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-                orderedKeys.forEachIndexed { index, key ->
+                orderedKeys.forEach { key ->
                     val isCoords = key == AddressParts.KEY_COORDS
                     val on = if (isCoords) showCoords else key !in hiddenSet
-                    // key(key)：行按层级标识复用，而不是按下标——否则上移/下移后
-                    // 所有行都换内容却共用同一批槽位，动画期间会整片重组
+                    val isDragging = draggingKey == key
+                    val size = chipSizes.getValue(key)
+                    val target = slotOf.getValue(key)
+                    // 非拖动胶囊：槽位一变就带动画滑过去（"让位/逃离"效果）
+                    val animated by androidx.compose.animation.core.animateIntOffsetAsState(
+                        targetValue = androidx.compose.ui.unit.IntOffset(
+                            target.x.roundToInt(),
+                            target.y.roundToInt(),
+                        ),
+                        animationSpec = androidx.compose.animation.core.tween(180),
+                        label = "chipSlot",
+                    )
                     key(key) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            addressKeyLabel(key),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
+                        AddressChip(
+                            label = addressKeyLabel(key),
+                            on = on,
+                            dragging = isDragging,
+                            widthPx = size.width,
+                            heightPx = size.height,
+                            modifier = Modifier
+                                .zIndex(if (isDragging) 1f else 0f)
+                                .offset {
+                                    if (isDragging) {
+                                        androidx.compose.ui.unit.IntOffset(
+                                            dragPos.x.roundToInt(), dragPos.y.roundToInt(),
+                                        )
+                                    } else {
+                                        animated
+                                    }
+                                },
                         )
-                        // 上下箭头：点一次移动一位（对话框里比拖动可靠，不会与滚动抢手势）
-                        IconButton(
-                            onClick = { move(key, -1) },
-                            enabled = index > 0,
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.KeyboardArrowUp,
-                                contentDescription = I18n.t("上移"),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                        IconButton(
-                            onClick = { move(key, 1) },
-                            enabled = index < orderedKeys.lastIndex,
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.KeyboardArrowDown,
-                                contentDescription = I18n.t("下移"),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                        Switch(
-                            checked = on,
-                            onCheckedChange = { v ->
-                                // 经纬度也要走 toggle 的预览回填，否则开关拨了但 input 不变
-                                // （用户反馈 2026-11-12：经纬度开关不实时）
-                                if (isCoords) {
-                                    onShowCoordsChange(v)
-                                    preview(orderedKeys, hiddenSet, v)
-                                } else {
-                                    toggle(key, v)
-                                }
-                            },
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
-                    }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 单个地址层级胶囊（v0.6.33 引入，v0.6.35 改为纯展示）。
+ *
+ * 实心 = 该层级会出现在水印里，空心描边 = 被隐藏。
+ *
+ * 手势**不在这里**（v0.6.35，用户反馈 2026-11-16「按钮不在手指戳中的坐标」）：
+ * 胶囊拖动时自身被 offset 搬走，挂在它身上的 pointerInput 拿到的坐标是"跟着自己
+ * 一起动"的本地系，算出来的位置必然偏。手势统一交给外层不动的容器（见
+ * [AddressOptionsSection]），这里只负责画。
+ */
+@Composable
+private fun AddressChip(
+    label: String,
+    on: Boolean,
+    dragging: Boolean,
+    widthPx: Float,
+    heightPx: Float,
+    modifier: Modifier = Modifier,
+) {
+    val fill = if (on) MaterialTheme.colorScheme.primary else Color.Transparent
+    val content = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    val border = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val elevation = if (dragging) 6.dp else 0.dp
+    val density = LocalDensity.current
+    Box(
+        modifier
+            .shadow(elevation, RoundedCornerShape(50))
+            .clip(RoundedCornerShape(50))
+            .background(fill)
+            .border(1.dp, border, RoundedCornerShape(50))
+            .size(
+                with(density) { widthPx.toDp() },
+                with(density) { heightPx.toDp() },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = content,
+            maxLines = 1,
+        )
     }
 }
 

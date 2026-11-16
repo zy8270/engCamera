@@ -61,10 +61,11 @@ data class AddressParts(
         )
 
         /**
-         * 默认顺序 = 历史行为：省 市 区 路 地点，最后才是经纬度。
-         * 经纬度排在末尾，使「显示经纬度」开关打开时坐标仍在地址后面（与 v159 一致）。
+         * 默认顺序（v0.6.34 用户拍板 2026-11-16）：**国家排最前**，经纬度在地址之后、邮编之前。
+         * 国家默认隐藏（见 [DEFAULT_HIDDEN]），所以默认输出仍与历史一致；
+         * 但用户打开「国家」开关时它会出现在最前面。
          */
-        const val DEFAULT_ORDER = "province,city,district,street,place,coords,country,postcode"
+        const val DEFAULT_ORDER = "country,province,city,district,street,place,coords,postcode"
 
         /**
          * 默认隐藏 = 国家 + 邮编。
@@ -72,6 +73,9 @@ data class AddressParts(
          * 所以默认状态下地址文本与升级前**完全一致**，不会有用户觉得被改了。
          */
         const val DEFAULT_HIDDEN = "country,postcode"
+
+        /** v0.6.33 及更早的默认顺序（国家在倒数第二位）：迁移用，见 WatermarkRepository */
+        const val LEGACY_DEFAULT_ORDER = "province,city,district,street,place,coords,country,postcode"
     }
 }
 

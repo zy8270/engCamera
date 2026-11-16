@@ -45,8 +45,31 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     val locationServiceDisabled: StateFlow<Boolean> = container.locationSource.serviceDisabled
     val locationPermissionDenied: StateFlow<Boolean> = container.locationSource.permissionDenied
 
+    /**
+     * 定位/天气失败诊断（v0.6.35，用户需求 2026-11-16）：错误码 + 超时原因，
+     * 界面直接追加在「自动定位：…」「自动天气：…」后面（红字）。空串 = 无错误。
+     */
+    val locationError: StateFlow<String> = container.locationSource.locationError
+    val weatherError: StateFlow<String> = container.locationSource.weatherError
+
     /** 手动刷新天气（编辑器"刷新天气"按钮用） */
     fun refreshWeather() = container.locationSource.refreshWeather()
+
+    /**
+     * 编辑器内的定位会话（v0.6.33）。
+     *
+     * 此前编辑器完全没有定位会话：相机页 `onDispose` 会 `stopEverything()` 把定位解绑，
+     * 而 NavHost 切页是"新页先组合、旧页后 dispose"，所以进编辑器后 app 不再持有任何
+     * 定位注册——用户实测 2026-11-16：编辑器里点刷新，系统定位图标闪一下就灭，
+     * 而地图软件能长亮（它一直在跑持续会话）。
+     *
+     * 由 EditorScreen 的 DisposableEffect 驱动。
+     */
+    fun startLocationSession() =
+        container.locationSource.start(com.engcamera.location.LocationSource.OWNER_EDITOR)
+
+    fun stopLocationSession() =
+        container.locationSource.stop(com.engcamera.location.LocationSource.OWNER_EDITOR)
 
     // ---------- 水印模板 ----------
 
