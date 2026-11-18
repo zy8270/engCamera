@@ -185,6 +185,12 @@ class LocationSource(private val context: Context) {
      */
     private val refreshFallbackProviders = mutableSetOf<String>()
     private var refreshFallbackListener: LocationListener? = null
+    /**
+     * 超时后的宽限拆除定时器（v0.6.38 修订）：12s 报超时后不立刻拆流，再多给 60s。
+     * 报超时（别让用户盯着转圈）与拆流（还在努力的那条通道）是两件事，之前绑在一起，
+     * 导致"系统正在收敛时把马上要到手的结果扔掉"。
+     */
+    private var refreshGraceJob: Job? = null
 
     companion object {
         /** 定位会话持有者标识（v0.6.33）：相机页与编辑器各持一份，最后一个离开才解绑 */
@@ -199,6 +205,13 @@ class LocationSource(private val context: Context) {
         const val REFRESH_TIMEOUT_MS = 12_000L
         /** 刷新期间临时持续 provider 流的取点间隔（v0.6.38）：复刻旧版"慢但能定位"的 2s 轮询 */
         const val REFRESH_FALLBACK_INTERVAL_MS = 2_000L
+        /**
+         * 超时后持续流的宽限期（v0.6.38 修订，用户定 60s）。
+         * 12s 报「刷新超时」后流继续跑这么久：GPS 刚抓星 / WiFi 刚扫完这类"正在收敛"
+         * 的场景能自己补上（拿到点即地址更新、红字自动清）。到点仍无点则彻底拆掉，
+         * 不能无上限——室内无星时会变成定位图标常亮，正是 v0.6.35 花一版修掉的问题。
+         */
+        const val REFRESH_GRACE_MS = 60_000L
         /** 权限/定位开关健康巡检周期（改完系统设置回来自愈用） */
         const val HEALTH_INTERVAL_MS = 5_000L
 
@@ -449,6 +462,10 @@ class LocationSource(private val context: Context) {
         }
         lmListener = null
         lmProviders.clear()
+        // 会话释放：宽限定时器也必须一起收（v0.6.38 修订），否则它 60s 后才醒，
+        // 那时可能已经开了新会话，白拆一次
+        refreshGraceJob?.cancel()
+        refreshGraceJob = null
         stopRefreshFallback()
     }
 
@@ -681,6 +698,10 @@ class LocationSource(private val context: Context) {
         noteServiceEnabled(serviceOn)
         if (!serviceOn) _locationError.value = I18n.t("系统定位开关关闭（SVC_OFF）")
         cachedAtMs = 0L // 强制绕过缓存
+        // 上一次超时后可能还挂着宽限拆除定时器（v0.6.38 修订）：这次刷新要接手那条流，
+        // 不取消的话它会在 60s 后把本次刷新刚挂的流拆掉
+        refreshGraceJob?.cancel()
+        refreshGraceJob = null
         prevTextBeforeRefresh = _text.value
         refreshing = true
         _refreshingLocation.value = true
@@ -781,19 +802,49 @@ class LocationSource(private val context: Context) {
                 // 超时原因写进诊断（v0.6.35）：这是"点了刷新一直转圈"的实情
                 _locationError.value = I18n.t("刷新超时 {s}s（REFRESH_TIMEOUT）")
                     .replace("{s}", (REFRESH_TIMEOUT_MS / 1000).toString())
-                finishRefresh()
+                // 只收掉转圈、退回旧文本；**不拆那条还在努力的持续流**（v0.6.38 修订），
+                // 让它再跑 [REFRESH_GRACE_MS]——澎湃OS 上系统可能正收敛，多给一分钟
+                finishRefresh(keepFallback = true)
             }
         }
     }
 
-    /** 结束刷新态：文本退回刷新前的值（它本身可能是"未获取定位"，此时保持） */
-    private fun finishRefresh() {
+    /**
+     * 结束刷新态：文本退回刷新前的值（它本身可能是"未获取定位"，此时保持）。
+     *
+     * @param keepFallback true = 保留持续流并起宽限拆除定时器（超时分支用）。
+     *   false = 立即拆流（拿到点 / 会话释放等"已经有结论"的分支）。
+     */
+    private fun finishRefresh(keepFallback: Boolean = false) {
         refreshing = false
         _refreshingLocation.value = false
         refreshTimeoutJob?.cancel()
         refreshTimeoutJob = null
-        stopRefreshFallback()
         _text.value = prevTextBeforeRefresh.ifBlank { "未获取定位" }
+        if (keepFallback) {
+            scheduleGraceTeardown()
+        } else {
+            refreshGraceJob?.cancel()
+            refreshGraceJob = null
+            stopRefreshFallback()
+        }
+    }
+
+    /**
+     * 宽限拆除（v0.6.38 修订）：超时后让持续流再活 [REFRESH_GRACE_MS]。
+     * 期间任何点到达都会走 [onLocation] 的"新鲜点"分支，那里会立刻 [stopRefreshFallback]
+     * 并清掉超时红字——用户看到的是"刚说超时，地址自己又补上了"。
+     */
+    private fun scheduleGraceTeardown() {
+        refreshGraceJob?.cancel()
+        refreshGraceJob = scope.launch {
+            delay(REFRESH_GRACE_MS)
+            if (!isActive) return@launch
+            // 期间又开始新一次刷新：交给新的刷新流程管，别把它的流拆掉
+            if (refreshing) return@launch
+            stopRefreshFallback()
+            refreshGraceJob = null
+        }
     }
 
     /** 无 GMS 等场景的单次降级定位 */
@@ -828,6 +879,8 @@ class LocationSource(private val context: Context) {
                 _refreshingLocation.value = false
                 refreshTimeoutJob?.cancel()
                 refreshTimeoutJob = null
+                refreshGraceJob?.cancel()
+                refreshGraceJob = null
                 stopRefreshFallback()
                 _text.value = prevTextBeforeRefresh.ifBlank { _text.value }
             }
@@ -847,6 +900,9 @@ class LocationSource(private val context: Context) {
         _refreshingLocation.value = false
         refreshTimeoutJob?.cancel()
         refreshTimeoutJob = null
+        // 宽限期里终于等到点（v0.6.38 修订）：流已经完成使命，连宽限定时器一起收掉
+        refreshGraceJob?.cancel()
+        refreshGraceJob = null
         stopRefreshFallback()
         val coords = String.format(Locale.US, "%.6f, %.6f", location.latitude, location.longitude)
         // 已有中文地址时不要先退回纯坐标（反查失败则保留旧地址），只有从未拿到过地址才先显示坐标。
