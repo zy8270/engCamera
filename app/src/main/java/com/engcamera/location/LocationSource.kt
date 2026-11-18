@@ -177,6 +177,14 @@ class LocationSource(private val context: Context) {
     private var prevTextBeforeRefresh = ""
     @Volatile private var refreshing = false
     private var refreshTimeoutJob: Job? = null
+    /**
+     * 刷新期间临时挂上的持续 provider 流（v0.6.38，Issue #6 修复）。
+     * 红米 K80/澎湃OS 对 GMS 强电池优化，`getCurrentLocation` 可能一直不回调、
+     * `requestSingleUpdate` 也不被遵守——上一版"慢但能定位"靠的就是持续 2s 轮询流。
+     * 所以刷新期间临时把网络/GPS provider 挂成持续流，拿到点就拆，别依赖一次性通道。
+     */
+    private val refreshFallbackProviders = mutableSetOf<String>()
+    private var refreshFallbackListener: LocationListener? = null
 
     companion object {
         /** 定位会话持有者标识（v0.6.33）：相机页与编辑器各持一份，最后一个离开才解绑 */
@@ -189,6 +197,8 @@ class LocationSource(private val context: Context) {
         const val WATCHDOG_MS = 8_000L
         /** 手动刷新总预算：超过就退回刷新前文本，不把用户卡在"定位中…" */
         const val REFRESH_TIMEOUT_MS = 12_000L
+        /** 刷新期间临时持续 provider 流的取点间隔（v0.6.38）：复刻旧版"慢但能定位"的 2s 轮询 */
+        const val REFRESH_FALLBACK_INTERVAL_MS = 2_000L
         /** 权限/定位开关健康巡检周期（改完系统设置回来自愈用） */
         const val HEALTH_INTERVAL_MS = 5_000L
 
@@ -439,6 +449,7 @@ class LocationSource(private val context: Context) {
         }
         lmListener = null
         lmProviders.clear()
+        stopRefreshFallback()
     }
 
     /**
@@ -677,6 +688,10 @@ class LocationSource(private val context: Context) {
         // 12 秒总预算：无论融合定位成功/失败/返回 null，到点还没点就退回刷新前文本，
         // 避免永久卡在"定位中…"（v0.6.14）
         scheduleRefreshTimeout()
+        // 刷新期间临时挂持续 provider 流（v0.6.38，Issue #6）：红米 K80/澎湃OS 对
+        // getCurrentLocation 强电池优化，可能既不成功也不失败地挂起，requestSingleUpdate
+        // 也不被遵守——必须有一条"上一版那样"的持续 2s 轮询流兜底，拿到点即拆
+        startRefreshFallback()
         var delivered = false
         try {
             val client = LocationServices.getFusedLocationProviderClient(context)
@@ -702,6 +717,59 @@ class LocationSource(private val context: Context) {
         }
     }
 
+    /**
+     * 刷新期间临时挂持续 provider 流（v0.6.38，Issue #6 修复）。
+     *
+     * v0.6.35 的耗电治理把常驻注册全拆掉后，手动刷新只剩 `getCurrentLocation` 和
+     * `requestSingleUpdate` 两条一次性通道。红米 K80/澎湃OS 对 GMS 强电池优化，
+     * 前者可能一直不回调（Task 挂起，不算成功也不算失败），后者不被遵守——两条通道
+     * 都哑火，12s 预算耗尽 → REFRESH_TIMEOUT（用户：上一版慢但能定位，这一版直接不能）。
+     * 这里复刻旧版的持续 2s 轮询流，只在刷新期间挂着，拿到点立即拆，不影响常态省电。
+     */
+    private fun startRefreshFallback() {
+        if (refreshFallbackProviderListening()) return
+        try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val listener = refreshFallbackListener ?: LocationListener { location ->
+                onLocation(location)
+            }.also { refreshFallbackListener = it }
+            for (provider in listOf(
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.GPS_PROVIDER,
+            )) {
+                try {
+                    if (!lm.isProviderEnabled(provider)) continue
+                    lm.requestLocationUpdates(
+                        provider,
+                        REFRESH_FALLBACK_INTERVAL_MS,
+                        0f,
+                        listener,
+                        Looper.getMainLooper(),
+                    )
+                    refreshFallbackProviders += provider
+                } catch (_: SecurityException) {
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun refreshFallbackProviderListening(): Boolean =
+        refreshFallbackProviders.isNotEmpty() && refreshFallbackListener != null
+
+    /** 拆掉刷新期间的临时 provider 流（拿到点 / 超时 / 取消都走这里） */
+    private fun stopRefreshFallback() {
+        if (refreshFallbackProviders.isEmpty() && refreshFallbackListener == null) return
+        try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            refreshFallbackListener?.let { lm.removeUpdates(it) }
+        } catch (_: Throwable) {
+        }
+        refreshFallbackProviders.clear()
+        refreshFallbackListener = null
+    }
+
     /** 刷新超时兜底：12 秒还没结果就退回刷新前的文本，避免永久卡在"定位中…" */
     private fun scheduleRefreshTimeout() {
         refreshTimeoutJob?.cancel()
@@ -724,6 +792,7 @@ class LocationSource(private val context: Context) {
         _refreshingLocation.value = false
         refreshTimeoutJob?.cancel()
         refreshTimeoutJob = null
+        stopRefreshFallback()
         _text.value = prevTextBeforeRefresh.ifBlank { "未获取定位" }
     }
 
@@ -759,6 +828,7 @@ class LocationSource(private val context: Context) {
                 _refreshingLocation.value = false
                 refreshTimeoutJob?.cancel()
                 refreshTimeoutJob = null
+                stopRefreshFallback()
                 _text.value = prevTextBeforeRefresh.ifBlank { _text.value }
             }
             return
@@ -777,6 +847,7 @@ class LocationSource(private val context: Context) {
         _refreshingLocation.value = false
         refreshTimeoutJob?.cancel()
         refreshTimeoutJob = null
+        stopRefreshFallback()
         val coords = String.format(Locale.US, "%.6f, %.6f", location.latitude, location.longitude)
         // 已有中文地址时不要先退回纯坐标（反查失败则保留旧地址），只有从未拿到过地址才先显示坐标。
         // 例外：手动刷新时文本是"定位中…"，必须先回写坐标，否则反查失败就永久停在"定位中…"
