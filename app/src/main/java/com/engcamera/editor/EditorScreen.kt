@@ -1897,6 +1897,12 @@ private fun EditFieldDialog(
             onDismiss = { showTimeFormatPicker = false },
             onSelect = { pattern ->
                 onTimeFormatChange(pattern)
+                // 输入框内容跟着新格式一起变（用户需求 2026-11-18）：原来只改 style.timeFormat，
+                // 输入框里还留着旧格式的文字，看起来像没生效。这里用同一套解析把可见文字重排；
+                // 只动显示、不动 inputEdited/autoFilled——换写法不是用户自定义输入
+                // （解析不了的自定义文字原样保留，不吞用户内容）
+                val reformatted = com.engcamera.util.TimeFormat.apply(value, pattern)
+                if (reformatted != value) setValueText(reformatted)
                 showTimeFormatPicker = false
             },
         )

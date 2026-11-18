@@ -5,14 +5,14 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.36/engCamera-v0.6.36-300.apk">⬇️ Download Android Release</a>
+  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.37/engCamera-v0.6.37-301.apk">⬇️ Download Android Release</a>
   <br/>
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.36 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.37 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -73,7 +73,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 - **Clock-in / site-record template series**: Today Clock-in / Today Clock-in 1 / Mark Clock-in show a big time with date / weekday / weather and address notes, styled after mainstream clock-in cameras; Mark series adds a title bar with justified label columns; the radial backdrop shadow (width / height / strength / spread / color) has dedicated sliders, the Today series supports multiple note lines on a white-to-transparent fade, and Mark Site keeps a dedicated "contractor" field (placeholder when empty) pinned to the bottom; **Patrol**: translucent blue card + yellow block with fixed "执勤巡逻" in a hard dilation-outline shadow + editable "工作记录" title + sharp chevron band + big Bahnschrift time with an embedded white-blue → white-red → white-blue gradient guilloche texture + red-square address line; card / title-block / text colors and width are adjustable
 - **Position & opacity**: visually pick any of 9 slots (corners / edges / center), never reset by rotation, or fine-tune by dragging; directions are interpreted in the **physical gravity** frame — in landscape, "bottom" is the table side; the same fold holds an **overall opacity** slider (10%~100%, preview matches the burned output; the anti-counterfeit code is unaffected)
 - **Editor live camera preview (eye toggle)**: tap the "eye" in the editor to swap the background for the live rear camera — liquid glass refracts it live; closed eye = viewfinder freeze-frame background (settings toggle; off = flat dual-mountain artwork, dark/light variants)
-- **Project groups**: one-tap switch between complete watermark configs (create = copy current, rename, bulk delete, reset), current project shown in the editor title; a persistent quick entry sits left of the bottom mode switch so multi-site users never open the editor just to swap; a new group's name can auto-fill its watermark title (setting)
+- **Project groups**: one-tap switch between complete watermark configs (create = copy current, rename, bulk delete, reset), current project shown in the editor title; a persistent quick entry sits left of the bottom mode switch so multi-site users never open the editor just to swap; a new group's name can auto-fill its watermark title (setting). **Reworked in v0.6.37**: no checkboxes by default — **long-press any project to enter multi-select and tick it**, after which tapping a row toggles it, and a Reset / Delete action bar appears at the bottom (delete asks for confirmation); Back is layered — first press exits multi-select, second closes the panel
 - **Configurable fields**: project name (title), time, location, weather, note, counter, custom fields; add/remove/reorder/enable per field; time/location/weather support manual freeze (marked "custom") with one-tap reset; field editing offers "OK & Save" — saves and returns straight to the camera to shoot the next shot
 - **Address options**: a row of always-visible **chips** inside the location field (filled = shown, outlined = hidden; tap to toggle, long-press to drag-reorder) splitting the address into 8 levels (country / province-state / city / district-street / road / place-community / coordinates / postal code), applied live to the preview; country and postal code hidden by default (matching previous output), settings carried across templates. **State is visible without expanding** — you can see at a glance which levels are on
 - **Auto location + Chinese addresses**: multi-device fallback chain (system Geocoder structured fields → online reverse-geocode), degrades to coordinates offline; address/weather cached across restarts; refresh shows a loading spinner. **Acquires a fix on startup first, then drops to low-frequency polling** (see "Location strategy & battery" below)

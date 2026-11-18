@@ -1317,7 +1317,7 @@ private fun SettingsDrawer(
                         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                     }.getOrDefault(0L)
                     Text(
-                        "Rnzhy 2026.11.09 $versionCode engCamera MIT",
+                        "Rnzhy 2026.11.18 $versionCode engCamera MIT",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -1325,9 +1325,14 @@ private fun SettingsDrawer(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .clickable {
+                                // 署名点击直达本项目的 Release 页（用户需求 2026-11-18：
+                                // 原来是官网首页，用户要的是直接看版本/下载）
                                 runCatching {
                                     context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://zy8270.github.io")),
+                                        Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://github.com/zy8270/engCamera/releases"),
+                                        ),
                                     )
                                 }
                             }

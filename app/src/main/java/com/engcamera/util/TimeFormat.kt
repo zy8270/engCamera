@@ -99,7 +99,20 @@ object TimeFormat {
         if (raw.isBlank()) return raw
         val target = pattern.ifBlank { DEFAULT }
         val parsed = parse(raw) ?: return raw
-        return runCatching { format(target, parsed) }.getOrDefault(raw)
+        // 源文本只有时间（如「14:30」）而目标要日期时，SimpleDateFormat 会补成 1970-01-01——
+        // 补今天的日期更符合直觉（用户切到「yyyy-MM-dd HH:mm」看到 1970 会以为坏了）
+        val date = if (parsed.hasDate) {
+            parsed.date
+        } else {
+            Calendar.getInstance(Locale.CHINA).apply {
+                time = parsed.date
+                val now = Calendar.getInstance(Locale.CHINA)
+                set(Calendar.YEAR, now.get(Calendar.YEAR))
+                set(Calendar.MONTH, now.get(Calendar.MONTH))
+                set(Calendar.DAY_OF_MONTH, now.get(Calendar.DAY_OF_MONTH))
+            }.time
+        }
+        return runCatching { format(target, date) }.getOrDefault(raw)
     }
 
     /** 星期文案：与打卡模板星期行同源（中文"星期五" / 英文"Friday"） */
@@ -112,16 +125,51 @@ object TimeFormat {
         "", "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六",
     )
 
-    private fun parse(raw: String): Date? {
-        val text = raw.trim()
+    private fun parse(raw: String): Parsed? {
+        val text = stripWeekday(raw.trim())
         if (text.isEmpty()) return null
         for (p in SOURCE_PATTERNS) {
             val d = runCatching {
                 val fmt = SimpleDateFormat(p, Locale.CHINA).apply { isLenient = false }
                 fmt.parse(text)
             }.getOrNull() ?: continue
-            return d
+            // 模式里有没有日期令牌决定解析结果是否可信（纯时间模式解析出的日期恒 1970-01-01）
+            return Parsed(d, hasDateToken(p))
         }
         return null
     }
+
+    private class Parsed(val date: Date, val hasDate: Boolean)
+
+    /** 格式串是否含日期令牌（y/M/d）；HH:mm 这类纯时间格式返回 false */
+    private fun hasDateToken(pattern: String): Boolean =
+        pattern.any { it == 'y' || it == 'M' || it == 'd' }
+
+    /**
+     * 去掉文本里的星期片段（用户需求 2026-11-18）：带 EEEE 的格式（如马克·工程默认
+     * `yyyy-MM-dd EEEE HH:mm`）产出的文字里夹着「星期二/Friday」，而解析模式表里没有
+     * 星期令牌——不剥掉就永远解析失败，切换格式时输入框内容看着"没变"。
+     * 中英文星期都按界面语言的实际译文匹配（[weekdayText] 同源）。
+     */
+    private fun stripWeekday(text: String): String {
+        var out = text
+        FULL_WEEKDAYS.forEach { zh ->
+            val en = EN_DICT_WEEKDAYS[zh] ?: return@forEach
+            // 中文形如「星期二」；英文是「Tuesday」，直接替换后压缩多余空格
+            out = out.replace(zh, " ").replace(en, " ")
+        }
+        return out.replace(Regex("\\s+"), " ").trim()
+    }
+
+    /** 英文星期文案（与 I18n.kt 的 EN_DICT 同源；两种语言的写法都要能剥掉，
+     *  因为字段值可能是切换界面语言前存下来的） */
+    private val EN_DICT_WEEKDAYS: Map<String, String> = mapOf(
+        "星期日" to "Sunday",
+        "星期一" to "Monday",
+        "星期二" to "Tuesday",
+        "星期三" to "Wednesday",
+        "星期四" to "Thursday",
+        "星期五" to "Friday",
+        "星期六" to "Saturday",
+    )
 }

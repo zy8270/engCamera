@@ -1840,8 +1840,8 @@ object WatermarkRenderer {
         val redH = bw * 0.0289f
         val addrX = bw * 0.1668f
         val addrTop = bw * 0.4865f
-        // 红方块对地址第一行垂直居中（用户需求 2026-11-07；行高含 newLayout 的行距 extra）
-        val redT = addrTop + (addrPaint.fontSpacing + bw * 0.011f - redH) / 2f
+        // 红方块逐项对齐各自那行的第一行垂直居中（v0.6.18+ 用户需求 2026-11-18：地址与每条备注
+        // 前面都要有；行高含 newLayout 的行距 extra，与行距保持一致才不偏）
         val addrW = (bw * 0.782f).toInt().coerceAtLeast(1)
 
         // 时间宽度（v274 回 v271 几何）：scaleX=目标宽/自然宽 动态解出（黄框左缘→逻右缘），
@@ -1995,13 +1995,16 @@ object WatermarkRenderer {
             canvas.drawText(dateText, dateX, dateBaseline, datePaint)
         }
 
-        // 红方块 + 地址/备注（两行同左缩进）
-        canvas.drawRect(
-            redX, redT, redX + redW, redT + redH,
-            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFB2C18.toInt() },
-        )
+        // 红方块 + 地址/备注（每一项都有红方块，用户需求 2026-11-18：原来只有第一项地址有；
+        // 方块对各自那行的第一行垂直居中，多行备注只对齐首行）
+        val redPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFB2C18.toInt() }
         var ly = addrTop
         addrLayouts.forEach { layout ->
+            val rowCenter = ly + (addrPaint.fontSpacing + bw * 0.011f) / 2f
+            canvas.drawRect(
+                redX, rowCenter - redH / 2f, redX + redW, rowCenter + redH / 2f,
+                redPaint,
+            )
             canvas.save()
             canvas.translate(addrX, ly)
             layout.draw(canvas)

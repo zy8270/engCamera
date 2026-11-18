@@ -210,6 +210,15 @@ private val EN_DICT: Map<String, String> = mapOf(
     "删除所选 {n} 个工程？其水印配置将一并删除，不可恢复。" to
         "Delete {n} selected projects? Their watermark configs are gone for good.",
     "重置" to "Reset",
+    // 长按多选（用户需求 2026-11-18）
+    "点名称切换工程，长按可多选" to "Tap to switch · long-press to multi-select",
+    "已选 {n} 个 · 点行勾选" to "{n} selected · tap a row to toggle",
+    "删除所选 {n} 个" to "Delete {n}",
+    "是否重置勾选的 {n} 个工程的水印为默认值？它们的模板、样式、宽度与全部字段值将恢复默认（水印位置保留）。" to
+        "Reset the watermark of {n} selected projects to defaults? Template, style, width and all field values go back to default (position is kept).",
+    "删除所选 {n} 个工程" to "Delete {n} selected projects",
+    "删除工程「{name}」？其水印配置将一并删除，不可恢复。" to
+        "Delete project \"{name}\"? Its watermark config is gone for good.",
     "重置所选工程为默认模板？字段值与样式将清除。" to
         "Reset selected projects to defaults? Field values and styles will be cleared.",
     "（当前）" to "(current)",
