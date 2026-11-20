@@ -5,7 +5,7 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev/latest/engCamera-latest.apk">⬇️ Download Android (Cloudflare mirror, faster in China)</a>
+  <a href="https://dl.mlmm.eu.org/latest/engCamera-latest.apk">⬇️ Download Android (Cloudflare mirror, faster in China)</a>
   <br/>
   <a href="https://github.com/zy8270/engCamera/releases/latest">GitHub Releases (fallback)</a>
   ·

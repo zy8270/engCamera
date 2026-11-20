@@ -27,8 +27,9 @@ concurrency:
 
 env:
   BUCKET: engcamera-releases
-  # R2 公网前缀（r2.dev 开发域名）。换成自定义域名时只改这一处。
-  R2_PUBLIC_BASE: https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev
+  # R2 公网前缀（自定义域名 dl.mlmm.eu.org，走 CF 边缘节点）。
+  # 与官网 zy8270.github.io 的 docs/.vitepress/r2.ts、scripts/fetch-release.mjs 保持一致。
+  R2_PUBLIC_BASE: https://dl.mlmm.eu.org
 
 jobs:
   mirror:

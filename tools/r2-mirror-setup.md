@@ -21,8 +21,9 @@
 ### 1. 建 R2 桶并开公网访问 ✅ 已完成
 
 - 桶名：`engcamera-releases`
-- 公网地址：`https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev`
-- CORS 已配置（允许 `engcamera.vgcad.com` / `zy8270.github.io` / localhost 的 GET、HEAD）
+- 公网地址：`https://dl.mlmm.eu.org`（自定义域名，走 CF 边缘节点；r2.dev 开发域名 `pub-dd825b…r2.dev` 仍可用但有限速，仅作备用）
+- 域名绑定：`wrangler r2 bucket domain add engcamera-releases --domain dl.mlmm.eu.org --zone-id 189392eeaa8bfeac3768ff87814b4e48 --min-tls 1.2`
+- CORS 已配置（允许 `engcamera.vgcad.com` / `zy8270.github.io` / localhost 的 GET、HEAD）——**CORS 约束的是调用方页面 origin，与下载域名无关，换域名不用改**
 
 ### 2. 建 R2 API 令牌（需要你手动点，约 2 分钟）
 
@@ -71,24 +72,33 @@ gh workflow run mirror-to-r2.yml -R zy8270/engCamera -f tag=v0.6.38
 
 ---
 
-## 换成自定义域名（可选）
+## 自定义域名（已启用）
 
-r2.dev 是 CF 官方标注的测试用域名，有速率限制。你账号下有 `eete.eu.org`、`mlmm.eu.org` 两个 zone，
-想换成 `dl.eete.eu.org` 这类子域时：
+当前用的是 `dl.mlmm.eu.org`（绑在 `mlmm.eu.org` zone 上）。根域 `mlmm.eu.org` 本身有个 302
+跳转到自建服务，所以刻意用子域，不动根域。
+
+再换域名时（比如换成 `dl.eete.eu.org`，zone id `31fa181d36a11df10acdca1dabfb3bdb`）：
 
 ```bash
-# 1. 绑域名（会自动加 CNAME + 签证书，等几分钟生效）
+# 1. 绑新域名（自动加 CNAME + 签证书，几分钟生效）
 wrangler r2 bucket domain add engcamera-releases \
   --domain dl.eete.eu.org \
-  --zone-id <zone-id>
+  --zone-id 31fa181d36a11df10acdca1dabfb3bdb \
+  --min-tls 1.2
 
-# 2. 改两个文件里的 R2_PUBLIC_BASE（共 2 处）
+# 2. 改 3 个文件里的 R2_PUBLIC_BASE
 #    engCamera/.github/workflows/mirror-to-r2.yml
 #    zy8270.github.io/docs/.vitepress/r2.ts
 #    zy8270.github.io/scripts/fetch-release.mjs
+
+# 3. 重新写一遍 R2 上的 latest.json（里面的 downloadUrl 是绝对地址），
+#    或者直接跑一次 gh workflow run mirror-to-r2.yml -f tag=<当前版本>
+
+# 4. 查状态：ssl_status 从 pending 变 active 才算生效
+wrangler r2 bucket domain list engcamera-releases
 ```
 
-zone id：`eete.eu.org` = `31fa181d36a11df10acdca1dabfb3bdb`，`mlmm.eu.org` = `189392eeaa8bfeac3768ff87814b4e48`
+旧域名可以留着并存（两个域名指向同一个桶），也可以 `wrangler r2 bucket domain remove` 摘掉。
 
 ---
 
@@ -96,14 +106,14 @@ zone id：`eete.eu.org` = `31fa181d36a11df10acdca1dabfb3bdb`，`mlmm.eu.org` = `
 
 ```bash
 # APK 可下且完整
-curl -sIL https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev/latest/engCamera-latest.apk | head -3
+curl -sIL https://dl.mlmm.eu.org/latest/engCamera-latest.apk | head -3
 
 # 元数据
-curl -s https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev/latest.json
+curl -s https://dl.mlmm.eu.org/latest.json
 
 # 断点续传（Range 请求）
 curl -s -r 0-99 -o /dev/null -w '%{http_code}\n' \
-  https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev/latest/engCamera-latest.apk
+  https://dl.mlmm.eu.org/latest/engCamera-latest.apk
 ```
 
 ---
