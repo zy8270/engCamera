@@ -26,3 +26,6 @@ imgcache/
 # ZCode 工具目录（计划草稿等，非项目内容）
 .zcode/
 __pycache__/
+
+# wrangler / R2 本地缓存（含账号信息，勿提交）
+.wrangler/

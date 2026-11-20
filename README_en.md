@@ -5,8 +5,12 @@
 <h1 align="center">engCamera · Engineering Watermark Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.38/engCamera-v0.6.38-303.apk">⬇️ Download Android Release</a>
+  <a href="https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev/latest/engCamera-latest.apk">⬇️ Download Android (Cloudflare mirror, faster in China)</a>
   <br/>
+  <a href="https://github.com/zy8270/engCamera/releases/latest">GitHub Releases (fallback)</a>
+  ·
+  <a href="https://engcamera.vgcad.com/download">Official download page</a>
+  ·
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 

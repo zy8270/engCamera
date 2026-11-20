@@ -5,8 +5,12 @@
 <h1 align="center">engCamera · 工程水印相机 · engineering Camera</h1>
 
 <p align="center">
-  <a href="https://github.com/zy8270/engCamera/releases/download/v0.6.38/engCamera-v0.6.38-303.apk">⬇️ 下载安卓版 Release</a>
+  <a href="https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev/latest/engCamera-latest.apk">⬇️ 下载安卓版（Cloudflare 镜像，国内更快）</a>
   <br/>
+  <a href="https://github.com/zy8270/engCamera/releases/latest">GitHub Releases 备用</a>
+  ·
+  <a href="https://engcamera.vgcad.com/download">官网下载页</a>
+  ·
   <a href="README_en.md">🇬🇧 English README</a>
 </p>
 

@@ -1,0 +1,167 @@
+name: Mirror release APK to Cloudflare R2
+
+# 发版即镜像：GitHub Release 发布后，把 APK 传到 Cloudflare R2，
+# 并写一份 latest.json 供官网/工具读取。国内直连 github.com 下载经常超时，
+# R2 走 Cloudflare 边缘节点（含国内可达线路），作为官网的默认下载源。
+#
+# 触发方式：
+#   release: published  —— 本地 `gh release create` 也会触发
+#   workflow_dispatch   —— 手动补传历史版本（可指定 tag）
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要镜像的 Release tag（留空=最新 Release）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同一 tag 重复触发时排队，避免 latest.json 交叉写入
+  group: mirror-r2-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  cancel-in-progress: false
+
+env:
+  BUCKET: engcamera-releases
+  # R2 公网前缀（r2.dev 开发域名）。换成自定义域名时只改这一处。
+  R2_PUBLIC_BASE: https://pub-dd825b6251784cca9e7de8b1d0942078.r2.dev
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Mirroring release: $TAG"
+
+      - name: Download APK asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # 只取 APK（Release 里可能还有别的附件）
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir dist
+          ls -l dist
+          # 校验：必须恰好一个 APK，且非空
+          COUNT=$(find dist -name '*.apk' -type f | wc -l)
+          [ "$COUNT" -eq 1 ] || { echo "::error::期望 1 个 APK，实际 $COUNT 个"; exit 1; }
+          APK=$(find dist -name '*.apk' -type f)
+          [ -s "$APK" ] || { echo "::error::APK 为空文件"; exit 1; }
+          echo "apk=$(basename "$APK")" >> "$GITHUB_OUTPUT"
+          echo "size=$(stat -c %s "$APK")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        id: apk
+
+      - name: Upload APK to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          TAG: ${{ steps.rel.outputs.tag }}
+          APK: ${{ steps.apk.outputs.apk }}
+        run: |
+          set -euo pipefail
+          # 版本化路径：历史版本永久可下（R2 无 egress 费用，留着不影响成本）
+          KEY="releases/${TAG}/${APK}"
+          aws s3 cp "dist/${APK}" "s3://${BUCKET}/${KEY}" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/vnd.android.package-archive \
+            --cache-control "public, max-age=31536000, immutable"
+          echo "uploaded: $KEY"
+
+          # 固定别名：README / 手动分享用这个地址，永远指向最新版。
+          # 文件名不变但内容会变，所以缓存只能给几分钟。
+          aws s3 cp "dist/${APK}" "s3://${BUCKET}/latest/engCamera-latest.apk" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/vnd.android.package-archive \
+            --cache-control "public, max-age=300"
+          echo "uploaded: latest/engCamera-latest.apk"
+
+      - name: Write latest.json
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          APK: ${{ steps.apk.outputs.apk }}
+          SIZE: ${{ steps.apk.outputs.size }}
+          SHA256: ${{ steps.apk.outputs.sha256 }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          VC=$(echo "$APK" | sed -n 's/.*-\([0-9]\+\)\.apk$/\1/p')
+          PUBLISHED=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt -q .publishedAt)
+
+          cat > latest.json <<JSON
+          {
+            "version": "${VERSION}",
+            "tag": "${TAG}",
+            "versionCode": ${VC:-null},
+            "apkName": "${APK}",
+            "sizeBytes": ${SIZE},
+            "sha256": "${SHA256}",
+            "publishedAt": "${PUBLISHED}",
+            "downloadUrl": "${R2_PUBLIC_BASE}/releases/${TAG}/${APK}",
+            "releaseUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}",
+            "source": "r2"
+          }
+          JSON
+
+          # latest.json 短缓存：发版后 5 分钟内全网生效
+          aws s3 cp latest.json "s3://${BUCKET}/latest.json" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json \
+            --cache-control "public, max-age=300"
+          cat latest.json
+
+      - name: Verify public URL
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          APK: ${{ steps.apk.outputs.apk }}
+          SHA256: ${{ steps.apk.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          URL="${R2_PUBLIC_BASE}/releases/${TAG}/${APK}"
+          # 边缘节点可能有传播延迟，重试几次
+          for i in 1 2 3 4 5; do
+            CODE=$(curl -s -o /tmp/dl.apk -w '%{http_code}' -L "$URL" || true)
+            if [ "$CODE" = "200" ]; then
+              GOT=$(sha256sum /tmp/dl.apk | cut -d' ' -f1)
+              if [ "$GOT" = "$SHA256" ]; then
+                echo "✅ 公网校验通过：$URL"
+                exit 0
+              fi
+              echo "sha256 不一致（尝试 $i）：$GOT"
+            else
+              echo "HTTP $CODE（尝试 $i）"
+            fi
+            sleep 10
+          done
+          echo "::error::R2 公网校验失败：$URL"
+          exit 1
+
+      - name: Verify latest.json
+        run: |
+          set -euo pipefail
+          curl -sf "${R2_PUBLIC_BASE}/latest.json" | tee /tmp/latest.json
+          grep -q '"version"' /tmp/latest.json || { echo "::error::latest.json 内容异常"; exit 1; }
