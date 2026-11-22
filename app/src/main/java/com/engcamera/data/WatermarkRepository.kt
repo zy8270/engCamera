@@ -52,6 +52,9 @@ class WatermarkRepository(private val context: Context) {
     private val defaultZoomKey = floatPreferencesKey("default_zoom_ratio")
     private val restoreLastZoomKey = booleanPreferencesKey("restore_last_zoom")
     private val lastZoomKey = floatPreferencesKey("last_zoom_ratio")
+    // 镜头锁定（v0.6.39，Issue #3 用户需求 2026-11-22）：固定物理镜头，捏合只在
+    // 当前镜头内电子变焦，不再自动切到更广镜头
+    private val lensLockKey = booleanPreferencesKey("lens_locked")
     private val collageKey = stringPreferencesKey("collage_v1") // 拼图设置（v0.6.19）
     // 画质记忆（v0.6.26，用户反馈 2026-11-15「每次启动拍照画质都被重置成最高」）：
     // 按 label 存（分辨率字符串跨重启稳定），空串 = 未设置过（首次启动仍落最高档）
@@ -123,6 +126,14 @@ class WatermarkRepository(private val context: Context) {
     /** 上次使用的变焦倍率（相机页退出时写入，供「恢复上次倍率」使用） */
     private val _lastZoom = MutableStateFlow(1f)
     val lastZoom: StateFlow<Float> = _lastZoom.asStateFlow()
+
+    /**
+     * 镜头锁定（v0.6.39，Issue #3 用户需求 2026-11-22）：
+     * 开启后捏合只在当前物理镜头内电子变焦，缩小到最广端也不再自动切更广镜头。
+     * 用户场景：某些机型的某个倍率可跨三颗镜头，用户要固定该倍率只做数码变焦。
+     */
+    private val _lensLocked = MutableStateFlow(false)
+    val lensLocked: StateFlow<Boolean> = _lensLocked.asStateFlow()
 
     /**
      * 上次选择的照片画质 label（分辨率字符串，如 "4000×3000"）。
@@ -214,6 +225,7 @@ class WatermarkRepository(private val context: Context) {
             _defaultZoom.value = (context.appDataStore.data.first()[defaultZoomKey] ?: 1f).coerceIn(0.5f, 10f)
             _restoreLastZoom.value = context.appDataStore.data.first()[restoreLastZoomKey] ?: false
             _lastZoom.value = (context.appDataStore.data.first()[lastZoomKey] ?: 1f).coerceIn(0.5f, 10f)
+            _lensLocked.value = context.appDataStore.data.first()[lensLockKey] ?: false
             _photoQualityLabel.value = context.appDataStore.data.first()[photoQualityKey] ?: ""
             _videoQualityLabel.value = context.appDataStore.data.first()[videoQualityKey] ?: ""
             // 一次性迁移：计数默认关闭（2026-10-11）——已有状态里的计数也关一次，用户可再手动开
@@ -659,6 +671,15 @@ class WatermarkRepository(private val context: Context) {
         }
     }
 
+    /** 镜头锁定开关（v0.6.39，Issue #3） */
+    fun setLensLocked(value: Boolean) {
+        if (value == _lensLocked.value) return
+        _lensLocked.value = value
+        scope.launch {
+            context.appDataStore.edit { it[lensLockKey] = value }
+        }
+    }
+
     /** 记录上次选择的照片画质（label=分辨率字符串；跨重启沿用，v0.6.26） */
     fun rememberPhotoQuality(label: String) {
         if (label == _photoQualityLabel.value) return
@@ -731,6 +752,9 @@ class WatermarkRepository(private val context: Context) {
                         tpl.style.maxWidthRatio
                     },
                     overallOpacity = cur.style.overallOpacity,
+                    // logo 大小（v0.6.40）：已从「模板选项」搬进「工程名称」字段编辑，
+                    // 属于用户手工调过的设置——切模板不能悄悄回到 0.18 默认
+                    logoSize = cur.style.logoSize,
                     // 地址选项（v0.6.21）：跨模板通用设置——用户要求"此开关同步到所有水印"，
                     // 切模板必须保留，否则每换一次模板就得重设一遍
                     addressOrder = cur.style.addressOrder,

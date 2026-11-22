@@ -741,9 +741,11 @@ fun EditorScreen(onBack: () -> Unit) {
             logoSupported = state.style.layout in LOGO_LAYOUTS,
             logoEnabled = state.logoEnabled,
             logoFile = state.logoFile,
+            logoSize = state.style.logoSize,
             onLogoEnabledChange = { vm.setLogoEnabled(it) },
             onPickLogo = { uri -> vm.setLogo(uri) },
             onResetLogo = { vm.resetLogo() },
+            onLogoSizeChange = { vm.setTemplateScalar("logoSize", it) },
             onDismiss = { editingField = null },
             onConfirm = { label, value, isTitle ->
                 vm.updateField(field.id, label, value, isTitle)
@@ -803,6 +805,7 @@ fun EditorScreen(onBack: () -> Unit) {
             badgeLine1 = state.brandBadgeLine1,
             badgeLine2 = state.brandBadgeLine2,
             badgePill = state.brandBadgePill,
+            badgeScale = state.brandBadgeScale,
             onConfirm = { code ->
                 vm.setAntiFakeCode(code)
                 vm.setAntiFake(true)
@@ -821,6 +824,7 @@ fun EditorScreen(onBack: () -> Unit) {
             onLine2Change = { vm.setBrandBadgeLine2(it) },
             onPillChange = { vm.setBrandBadgePill(it) },
             onResetBadgeText = { vm.resetBrandBadgeText() },
+            onBadgeScaleChange = { vm.setBrandBadgeScale(it) },
             onDismiss = { showAntiFakeDialog = false },
         )
     }
@@ -906,6 +910,7 @@ private fun AntiFakeDialog(
     badgeLine1: String,
     badgeLine2: String,
     badgePill: String,
+    badgeScale: Float,
     onConfirm: (String) -> Unit,
     onAutoGenerate: () -> Unit,
     onBadgeEnabledChange: (Boolean) -> Unit,
@@ -915,6 +920,7 @@ private fun AntiFakeDialog(
     onLine2Change: (String) -> Unit,
     onPillChange: (String) -> Unit,
     onResetBadgeText: () -> Unit,
+    onBadgeScaleChange: (Float) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var text by remember { mutableStateOf(manualCode) }
@@ -1074,6 +1080,16 @@ private fun AntiFakeDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // 角标大小拉杆（v0.6.40，用户需求 2026-11-22）：只有导入了自定义图片才出现——
+                // 文字角标的大小由版面反解（撑满固定宽度），调它没有意义
+                if (badgeFile.isNotBlank()) {
+                    SizeSliderRow(
+                        label = I18n.t("角标大小"),
+                        value = badgeScale,
+                        range = 0.4f..2f,
+                        onValueChange = onBadgeScaleChange,
+                    )
+                }
                 // ---------- 文字编辑抽屉 ----------
                 AnimatedVisibility(visible = textExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1123,9 +1139,11 @@ private fun AntiFakeDialog(
 private fun LogoRow(
     logoEnabled: Boolean,
     logoFile: String,
+    logoSize: Float,
     onEnabledChange: (Boolean) -> Unit,
     onPick: (android.net.Uri) -> Unit,
     onReset: () -> Unit,
+    onSizeChange: (Float) -> Unit,
 ) {
     val pickLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -1177,9 +1195,45 @@ private fun LogoRow(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    // logo 大小拉杆（v0.6.40，用户需求 2026-11-22：从「模板选项」搬到工程名称字段编辑内）。
+    // 只在开关打开时出现——关着调大小没有可看的效果
+    if (logoEnabled) {
+        SizeSliderRow(
+            label = I18n.t("logo大小"),
+            value = logoSize,
+            range = 0.08f..0.5f,
+            onValueChange = onSizeChange,
+        )
+    }
 }
 
-/** 工程组图标：三条横线，最后一条带三角形；颜色跟随 onPrimary（编辑器 FAB 用） */@Composable
+/**
+ * 尺寸拉杆（v0.6.40）：标签 + 百分比 + Slider。
+ * logo 大小与导入角标大小共用，保证两处观感一致（比例值按 % 显示，用户看不懂 0.18）。
+ */
+@Composable
+private fun SizeSliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+) {
+    Column {
+        Text(
+            label + " " + "${(value * 100).roundToInt()}%",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = range,
+        )
+    }
+}
+
+/** 工程组图标：三条横线，最后一条带三角形；颜色跟随 onPrimary（编辑器 FAB 用） */
+@Composable
 private fun ProjectGroupIcon(modifier: Modifier = Modifier) {
     com.engcamera.ui.ProjectGroupGlyph(
         modifier.size(width = 20.dp, height = 16.dp),
@@ -1412,9 +1466,11 @@ private fun EditFieldDialog(
     logoSupported: Boolean,
     logoEnabled: Boolean,
     logoFile: String,
+    logoSize: Float,
     onLogoEnabledChange: (Boolean) -> Unit,
     onPickLogo: (android.net.Uri) -> Unit,
     onResetLogo: () -> Unit,
+    onLogoSizeChange: (Float) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (label: String, value: String, isTitle: Boolean) -> Unit,
     onConfirmAndSave: (label: String, value: String, isTitle: Boolean) -> Unit,
@@ -1631,9 +1687,11 @@ private fun EditFieldDialog(
                     LogoRow(
                         logoEnabled = logoEnabled,
                         logoFile = logoFile,
+                        logoSize = logoSize,
                         onEnabledChange = onLogoEnabledChange,
                         onPick = onPickLogo,
                         onReset = onResetLogo,
+                        onSizeChange = onLogoSizeChange,
                     )
                 } else {
                     OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text(I18n.t("标签")) }, singleLine = true)

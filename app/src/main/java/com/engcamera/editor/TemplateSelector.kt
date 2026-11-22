@@ -538,6 +538,9 @@ fun TemplateOptionsCard(
                         when {
                             // 液态玻璃库背景参数收进"背景选项"折叠组（组在循环后渲染）
                             opt.key.startsWith("glass") -> Unit
+                            // logo 大小已搬到「工程名称」字段编辑（v0.6.40 用户需求），
+                            // 旧导入模板里残留的 logoSize 选项不再在这里渲染（避免两个入口）
+                            opt.key == "logoSize" -> Unit
                             opt.key in recSubKeys -> Unit
                             opt.key in shadowSubKeys -> Unit
                             opt.key in softShadowSubKeys -> Unit
@@ -615,6 +618,7 @@ fun TemplateOptionsCard(
                         }
                         // 记录点/阴影子选项收进组内不渲染，间隔也不留（否则下方空出一截）
                         if (opt.key !in recSubKeys && !opt.key.startsWith("glass") &&
+                            opt.key != "logoSize" &&
                             opt.key !in shadowSubKeys &&
                                 opt.key !in softShadowSubKeys
                         ) Spacer(Modifier.height(6.dp))

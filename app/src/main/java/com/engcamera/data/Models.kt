@@ -187,6 +187,12 @@ data class WatermarkState(
     val brandBadgeLine1: String = "",
     val brandBadgeLine2: String = "",
     val brandBadgePill: String = "",
+    /**
+     * 导入图片角标的尺寸倍率（v0.6.40，用户需求 2026-11-22）：
+     * 相对默认上限（0.16W × 0.09H）的倍数，0.4~2.0，默认 1.0。
+     * 只在「使用了自定义图片」时由编辑器拉杆控制；文字角标不受影响。
+     */
+    val brandBadgeScale: Float = 1f,
 )
 
 /** 拍照瞬间填充的动态值 */

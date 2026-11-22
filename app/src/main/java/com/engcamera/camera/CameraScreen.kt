@@ -26,6 +26,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -60,6 +61,8 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOff
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Settings
@@ -81,6 +84,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -304,10 +308,55 @@ fun CameraScreen(
         }
     }
 
+    // 录像期间保持屏幕常亮（用户反馈 2026-11-22：录像久了系统自动锁屏，录像被中断）。
+    // 只在录像中挂 FLAG_KEEP_SCREEN_ON：拍照浏览等场景仍允许系统正常息屏。
+    val activity = context as? ComponentActivity
+    DisposableEffect(ui.recording) {
+        val w = activity?.window
+        if (ui.recording) {
+            w?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            w?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            if (ui.recording) {
+                w?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    // 屏保期间隐藏状态栏/导航栏，让整屏真的只有一行字（防烧屏 + 省电）
+    DisposableEffect(ui.screenSaver) {
+        val w = activity?.window
+        val controller = w?.let { androidx.core.view.WindowCompat.getInsetsController(it, it.decorView) }
+        if (ui.screenSaver) {
+            controller?.let {
+                it.systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                it.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        } else {
+            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            // 用户操作观测（只观察不消费，Initial 阶段父级先拿到事件）：
+            // 录像屏保据此重置空闲计时，任意触摸即退出屏保
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial)
+                        vm.notifyUserInteraction()
+                    }
+                }
+            },
     ) {
         if (!cameraGranted) {
             PermissionGate(onOpenSettings = ::openAppSettings)
@@ -808,6 +857,81 @@ fun CameraScreen(
                 visible = showSettings,
                 vm = vm,
                 onDismiss = { showSettings = false },
+            )
+        }
+
+        // 录像屏保（v0.6.39，用户需求 2026-11-22）：整屏黑 + 一行「红录像机 录像中：hh:mm:ss」，
+        // 任意触摸退出（唤醒由根节点 pointerInput 统一处理）。盖在最上层，
+        // 屏保期间自己吞掉全部触摸，避免误触快门等按钮
+        if (ui.screenSaver && ui.recording) {
+            RecordingScreenSaver(ui.recordingSeconds)
+        }
+    }
+}
+
+/**
+ * 录像屏保画面：全屏黑底，中间一行红色录像机图标 + 「录像中：hh:mm:ss」。
+ * 防烧屏：这行字在屏幕垂直中线上下 1/8 屏高（合计覆盖中间 1/4 区域）按顺序
+ * 四档循环移动，每 20 秒换一档，切换时 0.9s 平滑过渡。
+ */
+@Composable
+private fun RecordingScreenSaver(seconds: Int) {
+    // 档位：中线 → 上 1/8 → 中线 → 下 1/8（"上下按顺序移动"）
+    var step by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(20_000)
+            step = (step + 1) % 4
+        }
+    }
+    val hh = seconds / 3600
+    val mm = (seconds % 3600) / 60
+    val ss = seconds % 60
+    val time = String.format(Locale.US, "%02d:%02d:%02d", hh, mm, ss)
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            // 屏保期间吞掉全部触摸（Initial pass），唤醒交给根节点
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val e = awaitPointerEvent(PointerEventPass.Initial)
+                        e.changes.forEach { it.consume() }
+                    }
+                }
+            },
+    ) {
+        val bandPx = constraints.maxHeight / 4
+        val offsets = remember(bandPx) {
+            listOf(-bandPx / 2, 0, bandPx / 2, 0)
+        }
+        val target = IntOffset(0, offsets.getOrElse(step) { 0 })
+        val animated by androidx.compose.animation.core.animateIntOffsetAsState(
+            targetValue = target,
+            animationSpec = tween(900),
+            label = "saverOffset",
+        )
+        Row(
+            Modifier
+                .align(Alignment.Center)
+                .offset { animated },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Videocam,
+                contentDescription = I18n.t("录像中"),
+                tint = ChromeDanger,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                // 时间部分用等宽数字，避免每秒跳动时整行宽度变化
+                I18n.t("录像中：{t}").replace("{t}", time),
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
             )
         }
     }
@@ -1628,6 +1752,7 @@ private fun PreviewArea(
         // 现在合成一个：左段=电子变焦（点按 1×/2× 快切），右段=物理镜头
         // （点按轮询下一档，长按展开面板）。两者语义不同，所以用分隔线分成两段而不是合并数值。
         val hasLensChoice = !ui.frontCamera && ui.lensLabels.size > 1
+        val lensLocked by vm.lensLocked.collectAsState()
         var lensMenuOpen by remember { mutableStateOf(false) }
         if (lensMenuOpen) {
             // 全屏透明拦截层：点面板外任意处收起面板
@@ -1680,6 +1805,33 @@ private fun PreviewArea(
                                     .padding(horizontal = 12.dp, vertical = 6.dp),
                             )
                         }
+                        // 镜头锁定（v0.6.39，Issue #3 用户需求 2026-11-22）：选好镜头后
+                        // 在这里锁定，之后双指缩放只在该镜头内做数码变焦，不会自动切镜头
+                        HorizontalDivider(
+                            Modifier.padding(vertical = 4.dp, horizontal = 6.dp),
+                            color = Color(0x33FFFFFF),
+                        )
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { vm.setLensLocked(!lensLocked) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                if (lensLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                                contentDescription = null,
+                                tint = if (lensLocked) Color(0xFFFFC107) else Color.White,
+                                modifier = Modifier.size(13.dp),
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                I18n.t("锁定镜头"),
+                                color = if (lensLocked) Color(0xFFFFC107) else Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
                     }
                 }
             }
@@ -1711,11 +1863,9 @@ private fun PreviewArea(
                             .background(Color(0x66FFFFFF)),
                     )
                     // 右段：当前物理焦段（点按轮询下一档，长按展开面板）
-                    Text(
-                        text = ui.lensLabels.getOrElse(ui.lensIndex) { "1×" } + " ▾",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
+                    // 锁定时数字前加一个小锁标（用户一眼看出当前是固定镜头模式）
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .clip(RoundedCornerShape(16.dp))
                             .combinedClickable(
@@ -1723,7 +1873,23 @@ private fun PreviewArea(
                                 onLongClick = { lensMenuOpen = !lensMenuOpen },
                             )
                             .padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
+                    ) {
+                        if (lensLocked) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = I18n.t("已锁定镜头"),
+                                tint = Color(0xFFFFC107),
+                                modifier = Modifier.size(10.dp),
+                            )
+                            Spacer(Modifier.width(3.dp))
+                        }
+                        Text(
+                            text = ui.lensLabels.getOrElse(ui.lensIndex) { "1×" } + " ▾",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
         }

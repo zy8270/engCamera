@@ -57,6 +57,11 @@ data class CameraUiState(
     val videoMode: Boolean = false,
     val recording: Boolean = false,
     val recordingSeconds: Int = 0,
+    /**
+     * 录像屏保（v0.6.39，用户需求 2026-11-22）：录像满 1 分钟无触摸后整屏变黑，
+     * 只留一行「红录像机 录像中：hh:mm:ss」，任意触摸退出。
+     */
+    val screenSaver: Boolean = false,
     val bubble: String? = null,
     val capturing: Boolean = false,
     val toast: String? = null,
@@ -244,6 +249,44 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private var pendingVideoFile: File? = null
     private var timerJob: Job? = null
     private var zoomCollectJobs: List<Job> = emptyList()
+
+    // ---------- 录像屏保（v0.6.39，用户需求 2026-11-22） ----------
+    /** 最近一次用户触摸时刻（elapsedRealtime），屏保空闲计时基准 */
+    private var lastInteractionAt = SystemClock.elapsedRealtime()
+    private var screenSaverJob: Job? = null
+
+    /**
+     * 记录一次用户触摸：既用于屏保计时重置，也用于把屏保收起（任意触摸即唤醒）。
+     * UI 层在相机页根节点统一调用，避免每个控件各接一遍。
+     */
+    fun notifyUserInteraction() {
+        lastInteractionAt = SystemClock.elapsedRealtime()
+        if (_ui.value.screenSaver) _ui.update { it.copy(screenSaver = false) }
+    }
+
+    /**
+     * 录像屏保巡检：录像中每 0.5s 查一次空闲时长，超过 [SCREEN_SAVER_IDLE_MS]
+     * 就把整屏压黑（防烧屏 + 省电）。只在录像期间跑，非录像态不进入屏保。
+     */
+    private fun startScreenSaverWatch() {
+        screenSaverJob?.cancel()
+        screenSaverJob = viewModelScope.launch {
+            while (isActive) {
+                delay(500)
+                val st = _ui.value
+                if (!st.recording) break
+                val idle = SystemClock.elapsedRealtime() - lastInteractionAt
+                val want = idle >= SCREEN_SAVER_IDLE_MS
+                if (want != st.screenSaver) _ui.update { it.copy(screenSaver = want) }
+            }
+        }
+    }
+
+    private fun stopScreenSaverWatch() {
+        screenSaverJob?.cancel()
+        screenSaverJob = null
+        if (_ui.value.screenSaver) _ui.update { it.copy(screenSaver = false) }
+    }
 
     /**
      * 录像开始瞬间的水印快照 + 成片坐标系换算角 + 开始时刻 + 重力时间线（合成时使用，
@@ -567,10 +610,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
 
     /** 双指捏合电子变焦：factor 为本次手势增量，目标值夹取到镜头支持范围（数字不再低于 1×）。
      *  已在当前镜头最广端仍继续缩小：自动切到更广一级镜头（如 1×→0.6× 超广角，用户拍板 2026-10-13）；
-     *  放大方向不跨镜头（长焦切换点易抖动，用户未要求）。 */
+     *  放大方向不跨镜头（长焦切换点易抖动，用户未要求）。
+     *  **镜头锁定开启时不跨镜头**（v0.6.39，Issue #3 用户需求 2026-11-22）：用户在
+     *  倍率胶囊右段把镜头固定到某一档后，捏合只在该镜头内做数码变焦，缩到最广端就停住。 */
     fun onPinchZoom(factor: Float) {
         val e = engine
-        if (e != null && factor < 1f && _ui.value.zoomRatio <= _ui.value.zoomMin + 0.01f && !e.frontCamera) {
+        val locked = container.repository.lensLocked.value
+        if (!locked && e != null && factor < 1f &&
+            _ui.value.zoomRatio <= _ui.value.zoomMin + 0.01f && !e.frontCamera
+        ) {
             val idx = e.backLenses.indexOfFirst { it.cameraId == e.selectedLensId }
             val now = android.os.SystemClock.elapsedRealtime()
             if (idx > 0 && now - lastWiderSwitchAt > 600) {
@@ -642,6 +690,23 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     fun setDefaultZoom(value: Float) = container.repository.setDefaultZoom(value)
 
     fun setRestoreLastZoom(value: Boolean) = container.repository.setRestoreLastZoom(value)
+
+    /** 镜头锁定（v0.6.39，Issue #3）：开=捏合只在当前镜头内数码变焦，不自动切镜头 */
+    val lensLocked: StateFlow<Boolean> = container.repository.lensLocked
+
+    fun setLensLocked(value: Boolean) {
+        container.repository.setLensLocked(value)
+        // 锁定瞬间当前倍率可能低于本镜头最广端（切镜后遗留），夹回范围避免一直显示越界数字
+        if (value) {
+            val e = engine ?: return
+            val st = _ui.value
+            val clamped = st.zoomRatio.coerceIn(st.zoomMin, st.zoomMax)
+            if (clamped != st.zoomRatio) {
+                e.setZoomRatio(clamped)
+                _ui.update { it.copy(zoomRatio = clamped) }
+            }
+        }
+    }
 
     /** 启动倍率：恢复上次倍率开启时用上次退出前的倍率，否则用默认倍率 */
     private fun startupZoom(): Float =
@@ -872,6 +937,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         // 暂停时只停录像与传感器；相机用例交给生命周期自动停启，
         // 主动 unbind 会导致恢复时需要整体重绑（白屏诱因之一）
         if (_ui.value.recording) stopRecording()
+        stopScreenSaverWatch()
         gravitySensor.stop()
         locationSource.stop(com.engcamera.location.LocationSource.OWNER_CAMERA)
     }
@@ -1522,12 +1588,16 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         val rec = e.startRecording(file, withAudio) { event ->
             when (event) {
                 is VideoRecordEvent.Start -> {
+                    // 屏保计时从真正开录算起（用户需求：开始录像超 1 分钟没人操作）
+                    lastInteractionAt = SystemClock.elapsedRealtime()
                     _ui.update { it.copy(recording = true) }
                     startTimer()
+                    startScreenSaverWatch()
                 }
 
                 is VideoRecordEvent.Finalize -> {
                     stopTimer()
+                    stopScreenSaverWatch()
                     rollTimelineJob?.cancel()
                     _ui.update { it.copy(recording = false, capturing = false) }
                     val f = pendingVideoFile
@@ -2289,5 +2359,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         const val MAX_SIDE = 4096
         const val COOLDOWN_MS = 3_000L
         const val BUBBLE_AUTO_HIDE_MS = 8_000L
+        /** 录像屏保触发空闲时长（用户需求 2026-11-22：开始录像超 1 分钟没人操作） */
+        const val SCREEN_SAVER_IDLE_MS = 60_000L
     }
 }

@@ -97,6 +97,21 @@ object BottomMarks {
     /** 导入图片的最大高度占画面高比例（约等于默认角标块高 0.085H 的两倍余量） */
     private const val IMAGE_MAX_H_RATIO = 0.09f
 
+    /**
+     * 导入图片的最大高度，按**画面宽**换算：0.09 × 4/3 = 0.12。
+     *
+     * v0.6.41（用户反馈 2026-11-22「编辑器内预览的角标大小和外面的预览不一致」）：
+     * 原来高度上限直接取 `h * IMAGE_MAX_H_RATIO`，于是角标尺寸会随画布**高宽比**变化——
+     * 相机预览是 3:4（高 = 1.333 宽），编辑器顶部预览是扁条（高 ≈ 0.42 宽），
+     * 同一条 0.09 在编辑器里只剩 0.0375 宽，角标被压得明显更小。
+     * 文字角标（BADGE_W_RATIO）与防伪条（stripTextSize）都只按宽算，所以只有导入图片的
+     * 角标会"两边不一样大"。
+     *
+     * 改成只依赖宽：3:4 成片下 `w * 0.12 == h * 0.09`，**烧录结果逐像素不变**，
+     * 而任何预览框形状下看到的比例都与成片一致。
+     */
+    private const val IMAGE_MAX_H_PER_W = IMAGE_MAX_H_RATIO * 4f / 3f
+
     /** 墨迹量尺（复用，避免每次绘制分配） */
     private val inkBounds = Rect()
 
@@ -109,6 +124,7 @@ object BottomMarks {
      * @param line1 角标第一行文字（空 = 默认「工程水印」）
      * @param line2 角标第二行文字（空 = 默认「相机」）
      * @param pill 圆角块文字（空 = 默认「真实可验」）
+     * @param badgeScale 导入图片的尺寸倍率（v0.6.40 用户需求：编辑器拉杆调节，1=默认上限）
      *
      * 整块**不跟随**水印整体透明度（与防伪条原规则一致，底部标识恒清晰）。
      */
@@ -122,6 +138,7 @@ object BottomMarks {
         line1: String = "",
         line2: String = "",
         pill: String = "",
+        badgeScale: Float = 1f,
     ) {
         val hasCode = !code.isNullOrBlank()
         val w = canvasW.coerceAtLeast(1).toFloat()
@@ -154,7 +171,7 @@ object BottomMarks {
         }
 
         if (badgeImage != null) {
-            drawImageBadge(canvas, anchorX, anchorY, badgeImage, code.orEmpty(), w, h)
+            drawImageBadge(canvas, anchorX, anchorY, badgeImage, code.orEmpty(), w, badgeScale)
         } else {
             drawDefaultBadge(canvas, anchorX, anchorY, code.orEmpty(), w, line1, line2, pill)
         }
@@ -305,6 +322,10 @@ object BottomMarks {
     /**
      * 画外部导入的角标图片：右对齐。
      * 图片底边同样要给防伪行让位（否则两者重叠），与默认角标的 [badgeBottom] 规则一致。
+     *
+     * [scaleFactor]（v0.6.40）：用户拉杆的尺寸倍率，直接缩放**上限框**。
+     * 不能保留旧版的 `coerceAtMost(1f)`（不许放大到源图像素以上）——小图会被这条
+     * 死死卡在原尺寸，拉杆怎么拉都不变。宁可让用户自己选清晰度。
      */
     private fun drawImageBadge(
         canvas: Canvas,
@@ -313,11 +334,12 @@ object BottomMarks {
         bmp: Bitmap,
         code: String,
         w: Float,
-        h: Float,
+        scaleFactor: Float,
     ) {
-        val maxW = w * IMAGE_MAX_W_RATIO
-        val maxH = h * IMAGE_MAX_H_RATIO
-        val scale = min(maxW / bmp.width, maxH / bmp.height).coerceAtMost(1f)
+        val maxW = w * IMAGE_MAX_W_RATIO * scaleFactor
+        // 高度上限也按宽算（见 IMAGE_MAX_H_PER_W 注释）：预览框形状不同也保持一致
+        val maxH = w * IMAGE_MAX_H_PER_W * scaleFactor
+        val scale = min(maxW / bmp.width, maxH / bmp.height)
         val iw = bmp.width * scale
         val ih = bmp.height * scale
         // 与默认角标同一套「给防伪行让位」规则

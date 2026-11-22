@@ -2733,6 +2733,7 @@ object WatermarkRenderer {
             line1 = state.brandBadgeLine1,
             line2 = state.brandBadgeLine2,
             pill = state.brandBadgePill,
+            badgeScale = state.brandBadgeScale,
         )
     }
 

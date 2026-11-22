@@ -480,6 +480,8 @@ private val EN_DICT: Map<String, String> = mapOf(
     "已使用自定义文字" to "Custom text in use",
     "使用默认角标" to "Using the default badge",
     "已使用自定义图片" to "Custom image in use",
+    // v0.6.40：导入图片角标的大小拉杆
+    "角标大小" to "Badge size",
     // ---------- v0.6.19 拼图（连拍拼图） ----------
     "拼图" to "Collage",
     "拼图模板设置" to "Collage template",
@@ -551,4 +553,8 @@ private val EN_DICT: Map<String, String> = mapOf(
     "录像中" to "Recording",
     "取消保存" to "Cancel",
     "已取消保存" to "Save cancelled",
+    // ---------- v0.6.39 录像屏保 + 镜头锁定（用户需求 2026-11-22） ----------
+    "录像中：{t}" to "Recording: {t}",
+    "锁定镜头" to "Lock lens",
+    "已锁定镜头" to "Lens locked",
 )

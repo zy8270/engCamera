@@ -231,6 +231,17 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
     /** 重置角标图片：回内置默认文字角标（保留开关状态，与 logo 重置语义不同） */
     fun resetBrandBadgeImage() = repo.update { it.copy(brandBadgeFile = "") }
 
+    /**
+     * 导入图片角标的尺寸倍率（v0.6.40，用户需求 2026-11-22「开关下方要有一个拖动条」）。
+     * 只影响图片角标；文字角标尺寸由版面固定，不跟这个值走。
+     */
+    fun setBrandBadgeScale(scale: Float) {
+        repo.update(persist = false) {
+            it.copy(brandBadgeScale = scale.coerceIn(0.4f, 2f))
+        }
+        scheduleScalarPersist()
+    }
+
     /** 角标三行文字自定义（v0.6.31）：空串 = 该行回退默认文案 */
     fun setBrandBadgeLine1(text: String) = repo.update { it.copy(brandBadgeLine1 = text) }
     fun setBrandBadgeLine2(text: String) = repo.update { it.copy(brandBadgeLine2 = text) }
@@ -291,6 +302,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app),
             }
             s.copy(style = st)
         }
+        scalarPersistJob?.cancel()
+        scalarPersistJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            repo.persistStateToDisk()
+        }
+    }
+
+    /** 滑杆拖动落盘防抖（同 [setTemplateScalar] 尾部）：停手 400ms 后一次性写盘 */
+    private fun scheduleScalarPersist() {
         scalarPersistJob?.cancel()
         scalarPersistJob = viewModelScope.launch {
             kotlinx.coroutines.delay(400)
