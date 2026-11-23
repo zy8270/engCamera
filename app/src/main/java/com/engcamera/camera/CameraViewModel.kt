@@ -140,6 +140,12 @@ data class CameraUiState(
         val scale: Float = 1f,
         val rotation: Float = 0f,
         val color: Long,
+        /** 文字背景模板 id（v0.6.43，见 TextTemplate）；默认 none=旧行为 */
+        val templateId: String = "none",
+        /** 模板背景/描边颜色（ARGB） */
+        val bgColor: Long = 0xF2FFFFFFL,
+        /** 标记点颜色（v0.6.44，只有 DOT_TAG 用） */
+        val markerColor: Long = 0xFFFFC107L,
     )
 
     /** 一笔标注：点位归一化（0..1，相对照片显示区），保存时按全分辨率缩放绘制；
@@ -1230,12 +1236,37 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     // ---------- 文字标注（v195） ----------
     private fun nextTextId() = System.currentTimeMillis().also { textIdGen = it }
 
-    fun addTextItem(text: String, x: Float, y: Float, color: Long) {
+    /** 标注文字模板记忆（v0.6.43，用户需求 2026-11-23）：下次加字默认用这套模板/配色 */
+    val textTemplate: StateFlow<com.engcamera.data.TextTemplateStyle> =
+        container.repository.textTemplate
+
+    fun setTextTemplate(style: com.engcamera.data.TextTemplateStyle) {
+        container.repository.setTextTemplate(style)
+    }
+
+    /**
+     * 新增文字元素（v0.6.43）：模板/配色取当前记忆，文字色=传入色（或记忆里的文字色）。
+     * 已有元素不受模板记忆影响——每条元素自己带一份模板快照。
+     */
+    fun addTextItem(
+        text: String,
+        x: Float,
+        y: Float,
+        color: Long,
+        templateId: String = textTemplate.value.templateId,
+        bgColor: Long = textTemplate.value.bgColor,
+        markerColor: Long = textTemplate.value.markerColor,
+    ) {
         if (text.isBlank()) return
         val id = textIdGen++
         _ui.update {
             it.copy(
-                textItems = it.textItems + CameraUiState.TextItem(id, text, x, y, 1f, 0f, color),
+                textItems = it.textItems + CameraUiState.TextItem(
+                    id, text, x, y, 1f, 0f, color,
+                    templateId = templateId,
+                    bgColor = bgColor,
+                    markerColor = markerColor,
+                ),
                 selectedTextId = id, // 新增即选中：随后改色立即生效（用户拍板 2026-10-16）
             )
         }
@@ -1274,6 +1305,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 it.textItems
             },
         )
+    }
+
+    /** 改文字模板记忆（v0.6.43）：只写记忆，不动已有元素（元素各自的模板在
+     *  输入框确定时显式写回，避免"改新文字的模板却把上一张已选元素也改了"） */
+    fun updateTextTemplate(style: com.engcamera.data.TextTemplateStyle) {
+        setTextTemplate(style)
     }
 
     /** 丢弃确认态照片：删临时文件回拍摄模式（不计数） */
@@ -1394,27 +1431,22 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 }
             }
         }
-        // 文字元素：颜色文字（白细框仅 UI 展示不烧录），锚点=左上角、绕锚点旋转缩放
-        // ——与预览的 transformOrigin(0,0) 完全同构（v200 修位置偏移）；多行逐行绘制
-        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        // 文字元素（v0.6.43）：走 TextAnnotationRenderer——与预览同一套几何/模板，
+        // 锚点=背景盒左上角、绕锚点旋转缩放，多行逐行绘制
         textItems.forEach { t ->
-            val px = t.x * w
-            val py = t.y * h
-            val textSize = w * 0.05f * t.scale
-            textPaint.textSize = textSize
-            textPaint.color = t.color.toInt()
-            textPaint.isFakeBoldText = true
-            // 文字阴影（与预览一致，v199）
-            textPaint.setShadowLayer(w * 0.012f, w * 0.004f, w * 0.004f, 0x66000000)
-            canvas.save()
-            canvas.rotate(t.rotation, px, py)
-            val fm = textPaint.fontMetrics
-            val lineH = textSize * 1.25f
-            t.text.split('\n').forEachIndexed { i, line ->
-                val baseline = py + i * lineH - fm.ascent
-                canvas.drawText(line, px, baseline, textPaint)
-            }
-            canvas.restore()
+            com.engcamera.watermark.TextAnnotationRenderer.draw(
+                canvas = canvas,
+                text = t.text,
+                x = t.x * w,
+                y = t.y * h,
+                scale = t.scale,
+                rotation = t.rotation,
+                textSize = w * com.engcamera.watermark.TextAnnotationRenderer.TEXT_SIZE_RATIO,
+                template = com.engcamera.watermark.TextTemplate.of(t.templateId),
+                textColor = t.color.toInt(),
+                bgColor = t.bgColor.toInt(),
+                markerColor = t.markerColor.toInt(),
+            )
         }
         return out
     }

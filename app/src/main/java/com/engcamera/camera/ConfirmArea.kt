@@ -14,10 +14,13 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
@@ -572,7 +575,11 @@ internal fun AnnotationFrame(
                             zoomProvider = { zoom },
                             onChange = { vm.updateTextItem(it) },
                             onDelete = { vm.removeTextItem(item.id) },
-                            onEdit = { editing = item },
+                            // v0.6.44 修「改完颜色再点开还是旧颜色」：必须回传
+                            // TextItemView 内部的 rememberUpdatedState 最新值，
+                            // 不能捕获这里的 item（pointerInput 以 id 为 key 不重启，
+                            // 闭包停的是首次组合时的 item 快照）
+                            onEdit = { editing = it },
                             onSelect = { vm.selectTextItem(item.id) },
                         )
                     }
@@ -584,22 +591,67 @@ internal fun AnnotationFrame(
                         var input by remember(target, textDialogAt) {
                             mutableStateOf(target?.text ?: "")
                         }
+                        // 文字模板（v0.6.43）：编辑已有文字时以该元素自身模板为初值，
+                        // 新增时以记忆的模板为初值；确定时写回记忆（下次加字沿用）
+                        val savedStyle by vm.textTemplate.collectAsState()
+                        // key 只认 target/textDialogAt：不能再带 savedStyle——否则
+                        // 「确定」写回记忆后 savedStyle 变化会把 style 重置回记忆值，
+                        // 用户刚选的颜色被覆盖（v0.6.44 修）
+                        var style by remember(target, textDialogAt) {
+                            mutableStateOf(
+                                if (target != null) {
+                                    com.engcamera.data.TextTemplateStyle(
+                                        templateId = target.templateId,
+                                        textColor = target.color,
+                                        bgColor = target.bgColor,
+                                        markerColor = target.markerColor,
+                                    )
+                                } else {
+                                    savedStyle
+                                },
+                            )
+                        }
                         AlertDialog(
                             onDismissRequest = { textDialogAt = null; editing = null },
                             title = { Text(I18n.t(if (target != null) "编辑文字" else "添加文字")) },
                             text = {
-                                OutlinedTextField(
-                                    value = input,
-                                    onValueChange = { input = it },
-                                )
+                                Column {
+                                    OutlinedTextField(
+                                        value = input,
+                                        onValueChange = { input = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    Spacer(Modifier.height(10.dp))
+                                    TextTemplatePicker(
+                                        style = style,
+                                        onChange = { style = it },
+                                    )
+                                }
                             },
                             confirmButton = {
                                 TextButton(onClick = {
                                     val at = textDialogAt
+                                    // 记忆写回：新增/编辑都记住这套模板，下次加字默认沿用
+                                    vm.updateTextTemplate(style)
                                     if (target != null) {
-                                        if (input.isNotBlank()) vm.updateTextItem(target.copy(text = input))
+                                        if (input.isNotBlank()) {
+                                            vm.updateTextItem(
+                                                target.copy(
+                                                    text = input,
+                                                    color = style.textColor,
+                                                    templateId = style.templateId,
+                                                    bgColor = style.bgColor,
+                                                    markerColor = style.markerColor,
+                                                ),
+                                            )
+                                        }
                                     } else if (at != null && input.isNotBlank()) {
-                                        vm.addTextItem(input, at.x, at.y, ui.annotationColor)
+                                        vm.addTextItem(
+                                            input, at.x, at.y, style.textColor,
+                                            templateId = style.templateId,
+                                            bgColor = style.bgColor,
+                                            markerColor = style.markerColor,
+                                        )
                                     }
                                     textDialogAt = null
                                     editing = null
@@ -692,10 +744,20 @@ internal fun AnnotationFrame(
 }
 
 /**
- * 文字标注元素（v199 重写）：正文在独立的缩放/旋转图层内；两个操作手柄在
- * 图层外（恒定 22dp 不随文字缩放），精确钉在变换后的视觉角点。拉杆用根坐标
- * 系"手指→元素中心"的角度差/距离比驱动（手柄不在缩放层内，指针坐标无反向
+ * 文字标注元素（v199 重写，v0.6.43 重做手柄与模板）：正文在独立的缩放/旋转图层内；
+ * 两个操作手柄在图层外（恒定 22dp 不随文字缩放），精确钉在变换后的视觉角点。
+ * 拉杆用根坐标系"手指→元素中心"的角度差/距离比驱动（手柄不在缩放层内，指针坐标无反向
  * 变换，真跟手且与文字大小无关）；移动增量按当前旋转旋回父坐标。
+ *
+ * v0.6.43 三处修复（用户实测反馈 2026-11-23）：
+ * 1. 白色标定框**不再随缩放变粗**：框画在缩放图层内，线宽按 1/scale 反向补偿，
+ *    视觉上恒 1dp（框只作位置标定，不参与"变粗"）。
+ * 2. 手柄**钉死视觉角点**：去掉旧版 3dp 外扩 pad（pad 会被 scale 放大，X 就离角点
+ *    越来越远）——框=内容盒本身，左上角即锚点（transformOrigin 0,0），X 中心精确
+ *    落在框左上角、缩放手柄中心精确落在框右下角。
+ * 3. 精细调节时文字狂闪/大小抽搐：旧版每次 onDrag 都用**当前** scale 重算元素中心，
+ *    而中心随 scale 移动 → 距离比反馈进 scale 形成正反馈震荡。改为 onDragStart 时
+ *    快照一次中心与距离，整段手势内中心固定（缩放轴=左上角锚点，本就该固定）。
  */
 @Composable
 private fun TextItemView(
@@ -706,14 +768,26 @@ private fun TextItemView(
     zoomProvider: () -> Float = { 1f },
     onChange: (CameraUiState.TextItem) -> Unit,
     onDelete: () -> Unit,
-    onEdit: () -> Unit,
+    /** 点按元素请求编辑：回传**最新** item（不是首次组合的快照，v0.6.44 修色值不刷新） */
+    onEdit: (CameraUiState.TextItem) -> Unit,
     onSelect: () -> Unit,
 ) {
     // 手势块以 id 为 key 不随重组重启——rememberUpdatedState 保证读到最新
     val currentItem by androidx.compose.runtime.rememberUpdatedState(item)
     var boxRoot by remember { mutableStateOf(Offset.Zero) }
     var boxHalf by remember { mutableStateOf(Offset.Zero) } // 未变换布局半宽高
-    var handleRoot by remember { mutableStateOf(Offset.Zero) }
+    // 缩放手柄的 LayoutCoordinates（localToRoot 含缩放/平移，见下方注释）
+    var handleCoords by remember {
+        mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null)
+    }
+    val template = com.engcamera.watermark.TextTemplate.of(item.templateId)
+    // 字号/盒子尺寸与烧录同一套几何（TextAnnotationRenderer）：预览按照片盒宽取
+    // textSize，烧录按成片宽取，两边等比同构
+    val base = parentW * com.engcamera.watermark.TextAnnotationRenderer.TEXT_SIZE_RATIO
+    val boxSize = remember(item.text, parentW, template) {
+        val m = com.engcamera.watermark.TextAnnotationRenderer.metrics(item.text, base)
+        com.engcamera.watermark.TextAnnotationRenderer.boxSize(template, m, base)
+    }
     Box(
         Modifier
             .offset { IntOffset((item.x * parentW).toInt(), (item.y * parentH).toInt()) }
@@ -722,20 +796,8 @@ private fun TextItemView(
                 boxHalf = Offset(c.size.width / 2f, c.size.height / 2f)
             },
     ) {
-        // 正文：与烧录 drawAnnotations 同一套 Paint/几何（textSize=0.05×宽、行高×1.25、
-        // baseline=行顶−ascent、fakeBold、同比例阴影）——预览与成片同构，修位置偏移；
-        // 白框/底色仅 UI 不烧录。缩放/旋转只作用于这一层，变换轴=左上角。
-        val lines = item.text.split('\n')
-        val base = parentW * 0.05f
-        val lineH = base * 1.25f
-        val paint = remember { android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG) }
-        val metrics = remember(item.text, parentW) {
-            paint.textSize = base
-            paint.isFakeBoldText = true
-            val wMax = lines.maxOf { paint.measureText(it) }
-            val hTotal = (lines.size - 1) * lineH - paint.ascent() + paint.descent()
-            Triple(wMax, hTotal, paint.ascent())
-        }
+        // 正文：与烧录 TextAnnotationRenderer 同一套几何（模板背景/描边/阴影全在这层）。
+        // 缩放/旋转只作用于这一层，变换轴=左上角（=锚点）
         Canvas(
             Modifier
                 .graphicsLayer {
@@ -746,14 +808,15 @@ private fun TextItemView(
                 }
                 .size(
                     with(LocalDensity.current) {
-                        DpSize(Dp(metrics.first / density), Dp(metrics.second / density))
+                        DpSize(Dp(boxSize.first / density), Dp(boxSize.second / density))
                     },
                 )
                 .pointerInput(item.id, interactive) {
                     if (!interactive) return@pointerInput
                     detectTapGestures {
                         onSelect()
-                        onEdit()
+                        // 回传最新快照：本块以 id 为 key 不重启，直接读 currentItem
+                        onEdit(currentItem)
                     }
                 }
                 .pointerInput(item.id, interactive) {
@@ -780,17 +843,33 @@ private fun TextItemView(
                     }
                 },
         ) {
-            val pad = 3.dp.toPx()
-            val frame = Size(size.width + pad * 2f, size.height + pad * 2f)
-            drawRect(Color(0x22000000), topLeft = Offset(-pad, -pad), size = frame)
-            drawRect(Color.White, topLeft = Offset(-pad, -pad), size = frame, style = Stroke(1.dp.toPx()))
-            paint.textSize = base
-            paint.color = item.color.toInt()
-            paint.isFakeBoldText = true
-            paint.setShadowLayer(parentW * 0.012f, parentW * 0.004f, parentW * 0.004f, 0x66000000)
             val native = drawContext.canvas.nativeCanvas
-            lines.forEachIndexed { i, ln ->
-                native.drawText(ln, 0f, i * lineH - metrics.third, paint)
+            com.engcamera.watermark.TextAnnotationRenderer.draw(
+                canvas = native,
+                text = item.text,
+                x = 0f,
+                y = 0f,
+                scale = 1f, // 缩放由 graphicsLayer 承担
+                rotation = 0f,
+                textSize = base,
+                                template = template,
+                                textColor = item.color.toInt(),
+                                bgColor = item.bgColor.toInt(),
+                                markerColor = item.markerColor.toInt(),
+                            )
+            // 标定框（仅 UI 不烧录）：线宽 ÷scale 抵消图层缩放，视觉恒 1dp；
+            // 内缩半线宽让描边整条落在盒内（否则外侧半条被裁掉，看起来偏细）
+            if (interactive) {
+                val sw = (1.dp.toPx() / item.scale.coerceAtLeast(0.01f))
+                drawRect(
+                    Color.White,
+                    topLeft = Offset(sw / 2f, sw / 2f),
+                    size = Size(
+                        (size.width - sw).coerceAtLeast(0f),
+                        (size.height - sw).coerceAtLeast(0f),
+                    ),
+                    style = Stroke(sw),
+                )
             }
         }
         if (interactive) {
@@ -814,7 +893,7 @@ private fun TextItemView(
                 scaleY = 1f / z
             }
             // 左上：删除（白底深色 icon，恒定大小）。transformOrigin(0,0) 下左上视觉
-            // 角点=外层盒原点（枢轴不动），直接钉原点——不再是中心系镜像公式
+            // 角点=外层盒原点（枢轴不动），直接钉原点——中心精确落在框左上角
             Box(
                 Modifier
                     .offset {
@@ -851,42 +930,50 @@ private fun TextItemView(
                     .then(handlePin)
                     .clip(CircleShape)
                     .background(Color(0xF2FFFFFF))
-                    .onGloballyPositioned { c -> handleRoot = c.positionInRoot() }
+                    // 存 LayoutCoordinates 而不是 positionInRoot：手柄自身带 1/zoom 反向
+                    // 缩放，positionInRoot 拿到的是"缩放后原点"，与局部指针坐标混算会
+                    // 在预览放大时错位；localToRoot 一次算清（含缩放/平移）
+                    .onGloballyPositioned { c -> handleCoords = c }
                     .pointerInput(item.id) {
-                        // 视觉中心 = 锚点(外层盒原点) + R·(半宽高×scale)——锚点系
-                        val center: () -> Offset = {
-                            Offset(
-                                boxRoot.x + (boxHalf.x * currentItem.scale) * cosR -
-                                    (boxHalf.y * currentItem.scale) * sinR,
-                                boxRoot.y + (boxHalf.x * currentItem.scale) * sinR +
-                                    (boxHalf.y * currentItem.scale) * cosR,
-                            )
-                        }
+                        // v0.6.44 修「比手指快」：缩放比必须用**锚点到手指**的距离，
+                        // 不能用「元素中心到手指」——中心到右下角的距离只有半个对角线，
+                        // 手指挪同样一段像素时比值变化被放大约 1.4~2 倍，看起来就是
+                        // "文字长得比手指快"。锚点=左上角=transformOrigin，也是唯一
+                        // 不随 scale 移动的点，用它做基准比例才严格跟手。
                         var ang0 = 0.0
                         var dist0 = 1.0
                         var rot0 = 0f
                         var scale0 = 1f
+                        var anchorFixed = Offset.Zero
+                        // 局部坐标 → 根坐标（含外层双指缩放层与手柄自身 1/z 反向缩放）
+                        fun toRoot(p: Offset): Offset {
+                            val c = handleCoords ?: return p
+                            return c.localToRoot(p)
+                        }
                         detectDragGestures(
                             onDragStart = { p ->
-                                val f = Offset(handleRoot.x + p.x, handleRoot.y + p.y)
-                                val c = center()
-                                ang0 = atan2((f.y - c.y).toDouble(), (f.x - c.x).toDouble())
-                                dist0 = kotlin.math.hypot((f.x - c.x).toDouble(), (f.y - c.y).toDouble())
-                                    .coerceAtLeast(1.0)
+                                val f = toRoot(p)
+                                // 锚点=外层盒原点（transformOrigin(0,0)，旋转/缩放都不动它）
+                                anchorFixed = boxRoot
+                                ang0 = atan2(
+                                    (f.y - anchorFixed.y).toDouble(),
+                                    (f.x - anchorFixed.x).toDouble(),
+                                )
+                                dist0 = kotlin.math.hypot(
+                                    (f.x - anchorFixed.x).toDouble(),
+                                    (f.y - anchorFixed.y).toDouble(),
+                                ).coerceAtLeast(1.0)
                                 rot0 = currentItem.rotation
                                 scale0 = currentItem.scale
                             },
                             onDrag = { change, _ ->
                                 change.consume()
-                                val f = Offset(
-                                    handleRoot.x + change.position.x,
-                                    handleRoot.y + change.position.y,
-                                )
-                                val c = center()
-                                val ang = atan2((f.y - c.y).toDouble(), (f.x - c.x).toDouble())
+                                val f = toRoot(change.position)
+                                val a = anchorFixed
+                                val ang = atan2((f.y - a.y).toDouble(), (f.x - a.x).toDouble())
                                 val dist = kotlin.math.hypot(
-                                    (f.x - c.x).toDouble(),
-                                    (f.y - c.y).toDouble(),
+                                    (f.x - a.x).toDouble(),
+                                    (f.y - a.y).toDouble(),
                                 ).coerceAtLeast(1.0)
                                 var da = Math.toDegrees(ang - ang0)
                                 while (da > 180) da -= 360.0
@@ -914,3 +1001,262 @@ private fun TextItemView(
 }
 
 private const val PI_6 = Math.PI / 6
+
+/**
+ * 文字模板选择器（v0.6.43，用户需求 2026-11-23）：横排模板卡片（用真实渲染器画
+ * 小样，所见即所得）+ 背景色选色行。放在文字输入框下方。
+ */
+@Composable
+private fun TextTemplatePicker(
+    style: com.engcamera.data.TextTemplateStyle,
+    onChange: (com.engcamera.data.TextTemplateStyle) -> Unit,
+) {
+    val templates = com.engcamera.watermark.TextTemplate.values().toList()
+    // 文字色预设
+    val textPresets = listOf(
+        0xFFFF5252L, // 红（默认）
+        0xFFFFFFFFL, // 白
+        0xFF000000L, // 黑
+        0xFFFFD54FL, // 黄
+        0xFF81C784L, // 绿
+        0xFF64B5F6L, // 蓝
+    )
+    // 背景色预设（含半透明白/黑，参考图那种浅底最常用）
+    val bgPresets = listOf(
+        0xF2FFFFFFL, // 白（参考图）
+        0xCC000000L, // 黑
+        0xE6FFD54FL, // 黄
+        0xE681C784L, // 绿
+        0xE664B5F6L, // 蓝
+        0xE6FF5252L, // 红
+    )
+    var showFreeTextColor by remember { mutableStateOf(false) }
+    var showFreeBgColor by remember { mutableStateOf(false) }
+    var showFreeMarkerColor by remember { mutableStateOf(false) }
+    // 标记点色预设（圆点标签用）
+    val markerPresets = listOf(
+        0xFFFFC107L, // 黄（参考图默认）
+        0xFFFF5252L, // 红
+        0xFF64B5F6L, // 蓝
+        0xFF81C784L, // 绿
+        0xFFFFFFFFL, // 白
+        0xFF000000L, // 黑
+    )
+    Column {
+        Text(
+            I18n.t("文字模板"),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(templates.size) { idx ->
+                val tpl = templates[idx]
+                val selected = style.templateId == tpl.id
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier
+                            .size(width = 76.dp, height = 40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (selected) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                },
+                            )
+                            .border(
+                                width = if (selected) 2.dp else 1.dp,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                            .clickable { onChange(style.copy(templateId = tpl.id)) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        // 小样：用真实渲染器画，与成片同一套几何
+                        Canvas(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(6.dp),
+                        ) {
+                            val textSize = size.height * 0.34f
+                            val m = com.engcamera.watermark.TextAnnotationRenderer
+                                .metrics("Aa", textSize)
+                            val (bw, bh) = com.engcamera.watermark.TextAnnotationRenderer
+                                .boxSize(tpl, m, textSize)
+                            val s = minOf(
+                                1f,
+                                (size.width * 0.86f) / bw.coerceAtLeast(1f),
+                                (size.height * 0.86f) / bh.coerceAtLeast(1f),
+                            )
+                            com.engcamera.watermark.TextAnnotationRenderer.draw(
+                                canvas = drawContext.canvas.nativeCanvas,
+                                text = "Aa",
+                                x = (size.width - bw * s) / 2f,
+                                y = (size.height - bh * s) / 2f,
+                                scale = s,
+                                rotation = 0f,
+                                textSize = textSize,
+                                template = tpl,
+                                textColor = style.textColor.toInt(),
+                                bgColor = style.bgColor.toInt(),
+                                markerColor = style.markerColor.toInt(),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        templateName(tpl),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+        // 文字颜色（所有模板都有）
+        Spacer(Modifier.height(8.dp))
+        ColorRow(
+            label = I18n.t("文字颜色"),
+            presets = textPresets,
+            current = style.textColor,
+            onPick = { onChange(style.copy(textColor = it)) },
+            onFree = { showFreeTextColor = true },
+        )
+        // 背景/描边色：无背景模板不需要
+        if (style.templateId != com.engcamera.watermark.TextTemplate.NONE.id) {
+            Spacer(Modifier.height(8.dp))
+            ColorRow(
+                label = if (style.templateId == com.engcamera.watermark.TextTemplate.OUTLINE.id) {
+                    I18n.t("描边颜色")
+                } else {
+                    I18n.t("背景颜色")
+                },
+                presets = bgPresets,
+                current = style.bgColor,
+                onPick = { onChange(style.copy(bgColor = it)) },
+                onFree = { showFreeBgColor = true },
+            )
+        }
+        // 标记点颜色：只有「圆点标签」有
+        if (style.templateId == com.engcamera.watermark.TextTemplate.DOT_TAG.id) {
+            Spacer(Modifier.height(8.dp))
+            ColorRow(
+                label = I18n.t("标记点颜色"),
+                presets = markerPresets,
+                current = style.markerColor,
+                onPick = { onChange(style.copy(markerColor = it)) },
+                onFree = { showFreeMarkerColor = true },
+            )
+        }
+    }
+    if (showFreeTextColor) {
+        com.engcamera.editor.ColorPickerDialog(
+            title = I18n.t("文字颜色"),
+            initial = style.textColor,
+            onDismiss = { showFreeTextColor = false },
+            onConfirm = { c ->
+                onChange(style.copy(textColor = c))
+                showFreeTextColor = false
+            },
+        )
+    }
+    if (showFreeBgColor) {
+        com.engcamera.editor.ColorPickerDialog(
+            title = I18n.t("背景颜色"),
+            initial = style.bgColor,
+            onDismiss = { showFreeBgColor = false },
+            onConfirm = { c ->
+                onChange(style.copy(bgColor = c))
+                showFreeBgColor = false
+            },
+        )
+    }
+    if (showFreeMarkerColor) {
+        com.engcamera.editor.ColorPickerDialog(
+            title = I18n.t("标记点颜色"),
+            initial = style.markerColor,
+            onDismiss = { showFreeMarkerColor = false },
+            onConfirm = { c ->
+                onChange(style.copy(markerColor = c))
+                showFreeMarkerColor = false
+            },
+        )
+    }
+}
+
+/** 一行颜色预设 + 彩虹自由取色（文字模板对话框内共用） */
+@Composable
+private fun ColorRow(
+    label: String,
+    presets: List<Long>,
+    current: Long,
+    onPick: (Long) -> Unit,
+    onFree: () -> Unit,
+) {
+    Column {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            presets.forEach { c ->
+                Box(
+                    Modifier
+                        .padding(end = 8.dp)
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(Color(c.toInt()))
+                        .border(
+                            width = if (current == c) 2.dp else 1.dp,
+                            color = if (current == c) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outline
+                            },
+                            shape = CircleShape,
+                        )
+                        .clickable { onPick(c) },
+                )
+            }
+            // 彩虹圆=自由取色（复用编辑器的取色器）
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.sweepGradient(
+                            listOf(
+                                Color(0xFFFF5252), Color(0xFFFFD54F), Color(0xFF81C784),
+                                Color(0xFF64B5F6), Color(0xFFB388FF), Color(0xFFFF5252),
+                            ),
+                        ),
+                    )
+                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                    .clickable { onFree() },
+            )
+        }
+    }
+}
+
+@Composable
+private fun templateName(tpl: com.engcamera.watermark.TextTemplate): String = when (tpl) {
+    com.engcamera.watermark.TextTemplate.NONE -> I18n.t("无背景")
+    com.engcamera.watermark.TextTemplate.TAG -> I18n.t("标签条")
+    com.engcamera.watermark.TextTemplate.DOT_TAG -> I18n.t("圆点标签")
+    com.engcamera.watermark.TextTemplate.CARD -> I18n.t("圆角卡片")
+    com.engcamera.watermark.TextTemplate.OUTLINE -> I18n.t("描边字")
+}
+

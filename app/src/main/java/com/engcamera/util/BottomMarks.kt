@@ -119,7 +119,11 @@ object BottomMarks {
      * 画右下角整块（防伪条 + 品牌角标）。
      *
      * @param code 防伪码；null/空 = 不画防伪条
-     * @param badgeImage 外部导入的角标图片；null = 画内置默认文字角标
+     * @param badgeEnabled 是否画品牌角标（v0.6.42，用户需求 2026-11-23）。
+     *   **必须显式传**：以前用「badgeImage == null」代表"画内置文字角标"，于是用户
+     *   把角标开关关掉（badgeImage 自然是 null）反而画出了文字角标。现在开关与
+     *   「有没有图片」彻底分开：false = 右下角只有防伪条（或什么都没有）。
+     * @param badgeImage 外部导入的角标图片；null 且 badgeEnabled=true = 画内置默认文字角标
      * @param rollDeg 重力角（0/±90/180）：把「重力系右下角」换算到屏幕系
      * @param line1 角标第一行文字（空 = 默认「工程水印」）
      * @param line2 角标第二行文字（空 = 默认「相机」）
@@ -139,8 +143,11 @@ object BottomMarks {
         line2: String = "",
         pill: String = "",
         badgeScale: Float = 1f,
+        badgeEnabled: Boolean = true,
     ) {
         val hasCode = !code.isNullOrBlank()
+        val hasBadge = badgeEnabled
+        if (!hasCode && !hasBadge) return
         val w = canvasW.coerceAtLeast(1).toFloat()
         val h = canvasH.coerceAtLeast(1).toFloat()
         val norm = ((rollDeg.roundToInt() % 360) + 360) % 360
@@ -170,10 +177,12 @@ object BottomMarks {
             anchorY = bottom
         }
 
-        if (badgeImage != null) {
-            drawImageBadge(canvas, anchorX, anchorY, badgeImage, code.orEmpty(), w, badgeScale)
-        } else {
-            drawDefaultBadge(canvas, anchorX, anchorY, code.orEmpty(), w, line1, line2, pill)
+        if (hasBadge) {
+            if (badgeImage != null) {
+                drawImageBadge(canvas, anchorX, anchorY, badgeImage, code.orEmpty(), w, badgeScale)
+            } else {
+                drawDefaultBadge(canvas, anchorX, anchorY, code.orEmpty(), w, line1, line2, pill)
+            }
         }
         if (hasCode) {
             drawCode(canvas, anchorX, anchorY, code!!, w)

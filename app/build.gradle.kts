@@ -18,8 +18,8 @@ android {
         applicationId = "com.engcamera"
         minSdk = 24
         targetSdk = 36
-        versionCode = 306
-        versionName = "0.6.41"
+        versionCode = 311
+        versionName = "0.6.46"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -202,7 +202,11 @@ object AntiCounterfeit {
         badgeImage: Bitmap? = null,
     ) {
         if (code.isBlank() && badgeImage == null) return
-        BottomMarks.drawBottomCorner(canvas, canvasW, canvasH, code, badgeImage, gravityRollDeg)
+        // v0.6.42：badgeImage=null 不再等于"画内置文字角标"，必须显式传 badgeEnabled
+        BottomMarks.drawBottomCorner(
+            canvas, canvasW, canvasH, code, badgeImage, gravityRollDeg,
+            badgeEnabled = badgeImage != null,
+        )
     }
 
     /**
@@ -211,6 +215,9 @@ object AntiCounterfeit {
      */
     fun drawStripRotated(canvas: Canvas, canvasW: Int, canvasH: Int, code: String, rollDeg: Float) {
         if (code.isBlank()) return
-        BottomMarks.drawBottomCorner(canvas, canvasW, canvasH, code, null, rollDeg)
+        BottomMarks.drawBottomCorner(
+            canvas, canvasW, canvasH, code, null, rollDeg,
+            badgeEnabled = false,
+        )
     }
 }

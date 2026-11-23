@@ -933,6 +933,11 @@ private fun AntiFakeDialog(
     val badgeBmp = remember(badgeFile) {
         com.engcamera.util.BrandBadgeImage.current(badgeFile)
     }
+    // 选了图片就把文字抽屉收起来（v0.6.42）：「编辑文字」按钮同时隐藏，
+    // 否则状态残留会在之后「重置」时突然又弹出一个展开的输入区
+    LaunchedEffect(badgeFile) {
+        if (badgeFile.isNotBlank()) textExpanded = false
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -997,13 +1002,36 @@ private fun AntiFakeDialog(
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 // ---------- 下段：品牌角标 ----------
                 Text(I18n.t("品牌角标（右下角，可导入图片替换）"), fontWeight = FontWeight.Medium)
-                // 按钮行：**强制单行不换行**（用户明确要求），元素超宽时压缩
+                // 按钮行：**强制单行不换行**（用户明确要求），元素超宽时压缩。
+                // 顺序（v0.6.42 用户需求 2026-11-23）：开关 → 编辑文字 → 选择图片 → 重置；
+                // 选了图片时「编辑文字」隐藏（此时图片整块替代文字，改文字没有可看的效果），
+                // 变成：开关 → 选择图片 → 重置。
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Switch(checked = badgeEnabled, onCheckedChange = onBadgeEnabledChange)
+                    // 编辑文字（带展开 V 标）：仅未使用自定义图片时出现
+                    if (badgeFile.isBlank()) {
+                        TextButton(
+                            onClick = { textExpanded = !textExpanded },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                I18n.t("编辑文字"),
+                                maxLines = 1,
+                                softWrap = false,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            Icon(
+                                // 展开时 V 标翻转（与模板选项折叠组同款交互）
+                                if (textExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
                     // 选图
                     TextButton(
                         onClick = {
@@ -1035,24 +1063,6 @@ private fun AntiFakeDialog(
                             style = MaterialTheme.typography.labelMedium,
                         )
                     }
-                    // 编辑文字（带展开 V 标）
-                    TextButton(
-                        onClick = { textExpanded = !textExpanded },
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    ) {
-                        Text(
-                            I18n.t("编辑文字"),
-                            maxLines = 1,
-                            softWrap = false,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                        Icon(
-                            // 展开时 V 标翻转（与模板选项折叠组同款交互）
-                            if (textExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
                     Spacer(Modifier.weight(1f))
                     // 重置（同时清图片与文字，用户需求「点击重置也…」）
                     TextButton(
@@ -1072,6 +1082,8 @@ private fun AntiFakeDialog(
                 }
                 Text(
                     when {
+                        // 开关关闭 = 右下角什么都不画（v0.6.42 用户明确：关掉后文字角标也不显示）
+                        !badgeEnabled -> I18n.t("未启用")
                         badgeFile.isNotBlank() -> I18n.t("已使用自定义图片")
                         badgeLine1.isNotBlank() || badgeLine2.isNotBlank() || badgePill.isNotBlank() ->
                             I18n.t("已使用自定义文字")
@@ -1091,7 +1103,9 @@ private fun AntiFakeDialog(
                     )
                 }
                 // ---------- 文字编辑抽屉 ----------
-                AnimatedVisibility(visible = textExpanded) {
+                // 只在未使用自定义图片时展开（v0.6.42）：选了图片后「编辑文字」按钮已隐藏，
+                // 若抽屉还开着就会出现"没有入口却显示着输入框"的错乱状态
+                AnimatedVisibility(visible = textExpanded && badgeFile.isBlank()) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(
                             value = badgeLine1,
@@ -1303,6 +1317,8 @@ private fun FieldRow(
                             FieldType.LOCATION -> I18n.t("自动定位（可点此处手动编辑）")
                             FieldType.COUNT -> I18n.t("每次拍照自动 +1")
                             FieldType.WEATHER -> I18n.t("自动获取天气（可手动填写）")
+                            // 盾牌验证行（v0.6.42）：留空即用默认文案，别显示「未填写」
+                            FieldType.VERIFY -> I18n.t("默认：已验证照片真实性")
                             else -> I18n.t("未填写")
                         }
                     },
@@ -1599,6 +1615,7 @@ private fun EditFieldDialog(
     val isLocation = field.type == FieldType.LOCATION
     val isDateTime = field.type == FieldType.DATETIME
     val isWeather = field.type == FieldType.WEATHER
+    val isVerify = field.type == FieldType.VERIFY
 
     // 打开对话框即聚焦"内容"输入框并调起输入法（用户拍板 2026-10-13）：
     // requestFocus 之外必须把对话框窗口 softInputMode 设为 ALWAYS_VISIBLE，否则部分系统不弹键盘
@@ -1716,6 +1733,7 @@ private fun EditFieldDialog(
                                 isDateTime -> I18n.t("时间（留空 = 拍照时自动填写当前时间）")
                                 isLocation -> I18n.t("位置（留空 = 拍照时自动定位）")
                                 isWeather -> I18n.t("天气（留空 = 拍照时自动获取）")
+                                isVerify -> I18n.t("验证文字（留空 = 已验证照片真实性）")
                                 else -> I18n.t("内容")
                             },
                         )
@@ -1920,8 +1938,9 @@ private fun EditFieldDialog(
             // 用等内边距的文字按钮（TextButton 有 58dp 最小宽度，短文字会被撑开导致
             // 文字间距不等），顺序固定：重置 → 取消 → 确定 → 确定并保存
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。均关闭对话框
-                if (isDateTime || isLocation || isWeather) {
+                // 时间/位置/天气：清空手动值恢复自动获取；计数：重置为 1。
+                // 盾牌验证行（v0.6.42）：清空 = 回默认文案「已验证照片真实性」
+                if (isDateTime || isLocation || isWeather || isVerify) {
                     DialogActionText(I18n.t("重置")) { onResetField(label, "", isTitle) }
                 } else if (isCount) {
                     DialogActionText(I18n.t("重置")) { onResetField(label, "1", isTitle) }

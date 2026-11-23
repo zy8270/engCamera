@@ -887,6 +887,13 @@ object WatermarkRenderer {
             typeface = Typeface.DEFAULT_BOLD
             textShadow(w)
         }
+        // 盾牌验证行文字画笔：与「今日·打卡1」完全同款（v0.6.42 用户需求「样式复刻打卡1」）——
+        // 正文色的 75% 透明 + 同倍率文字阴影
+        val verifyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = (((0xBFL shl 24) or (style.bodyTextColor and 0x00FFFFFFL))).toInt()
+            textSize = w * 0.030f
+            textShadow(w)
+        }
         val parts = timePartsOf(state, dynamic)
         val timeText = parts?.hm ?: timeRawOf(state, dynamic)
         val timeW = timePaint.measureText(timeText).coerceAtLeast(1f)
@@ -936,13 +943,19 @@ object WatermarkRenderer {
         val notePadH = w * 0.009f
         val notePadTop = w * 0.007f
         val notePadBottom = w * 0.016f
+        // ---- 盾牌验证行（v0.6.42，用户需求 2026-11-23：三个打卡模板统一带这一行；
+        //      文字取自可编辑的 VERIFY 字段，字段关闭则整行不画） ----
+        val verifyText = verifyTextOf(state)
+        val verifyW = verifyText?.let { shieldRowWidth(leftPad, w, verifyPaint, it) } ?: 0f
+        val gapNote = w * 0.016f
+        val gapVerify = w * 0.016f
         val blockWContent = maxOf(
             row1W,
             if (hasAddr) leftPad + addrWanted else 0f,
             if (noteLayouts.isNotEmpty()) leftPad + noteMaxW + notePadH * 2 else 0f,
+            verifyW,
         )
         val gapAddr = w * 0.02f
-        val gapNote = w * 0.016f
         val addrLayout = if (hasAddr) {
             newLayout(addrText, addrPaint, (blockWContent - leftPad).toInt().coerceAtLeast(1))
         } else {
@@ -950,7 +963,8 @@ object WatermarkRenderer {
         }
         val blockHContent = row1H +
             (if (addrLayout != null) gapAddr + addrLayout.height else 0f) +
-            (if (noteLayouts.isNotEmpty()) gapNote + notePadTop + notesH + notePadBottom else 0f)
+            (if (noteLayouts.isNotEmpty()) gapNote + notePadTop + notesH + notePadBottom else 0f) +
+            if (verifyText != null) gapVerify + shieldRowHeight(w) else 0f
         // 阴影外沿：椭圆半径=内容边×倍率（模板选项可调），超出内容 (倍率-0.5)×边长
         val mx = (blockWContent * (style.softShadowW.coerceIn(0.3f, 1.5f) - 0.5f))
             .coerceAtLeast(w * 0.005f)
@@ -1012,6 +1026,12 @@ object WatermarkRenderer {
                 canvas.restore()
                 ny += l.height + noteLineGap
             }
+            y = bgTop + bgH
+        }
+        // 盾牌验证行（字段关闭时整行不画）
+        if (verifyText != null) {
+            val verifyTop = y + gapVerify
+            drawShieldRow(canvas, leftPad, verifyTop - verifyPaint.fontMetrics.ascent, w, verifyPaint, verifyText, style.bodyTextColor.toInt())
         }
         canvas.restore()
         // 携带内容区偏移：定位/钳位按内容区算，阴影允许越出（v249 修"水印被顶离屏幕边"）
@@ -1109,8 +1129,10 @@ object WatermarkRenderer {
         val cardRows = mutableListOf<StaticLayout>()
         state.fields.filter { it.enabled }.forEach { f ->
             when (f.type) {
-                // 天气已追加在日期行（v248），不再进字段卡（否则开关一开出现两份天气）
-                FieldType.DATETIME, FieldType.LOCATION, FieldType.PROJECT_NAME, FieldType.WEATHER -> Unit
+                // 天气已追加在日期行（v248），不再进字段卡（否则开关一开出现两份天气）；
+                // 盾牌验证行有自己的绘制位置（v0.6.42），不能混进字段卡
+                FieldType.DATETIME, FieldType.LOCATION, FieldType.PROJECT_NAME,
+                FieldType.WEATHER, FieldType.VERIFY -> Unit
                 FieldType.NOTE -> {
                     val v = displayText(f, dynamic, style)
                     if (v.isNotBlank()) cardRows += cardRowLayout(v, cardPaint)
@@ -1131,12 +1153,10 @@ object WatermarkRenderer {
         val fieldCardW = if (cardRows.isEmpty()) 0f else cardRowsW + cardPadH * 2
         val fieldCardH =
             if (cardRows.isEmpty()) 0f else cardPadV * 2 + cardRows.sumOf { it.height } + cardRowGap * (cardRows.size - 1)
-        // ---- 盾牌验证行 ----
-        val verifyText = com.engcamera.i18n.I18n.t("已验证照片真实性")
-        val shieldW = w * 0.028f
-        val shieldH = w * 0.031f
-        val gapShieldText = w * 0.023f
-        val verifyW = leftPad + shieldW + gapShieldText + verifyPaint.measureText(verifyText)
+        // ---- 盾牌验证行（v0.6.42：文字改成可编辑字段 VERIFY，留空回落默认文案；
+        //      字段关闭则整行不画，版面高度跟着收缩） ----
+        val verifyText = verifyTextOf(state)
+        val verifyW = verifyText?.let { shieldRowWidth(leftPad, w, verifyPaint, it) } ?: 0f
         val gapHeaderGroup = w * 0.016f
         val gapGroupCard = w * 0.016f
         val gapCardVerify = w * 0.016f
@@ -1148,7 +1168,7 @@ object WatermarkRenderer {
         )
         val contentH = cardH + gapHeaderGroup + groupH +
             (if (fieldCardH > 0f) gapGroupCard + fieldCardH else 0f) +
-            gapCardVerify + shieldH + w * 0.006f
+            if (verifyText != null) gapCardVerify + shieldRowHeight(w) else 0f
         // 阴影外沿：椭圆半径=内容边×倍率（模板选项可调），超出内容 (倍率-0.5)×边长
         val mx = (contentW * (style.softShadowW.coerceIn(0.3f, 1.5f) - 0.5f))
             .coerceAtLeast(w * 0.005f)
@@ -1271,35 +1291,12 @@ object WatermarkRenderer {
             }
             y = cardTop + fieldCardH
         }
-        // 盾牌验证行
-        val verifyTop = y + gapCardVerify
-        val verifyBaseline = verifyTop - verifyPaint.fontMetrics.ascent
-        val shieldCy = verifyBaseline - verifyPaint.textSize * 0.28f
-        val sy = shieldCy - shieldH / 2f
-        val shield = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = white
-            this.style = Paint.Style.STROKE
-            strokeWidth = w * 0.004f
-            strokeJoin = Paint.Join.ROUND
+        // 盾牌验证行（字段关闭时整行不画）
+        if (verifyText != null) {
+            val verifyTop = y + gapCardVerify
+            val verifyBaseline = verifyTop - verifyPaint.fontMetrics.ascent
+            drawShieldRow(canvas, leftPad, verifyBaseline, w, verifyPaint, verifyText, white)
         }
-        val shieldPath = Path().apply {
-            moveTo(leftPad, sy + shieldH * 0.1f)
-            quadTo(leftPad + shieldW / 2f, sy - shieldH * 0.04f, leftPad + shieldW, sy + shieldH * 0.1f)
-            lineTo(leftPad + shieldW, sy + shieldH * 0.52f)
-            quadTo(leftPad + shieldW, sy + shieldH * 0.84f, leftPad + shieldW / 2f, sy + shieldH)
-            quadTo(leftPad, sy + shieldH * 0.84f, leftPad, sy + shieldH * 0.52f)
-            close()
-        }
-        canvas.drawPath(shieldPath, shield)
-        canvas.drawPath(
-            Path().apply {
-                moveTo(leftPad + shieldW * 0.28f, shieldCy - shieldW * 0.02f)
-                lineTo(leftPad + shieldW * 0.44f, shieldCy + shieldW * 0.14f)
-                lineTo(leftPad + shieldW * 0.74f, shieldCy - shieldW * 0.18f)
-            },
-            Paint(shield).apply { strokeWidth = w * 0.0035f },
-        )
-        canvas.drawText(verifyText, leftPad + shieldW + gapShieldText, verifyBaseline, verifyPaint)
         canvas.restore()
         return Block(out, mx.roundToInt(), my.roundToInt())
     }
@@ -1616,11 +1613,9 @@ object WatermarkRenderer {
                 iconRow(displayText(f, dynamic, style), true)?.let { add(it) }
             }
         }
-        val verifyText = com.engcamera.i18n.I18n.t("已验证照片真实性")
-        val shieldW = w * 0.028f
-        val shieldH = w * 0.031f
-        val gapShieldText = w * 0.023f
-        val verifyW = leftPad + shieldW + gapShieldText + verifyPaint.measureText(verifyText)
+        // 盾牌验证行文字（v0.6.42：改成可编辑字段，留空回落默认文案；字段关闭整行不画）
+        val verifyText = verifyTextOf(state)
+        val verifyW = verifyText?.let { shieldRowWidth(leftPad, w, verifyPaint, it) } ?: 0f
         val rowsW = iconRows.maxOfOrNull { addrTextX + it.first.width } ?: 0f
         val blockW = maxOf(row1W, rowsW, verifyW).toInt().coerceAtLeast(1)
 
@@ -1637,8 +1632,8 @@ object WatermarkRenderer {
         val bottomPad = w * 0.001f
         val rowsH = iconRows.sumOf { it.first.height } + gapRow * (iconRows.size - 1).coerceAtLeast(0)
         val blockH = (headerH + gapDate + (dateFm.descent - dateFm.ascent) +
-            (if (iconRows.isNotEmpty()) gapAfterDate + rowsH else 0f) + gapVerify +
-            (verifyFm.descent - verifyFm.ascent) + bottomPad)
+            (if (iconRows.isNotEmpty()) gapAfterDate + rowsH else 0f) +
+            (if (verifyText != null) gapVerify + (verifyFm.descent - verifyFm.ascent) else 0f) + bottomPad)
             .toInt().coerceAtLeast(1)
         val out = Bitmap.createBitmap(blockW, blockH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
@@ -1702,36 +1697,12 @@ object WatermarkRenderer {
             canvas.restore()
             rowTop += layout.height + gapRow
         }
-        // 验证行（盾牌 + 已验证照片真实性）
-        val verifyTop = rowTop - gapRow + gapVerify
-        val verifyBaseline = verifyTop - verifyFm.ascent
-        val shieldCy = verifyBaseline - verifyPaint.textSize * 0.28f
-        val sy = shieldCy - shieldH / 2f
-        val shield = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = white
-            this.style = Paint.Style.STROKE
-            strokeWidth = w * 0.004f
-            strokeJoin = Paint.Join.ROUND
+        // 验证行（盾牌 + 文字；v0.6.42 起文字可编辑，字段关闭则整行不画）
+        if (verifyText != null) {
+            val verifyTop = rowTop - gapRow + gapVerify
+            val verifyBaseline = verifyTop - verifyFm.ascent
+            drawShieldRow(canvas, leftPad, verifyBaseline, w, verifyPaint, verifyText, white)
         }
-        val shieldPath = Path().apply {
-            moveTo(leftPad, sy + shieldH * 0.1f)
-            quadTo(leftPad + shieldW / 2f, sy - shieldH * 0.04f, leftPad + shieldW, sy + shieldH * 0.1f)
-            lineTo(leftPad + shieldW, sy + shieldH * 0.52f)
-            quadTo(leftPad + shieldW, sy + shieldH * 0.84f, leftPad + shieldW / 2f, sy + shieldH)
-            quadTo(leftPad, sy + shieldH * 0.84f, leftPad, sy + shieldH * 0.52f)
-            close()
-        }
-        canvas.drawPath(shieldPath, shield)
-        val check2 = Paint(check).apply { strokeWidth = w * 0.0035f }
-        canvas.drawPath(
-            Path().apply {
-                moveTo(leftPad + shieldW * 0.28f, shieldCy - shieldW * 0.02f)
-                lineTo(leftPad + shieldW * 0.44f, shieldCy + shieldW * 0.14f)
-                lineTo(leftPad + shieldW * 0.74f, shieldCy - shieldW * 0.18f)
-            },
-            check2,
-        )
-        canvas.drawText(verifyText, leftPad + shieldW + gapShieldText, verifyBaseline, verifyPaint)
         return Block(out)
     }
 
@@ -2734,6 +2705,8 @@ object WatermarkRenderer {
             line2 = state.brandBadgeLine2,
             pill = state.brandBadgePill,
             badgeScale = state.brandBadgeScale,
+            // v0.6.42：开关必须显式传——只靠 badgeImage=null 会让关掉开关时画出文字角标
+            badgeEnabled = showBadge,
         )
     }
 
@@ -2768,6 +2741,8 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
             FieldType.WEATHER -> f.value.ifBlank {
                 dynamic.weather.ifBlank { com.engcamera.i18n.I18n.t("未获取天气") }
             }
+            // 盾牌验证行（v0.6.42）：留空显示本地化默认文案（与升级前的固定文案一致）
+            FieldType.VERIFY -> f.value.ifBlank { com.engcamera.i18n.I18n.t("已验证照片真实性") }
             else -> f.value
         }
         // LocationSource 的初始值/回退值是中文原文（如"未获取定位"），英文模式下要按当前语言显示
@@ -2781,6 +2756,71 @@ private fun recColorGlow(rec: Int): Int = (rec and 0x00FFFFFF) or (0x59 shl 24)
             located
         }
     }
+
+    /**
+     * 盾牌验证行文字（v0.6.42，用户需求 2026-11-23）：三款打卡模板共用同一份取值规则。
+     * 字段关闭 → null（整行不画，版面高度随之收缩）；字段值留空 → 本地化默认文案。
+     */
+    private fun verifyTextOf(state: WatermarkState): String? {
+        val f = state.fields.firstOrNull { it.type == FieldType.VERIFY && it.enabled } ?: return null
+        return f.value.ifBlank { com.engcamera.i18n.I18n.t("已验证照片真实性") }
+    }
+
+    /**
+     * 画盾牌行（轮廓 + 对勾 + 文字），三款打卡模板样式完全一致：
+     * 盾牌 `0.028w × 0.031w`、描边 `0.004w`、盾牌→文字间距 `0.023w`、文字基线由调用方给。
+     * [left] 是盾牌左缘，[baseline] 是文字基线（盾牌按文字墨迹垂直居中）。
+     */
+    private fun drawShieldRow(
+        canvas: Canvas,
+        left: Float,
+        baseline: Float,
+        w: Float,
+        paint: TextPaint,
+        text: String,
+        color: Int,
+    ) {
+        val shieldW = w * 0.028f
+        val shieldH = w * 0.031f
+        val shieldCy = baseline - paint.textSize * 0.28f
+        val sy = shieldCy - shieldH / 2f
+        val shield = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.color = color
+            this.style = Paint.Style.STROKE
+            strokeWidth = w * 0.004f
+            strokeJoin = Paint.Join.ROUND
+        }
+        canvas.drawPath(
+            Path().apply {
+                moveTo(left, sy + shieldH * 0.1f)
+                quadTo(left + shieldW / 2f, sy - shieldH * 0.04f, left + shieldW, sy + shieldH * 0.1f)
+                lineTo(left + shieldW, sy + shieldH * 0.52f)
+                quadTo(left + shieldW, sy + shieldH * 0.84f, left + shieldW / 2f, sy + shieldH)
+                quadTo(left, sy + shieldH * 0.84f, left, sy + shieldH * 0.52f)
+                close()
+            },
+            shield,
+        )
+        canvas.drawPath(
+            Path().apply {
+                moveTo(left + shieldW * 0.28f, shieldCy - shieldW * 0.02f)
+                lineTo(left + shieldW * 0.44f, shieldCy + shieldW * 0.14f)
+                lineTo(left + shieldW * 0.74f, shieldCy - shieldW * 0.18f)
+            },
+            Paint(shield).apply { strokeWidth = w * 0.0035f },
+        )
+        canvas.drawText(text, left + shieldW + w * 0.023f, baseline, paint)
+    }
+
+    /** 盾牌行的总宽（盾牌左缘 → 文字右缘），排版算块宽用 */
+    private fun shieldRowWidth(left: Float, w: Float, paint: TextPaint, text: String): Float =
+        left + w * 0.028f + w * 0.023f + paint.measureText(text)
+
+    /**
+     * 盾牌行占用的行高：与「今日·打卡1」的排版口径一致（盾牌高 0.031w + 底部 0.006w 余量），
+     * 这样今日·打卡 新补的这一行与打卡1 的行距/留白完全对齐。
+     */
+    private fun shieldRowHeight(w: Float): Float = w * 0.031f + w * 0.006f
 
     private fun newLayout(
         text: String,

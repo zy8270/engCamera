@@ -362,6 +362,17 @@ private val EN_DICT: Map<String, String> = mapOf(
     "编辑文字" to "Edit text",
     "旋转缩放" to "Rotate & scale",
     "文字" to "Text",
+    // —— 标注文字模板（v0.6.43，用户需求 2026-11-23；v0.6.44 增删）——
+    "文字模板" to "Text template",
+    "文字颜色" to "Text color",
+    "背景颜色" to "Background color",
+    "描边颜色" to "Outline color",
+    "标记点颜色" to "Marker color",
+    "无背景" to "No background",
+    "标签条" to "Label tag",
+    "圆点标签" to "Dot tag",
+    "圆角卡片" to "Card",
+    "描边字" to "Outline",
     // —— 通用 ——
     "无" to "None",
     // —— 模板预设名与选项标签（数据携带、动态 I18n.t() 调用） ——
@@ -391,6 +402,10 @@ private val EN_DICT: Map<String, String> = mapOf(
     "经纬度" to "Coordinates",
     "打卡" to "ON DUTY",
     "已验证照片真实性" to "Photo authenticity verified",
+    // —— v0.6.42 盾牌验证行字段（三个打卡模板，文字可编辑）——
+    "验证文字" to "Verification text",
+    "默认：已验证照片真实性" to "Default: Photo authenticity verified",
+    "验证文字（留空 = 已验证照片真实性）" to "Verification text (empty = Photo authenticity verified)",
     "请输入施工单位" to "Enter contractor",
     "星期日" to "Sunday",
     "星期一" to "Monday",

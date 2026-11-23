@@ -9,6 +9,12 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 @Serializable
 enum class FieldType {
     PROJECT_NAME, NOTE, DATETIME, LOCATION, CUSTOM, COUNT, WEATHER,
+    /**
+     * 盾牌验证行文字（v0.6.42，用户需求 2026-11-23）：「[盾牌] 已验证照片真实性」。
+     * 只在三款打卡模板（今日·打卡 / 今日·打卡1 / 马克·打卡）出现，不可删除、恒排在最末
+     * （编辑器里紧跟其后的就是防伪码行）；值留空 = 显示本地化的默认文案。
+     */
+    VERIFY,
 }
 
 /** 单个水印字段（对应计划书 6.1） */
@@ -38,7 +44,7 @@ data class WatermarkStyle(
     val lineSpacingRatio: Float = 0.006f,     // 行距比例
     val cornerRatio: Float = 0.006f,          // 圆角比例
     // ---- 0.6.0 模板系统扩展（各模板按需使用）----
-    val layout: String = "LIQUID_GLASS",      // 原生布局标识（见 WatermarkRenderer；默认模板=液态玻璃）
+    val layout: String = "CLASSIC",           // 原生布局标识（见 WatermarkRenderer；默认模板=经典工程蓝，v0.6.44）
     val accentColor: Long = 0xFF1D4E89,       // 主题强调色（线条/竖条/角标）
     val borderColor: Long = 0xFFFFFFFF,       // 边框颜色（边框卡片等）
     val bgOpacity: Int = 100,                 // 背景不透明度百分比（0-100）
@@ -141,22 +147,23 @@ data class WatermarkState(
     val fields: List<WatermarkField> = defaultFields(),
     val style: WatermarkStyle = WatermarkStyle(),
     /**
-     * 归一化中心点 0..1；默认底部居中（默认模板=液态玻璃）。
+     * 归一化中心点 0..1；**默认左下角**（v0.6.44，用户需求 2026-11-23：首次安装默认
+     * 经典工程蓝 + 左下角）。
      * 参照系为重力（v0.6.4，用户拍板 2026-10-16）：「下方」=物理重力方向（桌面所在侧），
      * 与持机方向无关——竖屏在画面下缘，横屏/倒置仍稳定在物理下方；
      * 预览显示由浮层按量化重力角转到屏幕系，成片显示系=重力系直接落位。
      */
-    val anchorX: Float = 0.5f,
+    val anchorX: Float = 0f,
     val anchorY: Float = 1f,
     /** 重力跟随关闭时使用的固定旋转角 */
     val rotationDeg: Float = 0f,
     /** 重力跟随开启后按重力 90° 量化旋转水印文字；位置（锚点）恒为重力参照系 */
     val followGravity: Boolean = true,
-    /** 当前水印模板 id（默认=液态玻璃；内置见 TemplatePresets，用户导入的存 DataStore） */
-    val templateId: String = "liquid_glass",
+    /** 当前水印模板 id（默认=经典工程蓝，v0.6.44；内置见 TemplatePresets，用户导入的存 DataStore） */
+    val templateId: String = "classic",
     // ---- v0.6.16 防伪码 ----
-    /** 常驻图片右下角的防伪码开关（默认关，用户需求 2026-11-04） */
-    val antiFake: Boolean = false,
+    /** 常驻图片右下角的防伪码开关（v0.6.44 默认开，用户需求 2026-11-23：首次安装即显示） */
+    val antiFake: Boolean = true,
     /**
      * 手动指定的防伪码（空=按成片画面内容自动计算）。
      * 手动值只决定"画上去的 14 位"，不改变指纹算法——校验脚本会因此判不一致，
@@ -193,6 +200,22 @@ data class WatermarkState(
      * 只在「使用了自定义图片」时由编辑器拉杆控制；文字角标不受影响。
      */
     val brandBadgeScale: Float = 1f,
+)
+
+/**
+ * 标注文字模板记忆（v0.6.43，用户需求 2026-11-23）：下次添加文字时默认用这套
+ * 模板与配色；每条文字元素自身也带一份（已有元素不受后续改动影响）。
+ */
+@Serializable
+data class TextTemplateStyle(
+    /** 模板 id，见 com.engcamera.watermark.TextTemplate */
+    val templateId: String = "none",
+    /** 文字颜色（ARGB） */
+    val textColor: Long = 0xFFFF5252L,
+    /** 背景填充色（TAG/DOT_TAG/CARD）或描边色（OUTLINE），ARGB */
+    val bgColor: Long = 0xF2FFFFFFL,
+    /** 标记点颜色（只有 DOT_TAG 圆点标签用），默认黄（对齐参考图） */
+    val markerColor: Long = 0xFFFFC107L,
 )
 
 /** 拍照瞬间填充的动态值 */

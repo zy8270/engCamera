@@ -171,6 +171,9 @@ object TemplatePresets {
                 TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
                 // 天气：追加在星期行后（参考图"星期六 晴 30℃"），默认关（用户需求 2026-10-31）
                 TemplateFieldDef(FieldType.WEATHER, "天气", enabled = false, forceEnabled = true),
+                // 盾牌验证行（v0.6.42，用户需求 2026-11-23）：三个打卡模板统一带这一行，
+                // 不可删除、恒排最末（编辑器里紧贴其后的就是防伪码行）
+                TemplateFieldDef(FieldType.VERIFY, "验证文字"),
             ),
             anchorX = 0f,
             anchorY = 1f,
@@ -209,6 +212,8 @@ object TemplatePresets {
                 TemplateFieldDef(FieldType.CUSTOM, "工作单位", deletable = true),
                 // 天气：默认关，开启后追加在日期行后（用户需求 2026-10-31 v248）
                 TemplateFieldDef(FieldType.WEATHER, "天气", enabled = false, forceEnabled = true),
+                // 盾牌验证行（v0.6.42）：样式与今日·打卡 共用同一套绘制代码
+                TemplateFieldDef(FieldType.VERIFY, "验证文字"),
             ),
             anchorX = 0f,
             anchorY = 1f,
@@ -318,6 +323,8 @@ object TemplatePresets {
                 // 备注=圆点行；拍摄人=小人图标行（参考图 2026-10-31），值空整行隐藏
                 TemplateFieldDef(FieldType.NOTE, "备注", deletable = true),
                 TemplateFieldDef(FieldType.CUSTOM, "拍摄人", deletable = true),
+                // 盾牌验证行（v0.6.42，用户需求 2026-11-23）：马克·打卡原有固定文案改为可编辑字段
+                TemplateFieldDef(FieldType.VERIFY, "验证文字"),
             ),
             anchorX = 0f,
             anchorY = 1f,

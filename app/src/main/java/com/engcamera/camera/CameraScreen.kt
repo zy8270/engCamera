@@ -93,6 +93,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.ContentTransform
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -106,6 +107,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
@@ -525,8 +527,7 @@ fun CameraScreen(
 
             Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
-                // 顶部控制条：闪光灯左、设置右；图标角度随重力，位置不变；
-                // 文字工具提示水平居中覆盖在整条上（用户拍板 2026-10-16）
+                // 顶部控制条：闪光灯左、设置右；图标角度随重力，位置不变
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -574,27 +575,35 @@ fun CameraScreen(
                         ui.videoMode -> "录像"
                         else -> "拍照"
                     }
-                    Text(
-                        I18n.t(modeTitle),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        // 标题不随重力旋转（用户反馈 2026-11-10）：它是界面标签不是
-                        // 取景画面上的浮层，横持时应保持正立可读
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                    if ((ui.confirming || (ui.annotating && ui.annotateQueue.isNotEmpty())) &&
+                    // 标题 / 文字工具提示（v0.6.45，用户反馈 2026-11-23）：
+                    // 上一版把提示放在「标题底 + 2dp」，标题底到画布白框只有约 25dp，
+                    // 提示一撑大下半截就被白框压住。这里改为**顶格替换标题**：
+                    // 文字工具激活时，标题位显示操作提示（"确认&标注" 此刻没有信息量，
+                    // 用户更需要知道点哪加字）。字号恢复原样（labelMedium），
+                    // 位置=标题原本那一行，整块完全落在控制条内，永远不会被白框压住。
+                    val showTextHint = (ui.confirming ||
+                        (ui.annotating && ui.annotateQueue.isNotEmpty())) &&
                         ui.annotationTool == 3
-                    ) {
+                    if (showTextHint) {
                         Text(
                             I18n.t("点击图片任意位置添加文字"),
                             color = Color.White,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier
-                                .align(Alignment.BottomCenter)
+                                .align(Alignment.Center)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(Color(0x88000000))
                                 .padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    } else {
+                        Text(
+                            I18n.t(modeTitle),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            // 标题不随重力旋转（用户反馈 2026-11-10）：它是界面标签不是
+                            // 取景画面上的浮层，横持时应保持正立可读
+                            modifier = Modifier.align(Alignment.Center),
                         )
                     }
                 }
@@ -2066,12 +2075,25 @@ private fun AnnotateArea(
                         .border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "+",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 44.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    // 重心居中（v0.6.43，用户实测反馈 2026-11-23）：「+」按文本框
+                    // 居中时，字形墨迹（笔画）并不在文本框正中——「+」的墨迹在字体
+                    // 基线以上偏上，视觉上就偏了。这里用 getTextBounds 量出**墨迹**
+                    // 包围盒，再按其中心反推绘制位置（重心居中）
+                    val plusColor = MaterialTheme.colorScheme.onSurface.toArgb()
+                    Canvas(Modifier.fillMaxSize()) {
+                        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                            color = plusColor
+                            textSize = 44.sp.toPx()
+                            typeface = android.graphics.Typeface.DEFAULT_BOLD
+                            textAlign = android.graphics.Paint.Align.LEFT
+                        }
+                        val bounds = android.graphics.Rect()
+                        paint.getTextBounds("+", 0, 1, bounds)
+                        // 墨迹中心相对绘制原点的偏移（x=左缘, y=基线）
+                        val dx = size.width / 2f - bounds.exactCenterX()
+                        val dy = size.height / 2f - bounds.exactCenterY()
+                        drawContext.canvas.nativeCanvas.drawText("+", dx, dy, paint)
+                    }
                 }
                 Spacer(Modifier.height(14.dp))
                 Text(
@@ -2188,10 +2210,18 @@ private fun renderAnnotateEmptyBackdrop(
         color = fgArgb
         textSize = dpx(44f)
         typeface = android.graphics.Typeface.DEFAULT_BOLD
-        textAlign = android.graphics.Paint.Align.CENTER
+        textAlign = android.graphics.Paint.Align.LEFT
     }
-    plus.getFontMetricsInt(fmi)
-    canvas.drawText("+", cx, cy - (fmi.ascent + fmi.descent) / 2f, plus)
+    // 「+」按墨迹包围盒中心居中（v0.6.43，与真实 UI 同款重心算法）：fontMetrics
+    // 居中是文本框居中，字形墨迹会偏上
+    val inkBounds = android.graphics.Rect()
+    plus.getTextBounds("+", 0, 1, inkBounds)
+    canvas.drawText(
+        "+",
+        cx - inkBounds.exactCenterX(),
+        cy - inkBounds.exactCenterY(),
+        plus,
+    )
     val hintPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = subArgb
         textSize = dpx(13f)
@@ -2362,12 +2392,22 @@ private fun BottomBar(
                     ui.collageMode -> 2
                     else -> 0
                 },
+                // v0.6.45（用户反馈 2026-11-23）：过渡动画改为**从中心缩放淡入**——
+                // 之前只给进入加了 scaleIn、退出是纯 fadeOut，scaleIn 默认 transformOrigin
+                // 是 Center 但配合 AnimatedContent 默认的 sizeTransform/对齐会看起来
+                // 从左上或右下飞。这里进出都用 scale + fade，并显式给 sizeTransform
+                // null（不让容器尺寸动画带偏移），保证缩放轴恒在中心
                 transitionSpec = {
                     ContentTransform(
-                        fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
-                        fadeOut(tween(150)),
+                        targetContentEnter = fadeIn(tween(200)) +
+                            scaleIn(initialScale = 0.7f, animationSpec = tween(200)),
+                        initialContentExit = fadeOut(tween(150)) +
+                            scaleOut(targetScale = 0.7f, animationSpec = tween(150)),
+                        sizeTransform = null,
                     )
                 },
+                // 内容对齐中心（默认 TopStart，宽度不同的胶囊切换时会从左上角飞）
+                contentAlignment = Alignment.Center,
                 label = "modeTools",
                 modifier = Modifier.align(Alignment.Center),
             ) { modeState ->
@@ -2541,12 +2581,18 @@ private fun BottomBar(
                 Box(Modifier.align(Alignment.CenterEnd)) {
                     androidx.compose.animation.AnimatedContent(
                         targetState = ui.confirming || annotatingPhoto,
+                        // v0.6.45：与模式胶囊一致——从中心缩放淡入/向中心缩放淡出
                         transitionSpec = {
                             ContentTransform(
-                                fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
-                                fadeOut(tween(150)),
+                                targetContentEnter = fadeIn(tween(200)) +
+                                    scaleIn(initialScale = 0.7f, animationSpec = tween(200)),
+                                initialContentExit = fadeOut(tween(150)) +
+                                    scaleOut(targetScale = 0.7f, animationSpec = tween(150)),
+                                sizeTransform = null,
                             )
                         },
+                        // 内容对齐中心（默认 TopStart，不同尺寸的图标切换会从左上角飞）
+                        contentAlignment = Alignment.Center,
                         label = "qualityColor",
                     ) { annotUi ->
                         if (annotUi) {
@@ -2585,9 +2631,10 @@ private fun BottomBar(
                             }
                         }
                     }
-                    // 标注颜色面板（默认红）
+                    // 标注颜色面板（默认红）。v0.6.43 修：添加水印标注态也要能开
+                    // （原来只认 ui.confirming，导致该态点色块无反应）
                     androidx.compose.material3.DropdownMenu(
-                        expanded = colorMenuOpen && ui.confirming,
+                        expanded = colorMenuOpen && (ui.confirming || annotatingPhoto),
                         onDismissRequest = { colorMenuOpen = false },
                     ) {
                         Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
@@ -2789,69 +2836,66 @@ private fun Shutter(
     onPickAnnotateImage: () -> Unit = {},
 ) {
     val quickRecording = remember { mutableStateOf(false) }
-    // 确认态/添加水印标注态（v193/v225）：快门=下载图标，点击保存入相册（用户拍板 2026-10-16）
-    if (ui.confirming || ui.annotating) {
-        Box(
-            modifier
-                .size(78.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary)
-                .clickable {
-                    when {
-                        ui.confirming -> vm.confirmSave()
-                        // 空态没东西可存：下载键复用为选图入口
-                        ui.annotateQueue.isEmpty() -> onPickAnnotateImage()
-                        else -> vm.confirmAnnotate()
-                    }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Default.Download,
-                contentDescription = I18n.t("保存照片"),
-                tint = Color.White,
-                modifier = Modifier.size(34.dp),
-            )
-        }
-        return
-    }
     // 保存处理中：快门缩小表示"正在处理"，完成恢复（自定义目录保存有扫描等待，需要可见反馈）
     val shutterScale by animateFloatAsState(
         targetValue = if (ui.capturing) 0.82f else 1f,
         animationSpec = tween(150),
         label = "shutterScale",
     )
+    // 快门形态（v0.6.44，用户需求 2026-11-23）：
+    // 0=拍照（主题实心圆） 1=录像待录（纯红圆） 2=录像中（红色圆角小方块）
+    // 3=确认/添加水印（蓝底下载键）
+    val mode = when {
+        ui.confirming || ui.annotating -> 3
+        ui.recording -> 2
+        ui.videoMode -> 1
+        else -> 0
+    }
+    // 点击行为按 mode 分派（AnimatedContent 里不能各自持有手势，统一在外面）
+    val onClick: () -> Unit = {
+        when {
+            ui.confirming -> vm.confirmSave()
+            ui.annotating ->
+                if (ui.annotateQueue.isEmpty()) onPickAnnotateImage() else vm.confirmAnnotate()
+            ui.collageMode -> vm.takeCollagePhoto()
+            ui.videoMode ->
+                if (ui.recording) vm.stopRecording() else startRecordingWithPermission(false)
+            else -> if (!ui.recording) vm.takePhoto()
+        }
+    }
+    val isSaveMode = mode == 3
     Box(
         modifier
             .size(78.dp)
             .scale(shutterScale)
+            // 外圈：拍照/录像待录=主题色或红；录像中=红；保存态无外圈（整圆填充）
             .clip(CircleShape)
-            .background(if (ui.recording) Color(0x33FF5252) else Color.Transparent)
-            .border(
-                width = 5.dp,
-                // 快门随主题：日间深色圈/芯、夜间浅色（用户拍板 2026-10-12）
-                color = if (ui.recording) ChromeDanger else MaterialTheme.colorScheme.onSurface,
-                shape = CircleShape,
+            .background(
+                when (mode) {
+                    1, 2 -> Color(0x33FF5252)
+                    3 -> MaterialTheme.colorScheme.primary
+                    else -> Color.Transparent
+                },
             )
-            .pointerInput(ui.videoMode, ui.recording, ui.annotating) {
+            .then(
+                if (isSaveMode) {
+                    Modifier
+                } else {
+                    Modifier.border(
+                        width = 5.dp,
+                        // 快门随主题：日间深色圈/芯、夜间浅色（用户拍板 2026-10-12）
+                        color = if (mode == 1 || mode == 2) ChromeDanger
+                        else MaterialTheme.colorScheme.onSurface,
+                        shape = CircleShape,
+                    )
+                },
+            )
+            .pointerInput(ui.videoMode, ui.recording, ui.annotating, ui.confirming, ui.collageMode) {
                 detectTapGestures(
-                    onTap = {
-                        when {
-                            ui.annotating -> vm.confirmAnnotate()
-                            ui.collageMode -> vm.takeCollagePhoto()
-                            ui.videoMode -> {
-                                if (ui.recording) {
-                                    vm.stopRecording()
-                                } else {
-                                    startRecordingWithPermission(false)
-                                }
-                            }
-                            !ui.recording -> vm.takePhoto()
-                        }
-                    },
+                    onTap = { onClick() },
                     onLongPress = {
                         // 拼图模式禁用长按快捷录像（用户需求 2026-11-09）
-                        if (!ui.videoMode && !ui.recording && !ui.annotating && !ui.collageMode) {
+                        if (mode == 0) {
                             quickRecording.value = true
                             startRecordingWithPermission(true)
                         }
@@ -2867,16 +2911,62 @@ private fun Shutter(
             },
         contentAlignment = Alignment.Center,
     ) {
-        if (ui.annotating) {
-            // 添加水印模式：快门变成"确认"
-            Text(I18n.t("确认"), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        } else if (!ui.recording) {
-            Box(
-                Modifier
-                    .size(58.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.onSurface),
-            )
+        // 中心芯：三种模式之间淡入淡出 + 缩放过渡（用户需求 2026-11-23「闪成对应样式」）
+        // v0.6.46：**必须显式 contentAlignment = Center**——AnimatedContent 的
+        // contentAlignment 默认是 TopStart，而上一版把 sizeTransform 置 null 后
+        // 容器立即变成目标尺寸：58dp 圆 ↔ 34dp 下载图标时，小的一方按左上角对齐，
+        // 看起来就是"从左上角飞进中心"。改成 Center 后新旧内容都绕同一个中心点缩放
+        androidx.compose.animation.AnimatedContent(
+            targetState = mode,
+            transitionSpec = {
+                ContentTransform(
+                    targetContentEnter = androidx.compose.animation.fadeIn(tween(220)) +
+                        androidx.compose.animation.scaleIn(
+                            initialScale = 0.55f,
+                            animationSpec = tween(220, easing = FastOutSlowInEasing),
+                        ),
+                    initialContentExit = androidx.compose.animation.fadeOut(tween(140)) +
+                        androidx.compose.animation.scaleOut(
+                            targetScale = 0.55f,
+                            animationSpec = tween(140),
+                        ),
+                    sizeTransform = null,
+                )
+            },
+            // 关键：内容对齐到中心（默认 TopStart 会导致从左上角飞入）
+            contentAlignment = Alignment.Center,
+            label = "shutterCore",
+        ) { m ->
+            when (m) {
+                // 拍照：主题实心圆
+                0 -> Box(
+                    Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurface),
+                )
+                // 录像待录（v0.6.44）：中心**纯红**圆，与拍照区分
+                1 -> Box(
+                    Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(ChromeDanger),
+                )
+                // 录像中：缩小成圆角小方块（停止键）
+                2 -> Box(
+                    Modifier
+                        .size(30.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(ChromeDanger),
+                )
+                // 确认/添加水印：下载图标
+                else -> Icon(
+                    Icons.Default.Download,
+                    contentDescription = I18n.t("保存照片"),
+                    tint = Color.White,
+                    modifier = Modifier.size(34.dp),
+                )
+            }
         }
     }
 }

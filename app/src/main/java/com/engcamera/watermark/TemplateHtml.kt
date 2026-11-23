@@ -60,6 +60,8 @@ object TemplateHtml {
             FieldType.WEATHER -> f.value.ifBlank {
                 dynamic.weather.ifBlank { com.engcamera.i18n.I18n.t("未获取天气") }
             }
+            // 盾牌验证行（v0.6.42）：与原生渲染同规则，留空显示本地化默认文案
+            FieldType.VERIFY -> f.value.ifBlank { com.engcamera.i18n.I18n.t("已验证照片真实性") }
             else -> f.value
         }
         // 天气 emoji 开关：文本值随开关变化，cacheKey 的 values 部分自动失效触发重渲
@@ -176,6 +178,7 @@ object TemplateHtml {
                 FieldType.LOCATION -> "位置"
                 FieldType.WEATHER -> "天气"
                 FieldType.COUNT -> "计数"
+                FieldType.VERIFY -> "验证文字"
                 else -> "备注"
             }
             var deletable = type == FieldType.NOTE || type == FieldType.CUSTOM

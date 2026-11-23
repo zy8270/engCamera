@@ -485,6 +485,8 @@ fun WatermarkOverlay(
                     line2 = state.brandBadgeLine2,
                     pill = state.brandBadgePill,
                     badgeScale = state.brandBadgeScale,
+                    // v0.6.42：开关关闭时连内置文字角标也不画（以前 badgeImage=null 会画出来）
+                    badgeEnabled = state.brandBadge,
                 )
             }
         }

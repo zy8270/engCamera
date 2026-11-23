@@ -47,6 +47,8 @@ class WatermarkRepository(private val context: Context) {
     private val languageKey = stringPreferencesKey("app_language")
     private val photoConfirmKey = booleanPreferencesKey("photo_confirm")
     private val annotationToolKey = intPreferencesKey("annotation_tool")
+    // 标注文字模板记忆（v0.6.43，用户需求 2026-11-23）：模板 + 文字色 + 背景色
+    private val textTemplateKey = stringPreferencesKey("annotation_text_template")
     private val saveTreeUriKey = stringPreferencesKey("save_tree_uri")
     private val saveTreeNameKey = stringPreferencesKey("save_tree_name")
     private val defaultZoomKey = floatPreferencesKey("default_zoom_ratio")
@@ -90,6 +92,10 @@ class WatermarkRepository(private val context: Context) {
     /** 上次使用的标注工具（v195：跨照片/重启记忆，用户拍板 2026-10-16） */
     private val _annotationTool = MutableStateFlow(0)
     val annotationTool: StateFlow<Int> = _annotationTool.asStateFlow()
+
+    /** 标注文字模板记忆（v0.6.43，用户需求 2026-11-23）：下次加字默认用这套模板/配色 */
+    private val _textTemplate = MutableStateFlow(TextTemplateStyle())
+    val textTemplate: StateFlow<TextTemplateStyle> = _textTemplate.asStateFlow()
 
     /** 拼图设置（v0.6.19：列数/模板/标题/字段，用户需求 2026-11-09 带记忆） */
     private val _collage = MutableStateFlow(CollageSettings())
@@ -169,14 +175,16 @@ class WatermarkRepository(private val context: Context) {
                     _state.value = enforceUniqueFieldIds(
                         migrateTimeFormat(
                             migrateSoftShadowDefaults(
-                                ensureCountField(
-                                    ensureWeatherField(
-                                        migrateWidth(
-                                            migrateWebScale(
-                                                migrateWebOpacity(
-                                                    migrateShadowAlpha(
-                                                        migrateLiquidGlass(
-                                                            migrateAddressOrder(migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it))))),
+                                ensureVerifyField(
+                                    ensureCountField(
+                                        ensureWeatherField(
+                                            migrateWidth(
+                                                migrateWebScale(
+                                                    migrateWebOpacity(
+                                                        migrateShadowAlpha(
+                                                            migrateLiquidGlass(
+                                                                migrateAddressOrder(migrateFieldOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(it))))),
+                                                            ),
                                                         ),
                                                     ),
                                                 ),
@@ -200,6 +208,10 @@ class WatermarkRepository(private val context: Context) {
             _editorBackdrop.value = context.appDataStore.data.first()[editorBackdropKey] ?: true
             _photoConfirm.value = context.appDataStore.data.first()[photoConfirmKey] ?: true
             _annotationTool.value = (context.appDataStore.data.first()[annotationToolKey] ?: 0).coerceIn(0, 3)
+            context.appDataStore.data.first()[textTemplateKey]?.let { raw ->
+                runCatching { json.decodeFromString<TextTemplateStyle>(raw) }
+                    .getOrNull()?.let { _textTemplate.value = it }
+            }
             context.appDataStore.data.first()[collageKey]?.let { raw ->
                 runCatching { json.decodeFromString<CollageSettings>(raw) }
                     .getOrNull()?.let { _collage.value = it.copy(columns = it.columns.coerceIn(1, 4)) }
@@ -258,11 +270,13 @@ class WatermarkRepository(private val context: Context) {
                                 state = enforceUniqueFieldIds(
                                     migrateTimeFormat(
                                         migrateSoftShadowDefaults(
-                                            migrateFieldOrder(
-                                                migrateWebScale(
-                                                    migrateWebOpacity(
-                                                        migrateShadowAlpha(
-                                                            migrateLiquidGlass(migrateAddressOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state))))),
+                                            ensureVerifyField(
+                                                migrateFieldOrder(
+                                                    migrateWebScale(
+                                                        migrateWebOpacity(
+                                                            migrateShadowAlpha(
+                                                                migrateLiquidGlass(migrateAddressOrder(migrateTitleBg(migrateAccentTitle(migrateDefaultTitle(p.state))))),
+                                                            ),
                                                         ),
                                                     ),
                                                 ),
@@ -376,6 +390,22 @@ class WatermarkRepository(private val context: Context) {
         } else {
             s
         }
+
+    /**
+     * 存量数据补齐盾牌验证字段（v0.6.42，用户需求 2026-11-23）。
+     *
+     * 只对三款打卡模板补齐：今日·打卡1 / 马克·打卡 升级前**恒画**这一行，缺字段会变回无盾牌
+     * （回归）；今日·打卡 是新加这一行，同样补上。恒追加在末尾——它就该排在防伪码行上面。
+     * 其它模板（含用户导入模板）不补：它们本来没有这一行。
+     */
+    private fun ensureVerifyField(s: WatermarkState): WatermarkState {
+        val layouts = setOf("TODAY_CLOCK", "TODAY_CLOCK1", "MARK_CLOCK")
+        if (s.style.layout !in layouts) return s
+        if (s.fields.any { it.type == FieldType.VERIFY }) return s
+        return s.copy(
+            fields = s.fields + WatermarkField("f_verify", FieldType.VERIFY, "验证文字", ""),
+        )
+    }
 
     /** 存量数据迁移：水印块宽度统一到 0.576（v0.2.7：0.72→0.48 收窄过窄，按用户反馈 ×1.2 加宽） */
     private fun migrateWidth(s: WatermarkState): WatermarkState =
@@ -607,6 +637,14 @@ class WatermarkRepository(private val context: Context) {
         _annotationTool.value = tool.coerceIn(0, 3)
         scope.launch {
             context.appDataStore.edit { it[annotationToolKey] = tool.coerceIn(0, 3) }
+        }
+    }
+
+    /** 标注文字模板记忆（v0.6.43）：模板与配色一起存，下次加字沿用 */
+    fun setTextTemplate(style: TextTemplateStyle) {
+        _textTemplate.value = style
+        scope.launch {
+            context.appDataStore.edit { it[textTemplateKey] = json.encodeToString(style) }
         }
     }
 
