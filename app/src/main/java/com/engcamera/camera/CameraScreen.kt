@@ -43,8 +43,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
@@ -53,6 +55,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Grid3x3
 import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.FlashAuto
@@ -66,12 +69,14 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.AvTimer
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -83,10 +88,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -104,8 +112,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.layout
@@ -128,6 +136,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -137,13 +148,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.ceil
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.engcamera.data.ThemeMode
+import com.engcamera.ui.theme.ChromeAmber
 import com.engcamera.ui.theme.ChromeBadge
 import com.engcamera.ui.theme.ChromeBrand
 import com.engcamera.ui.theme.ChromeDanger
@@ -380,6 +394,83 @@ fun CameraScreen(
             }
             // 抽屉展开时返回键收起抽屉，而不是退出应用
             androidx.activity.compose.BackHandler(enabled = showSettings) { showSettings = false }
+            // 延时拍照设置弹窗（v0.6.47）：独立 AlertDialog 窗口，返回键由它自己关掉；
+            // 这里再挂一条更高优先级的 BackHandler 兜底，确保不会漏到 NavHost 退出应用
+            var showDelayDialog by remember { mutableStateOf(false) }
+            androidx.activity.compose.BackHandler(enabled = showDelayDialog) { showDelayDialog = false }
+
+            // ---------- 延时拍照倒计时（v0.6.47，用户需求 2026-11-27） ----------
+            // 只在「按快门后要等」的动作上生效（拍照 / 开录 / 拼图连拍）；
+            // 停止录像与保存不受影响。倒计时期间再按一次快门=取消（用户拍板）。
+            val delaySeconds by vm.delaySeconds.collectAsState()
+            // 取景辅助（v0.6.48，用户需求 2026-11-27）：构图线 / 水平仪，默认关、带记忆
+            val gridLines by vm.gridLines.collectAsState()
+            val levelGauge by vm.levelGauge.collectAsState()
+            // 水平仪角度：**不要**用 by 解构——那会在组合里读值，每 0.2° 都重组相机页。
+            // 只把 State 对象传下去，由 Canvas 的绘制 lambda 读取：读取发生在绘制阶段，
+            // 传感器更新只触发重绘
+            val levelRollState = vm.levelRoll.collectAsState()
+            val delayScope = rememberCoroutineScope()
+            var delayJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+            var delayRemaining by remember { mutableIntStateOf(0) }
+            // 进度用独立的 float 状态：只被快门的 Canvas 在绘制阶段读取，
+            // 每帧变化只触发重绘、不触发整页重组（相机页重组代价大）
+            val delayProgress = remember { mutableFloatStateOf(0f) }
+            var delayPending by remember { mutableStateOf<(() -> Unit)?>(null) }
+            val cancelDelay: () -> Unit = {
+                delayJob?.cancel()
+                delayJob = null
+                delayRemaining = 0
+                delayProgress.floatValue = 0f
+                delayPending = null
+            }
+            val triggerWithDelay: (() -> Unit) -> Unit = { action ->
+                when {
+                    // 倒计时进行中：再按一次 = 取消本次拍摄
+                    delayRemaining > 0 -> cancelDelay()
+                    delaySeconds > 0 -> {
+                        val total = delaySeconds
+                        delayPending = action
+                        delayRemaining = total
+                        delayProgress.floatValue = 0f
+                        delayJob = delayScope.launch {
+                            val totalMs = total * 1000L
+                            val start = android.os.SystemClock.uptimeMillis()
+                            while (true) {
+                                val elapsed = android.os.SystemClock.uptimeMillis() - start
+                                val p = (elapsed.toFloat() / totalMs).coerceIn(0f, 1f)
+                                delayProgress.floatValue = p
+                                val remain = ceil((totalMs - elapsed) / 1000.0)
+                                    .toInt().coerceAtLeast(0)
+                                if (remain != delayRemaining) delayRemaining = remain
+                                if (p >= 1f) break
+                                // 逐帧刷新进度环；被取消（再按快门/切模式/离开页面）即中断
+                                withFrameNanos { }
+                            }
+                            delayRemaining = 0
+                            delayProgress.floatValue = 0f
+                            val a = delayPending
+                            delayPending = null
+                            delayJob = null
+                            a?.invoke()
+                        }
+                    }
+                    else -> action()
+                }
+            }
+            // 离开相机页：scope 随组合销毁自动取消，倒计时不会在别处触发。
+            // 模式/入口变化（进确认页、添加水印、拼图、屏保）也作废倒计时，
+            // 否则会在一张不相干的界面上突然触发拍摄
+            LaunchedEffect(ui.confirming, ui.annotating, ui.collagePreviewOpen, ui.screenSaver) {
+                if (ui.confirming || ui.annotating || ui.collagePreviewOpen || ui.screenSaver) {
+                    cancelDelay()
+                }
+            }
+            // 延时过程中切模式（录像↔拍照、进出拼图）：直接停掉延时任务（用户反馈 2026-11-27）。
+            // 原实现会让计时结束仍按旧动作开录，而切到拍照后的快门不再管录像 → 录上了停不掉
+            LaunchedEffect(ui.videoMode, ui.collageMode) {
+                cancelDelay()
+            }
             // 连拍预览打开时，返回键 = 关预览回拍照界面（不是退出拼图模式，用户反馈 2026-11-09）。
             // 必须排在退出拼图的 BackHandler 之前——Compose 的 BackHandler 后注册者优先，
             // 所以这条要写在下面那条之后才会先执行；这里用互斥 enabled 条件区分：
@@ -555,6 +646,19 @@ fun CameraScreen(
                             )
                         }
                         Spacer(Modifier.weight(1f))
+                        // 延时拍照快捷入口（v0.6.48，用户需求 2026-11-27）：已设延时（>0 秒）时
+                        // 出现在设置齿轮左边，点按直接调延时设置弹窗——方便快速改秒数。
+                        // 未启用时不占位（设置里的卡片负责开启）
+                        if (delaySeconds > 0) {
+                            IconButton(onClick = { showDelayDialog = true }) {
+                                Icon(
+                                    Icons.Default.AvTimer,
+                                    contentDescription = I18n.t("延时拍照设置"),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.rotate(rot.toFloat()),
+                                )
+                            }
+                        }
                         IconButton(onClick = { showSettings = true }) {
                             Icon(
                                 Icons.Default.Settings,
@@ -662,6 +766,10 @@ fun CameraScreen(
                         },
                         collageColumns = collageSettings.columns,
                         collageTemplate = collageSettings.template,
+                        delayCountdown = delayRemaining,
+                        gridLines = gridLines,
+                        levelGauge = levelGauge,
+                        levelRoll = { levelRollState.value },
                     )
                 }
 
@@ -695,6 +803,10 @@ fun CameraScreen(
                     onRequestExitCollage = ::requestExitCollage,
                     onConfirmCollage = ::requestConfirmCollage,
                     onEnterCollage = { vm.enterCollage() },
+                    showDelayIcon = delaySeconds > 0,
+                    onDelayableShutter = triggerWithDelay,
+                    delayProgress = { delayProgress.floatValue },
+                    delayRunning = delayRemaining > 0,
                     onAddFromGallery = {
                         // 先 Toast 说明用途，再跳系统照片选择器（用户需求 2026-11-15）。
                         // 直接弹系统 Toast 而不是走 ui.toast：走状态的话组合会在
@@ -733,20 +845,26 @@ fun CameraScreen(
             }
 
             // 音量键→快门（设置开启时 Activity 转发；仅相机页组合期间注册）
+            // v0.6.47：与屏幕快门一致走延时包装（倒计时中再按=取消，用户拍板）
             val appContainer = (context.applicationContext as com.engcamera.EngCameraApp).container
+            val delayableRef = rememberUpdatedState(triggerWithDelay)
             DisposableEffect(navLifecycle, vm) {
                 appContainer.volumeKeyHandler = {
                     val st = vm.ui.value
                     when {
                         // 拼图预览覆盖层盖住快门时不响应（用户拍板 2026-11-09）
                         st.collagePreviewOpen -> true
-                        st.collageMode -> { vm.takeCollagePhoto(); true }
+                        st.collageMode -> { delayableRef.value { vm.takeCollagePhoto() }; true }
                         st.annotating -> { vm.confirmAnnotate(); true }
                         st.videoMode -> {
-                            if (st.recording) vm.stopRecording() else startRecordingWithPermission(false)
+                            if (st.recording) {
+                                vm.stopRecording()
+                            } else {
+                                delayableRef.value { startRecordingWithPermission(false) }
+                            }
                             true
                         }
-                        else -> { vm.takePhoto(); true }
+                        else -> { delayableRef.value { vm.takePhoto() }; true }
                     }
                 }
                 onDispose { appContainer.volumeKeyHandler = null }
@@ -866,7 +984,24 @@ fun CameraScreen(
                 visible = showSettings,
                 vm = vm,
                 onDismiss = { showSettings = false },
+                // 抽屉里点「延时时间」：先收起抽屉再弹窗，避免两层浮层叠着
+                onOpenDelayDialog = {
+                    showSettings = false
+                    showDelayDialog = true
+                },
             )
+
+            // 延时拍照设置弹窗（抽屉里点「延时时间」或右上角秒表进入）
+            if (showDelayDialog) {
+                DelayShutterDialog(
+                    current = delaySeconds,
+                    onDismiss = { showDelayDialog = false },
+                    onConfirm = {
+                        vm.setDelaySeconds(it)
+                        showDelayDialog = false
+                    },
+                )
+            }
         }
 
         // 录像屏保（v0.6.39，用户需求 2026-11-22）：整屏黑 + 一行「红录像机 录像中：hh:mm:ss」，
@@ -952,12 +1087,17 @@ private fun SettingsDrawer(
     visible: Boolean,
     vm: CameraViewModel,
     onDismiss: () -> Unit,
+    onOpenDelayDialog: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val saveOriginal by vm.saveOriginal.collectAsState()
     val createTitleFromName by vm.createTitleFromName.collectAsState()
     val shutterSound by vm.shutterSound.collectAsState()
     val volumeShutter by vm.volumeShutter.collectAsState()
+    val delaySeconds by vm.delaySeconds.collectAsState()
+    // 取景器辅助（v0.6.48，用户需求 2026-11-27）：顶部卡片区显示激活态
+    val gridLines by vm.gridLines.collectAsState()
+    val levelGauge by vm.levelGauge.collectAsState()
     val watermark by vm.watermark.collectAsState()
     val themeMode by vm.themeMode.collectAsState()
     val languageMode by vm.languageMode.collectAsState()
@@ -1162,121 +1302,120 @@ private fun SettingsDrawer(
                 )
                 Spacer(Modifier.height(12.dp))
 
-                // 手风琴分组（v0.6.18 用户需求 2026-11-09）：仅「缩放倍率 / 画质设置 /
-                // 存储设置」三项折叠，同级仅一个展开、走文档流（后续分组随之下移），
-                // 默认全部收起；其余设置项照旧平铺在第一层
+                // ---------- 常用功能卡片（v0.6.48，用户需求 2026-11-27） ----------
+                // 九宫格：目前只做第一排（构图线 / 水平仪 / 延时拍照）。
+                // 卡片底色表达激活态：启用=深一档容器色，未启用=贴近背景的浅色（暗色模式反之）。
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SettingsFeatureCard(
+                        icon = Icons.Default.Grid3x3,
+                        label = I18n.t("构图线"),
+                        active = gridLines,
+                        onClick = { vm.setGridLines(!gridLines) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    SettingsFeatureCard(
+                        icon = Icons.Default.Balance,
+                        label = I18n.t("水平仪"),
+                        active = levelGauge,
+                        onClick = { vm.setLevelGauge(!levelGauge) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    // 延时：未启用显示「延时拍照」，启用后显示「延时N秒」；点按弹延时设置
+                    SettingsFeatureCard(
+                        icon = Icons.Default.AvTimer,
+                        label = if (delaySeconds > 0) {
+                            I18n.t("延时{n}秒").replace("{n}", "$delaySeconds")
+                        } else {
+                            I18n.t("延时拍照")
+                        },
+                        active = delaySeconds > 0,
+                        onClick = onOpenDelayDialog,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+
+                // 手风琴分组（v0.6.18 用户需求 2026-11-09）：同级仅一个展开、走文档流
+                // （后续分组随之下移），默认全部收起
                 var expandedGroup by remember { mutableStateOf<SettingsGroup?>(null) }
                 fun toggle(g: SettingsGroup) { expandedGroup = if (expandedGroup == g) null else g }
 
-                // 外观：跟随系统 / 日间 / 夜间（0.6.0 新增，DataStore 持久化）
-                Text(
-                    I18n.t("外观"),
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                // ---------- 平铺的单项（v0.6.48 用户需求 2026-11-27：散碎单项放上面，
+                // 所有折叠分组统一排到下面） ----------
+                SettingsSwitchRow(
+                    title = I18n.t("拍照后确认"),
+                    desc = I18n.t("拍完先预览，可标注后再决定是否保存"),
+                    checked = photoConfirm,
+                    onChange = { vm.setPhotoConfirm(it) },
                 )
-                Text(
-                    I18n.t("日间/夜间模式，或跟随系统"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                SettingsSwitchRow(
+                    title = I18n.t("音量键拍照"),
+                    desc = I18n.t("按音量键即可拍照"),
+                    checked = volumeShutter,
+                    onChange = { vm.setVolumeShutter(it) },
                 )
-                Spacer(Modifier.height(8.dp))
-                ThemeModeSelector(
-                    selected = themeMode,
-                    onSelect = { vm.setThemeMode(it) },
-                )
-                Spacer(Modifier.height(16.dp))
 
-                // 界面语言（v191：跟随系统/中文/English，用户拍板全量中英）
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { showLangPicker.value = true }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "语言 / Language",
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            when (languageMode) {
-                                com.engcamera.i18n.AppLanguageMode.SYSTEM -> I18n.t("跟随系统语言")
-                                com.engcamera.i18n.AppLanguageMode.ZH -> "中文"
-                                com.engcamera.i18n.AppLanguageMode.EN -> "English"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                // ---------- 界面&语言EN（v0.6.48，用户需求 2026-11-27：外观 / 界面语言 /
+                // 快门声音 三项收进本组，位置在水印设置上方——所有折叠项都排在单项下面） ----------
+                SettingsGroupHeader(I18n.t("界面&语言EN"), expandedGroup == SettingsGroup.UI_LANGUAGE) {
+                    toggle(SettingsGroup.UI_LANGUAGE)
                 }
-                Spacer(Modifier.height(16.dp))
+                SettingsGroupBody(expandedGroup == SettingsGroup.UI_LANGUAGE) {
+                    // 外观：跟随系统 / 日间 / 夜间（0.6.0 新增，DataStore 持久化）
+                    Text(
+                        I18n.t("外观"),
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        I18n.t("日间/夜间模式，或跟随系统"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    ThemeModeSelector(
+                        selected = themeMode,
+                        onSelect = { vm.setThemeMode(it) },
+                    )
+                    Spacer(Modifier.height(12.dp))
 
-                // 拍照后确认（v193 默认开，用户拍板 2026-10-16）：开启时拍照闪黑不触发
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            I18n.t("拍照后确认"),
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            I18n.t("拍完先预览，可标注后再决定是否保存"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    // 界面语言（v191：跟随系统/中文/English，用户拍板全量中英）
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { showLangPicker.value = true }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "语言 / Language",
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                when (languageMode) {
+                                    com.engcamera.i18n.AppLanguageMode.SYSTEM -> I18n.t("跟随系统语言")
+                                    com.engcamera.i18n.AppLanguageMode.ZH -> "中文"
+                                    com.engcamera.i18n.AppLanguageMode.EN -> "English"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Switch(checked = photoConfirm, onCheckedChange = { vm.setPhotoConfirm(it) })
-                }
-                Spacer(Modifier.height(16.dp))
 
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            I18n.t("快门声音"),
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            I18n.t("拍照时播放快门音（部分地区法规强制）"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Switch(checked = shutterSound, onCheckedChange = { vm.setShutterSound(it) })
+                    SettingsSwitchRow(
+                        title = I18n.t("快门声音"),
+                        desc = I18n.t("拍照时播放快门音（部分地区法规强制）"),
+                        checked = shutterSound,
+                        onChange = { vm.setShutterSound(it) },
+                    )
                 }
-                Spacer(Modifier.height(16.dp))
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            I18n.t("音量键拍照"),
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            I18n.t("按音量键即可拍照"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Switch(checked = volumeShutter, onCheckedChange = { vm.setVolumeShutter(it) })
-                }
-                Spacer(Modifier.height(16.dp))
 
                 // ---------- 水印设置（用户需求 2026-11-09：水印跟随重力 + 取景器截帧背景收进本组） ----------
                 SettingsGroupHeader(I18n.t("水印设置"), expandedGroup == SettingsGroup.WATERMARK) {
@@ -1450,7 +1589,7 @@ private fun SettingsDrawer(
                         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
                     }.getOrDefault(0L)
                     Text(
-                        "Rnzhy 2026.11.19 $versionCode engCamera MIT",
+                        "Rnzhy 2026.11.27 $versionCode engCamera MIT",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -1477,9 +1616,10 @@ private fun SettingsDrawer(
     }
 }
 
-/** 设置抽屉的可折叠分组（v0.6.18，用户需求 2026-11-09）：只有这四个折叠，
- *  其余设置项平铺在第一层；同层级手风琴，仅一个展开 */
-private enum class SettingsGroup { WATERMARK, ZOOM, QUALITY, STORAGE }
+/** 设置抽屉的可折叠分组（v0.6.18，用户需求 2026-11-09）：同级手风琴，仅一个展开。
+ *  v0.6.47 追加 VOLUME_DELAY；v0.6.48 该组拆解（音量键放回平铺、延时入口移到顶部卡片），
+ *  新增 UI_LANGUAGE（外观/语言/快门相关，排第一）。 */
+private enum class SettingsGroup { UI_LANGUAGE, WATERMARK, ZOOM, QUALITY, STORAGE }
 
 /** 分组标题：整行可点，右侧展开/收起状态图标（箭头随状态翻转） */
 @Composable
@@ -1528,6 +1668,59 @@ private fun SettingsGroupBody(expanded: Boolean, content: @Composable () -> Unit
     }
 }
 
+/**
+ * 常用功能卡片（v0.6.48，用户需求 2026-11-27）：图标 + 文字，九宫格第一排。
+ * 激活态靠底色深浅表达（不是描边）：启用=主色实底（亮色模式变深、暗色模式变浅，
+ * 正好是用户说的「暗色模式反之」），未启用=贴近背景的容器色。
+ */
+@Composable
+private fun SettingsFeatureCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dark = LocalAppDarkTheme.current
+    // 未启用：几乎与背景同色（亮色用 high、暗色用 lowest），只有很淡的存在感
+    val inactiveBg = if (dark) {
+        MaterialTheme.colorScheme.surfaceContainerLowest
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val bg = if (active) MaterialTheme.colorScheme.primary else inactiveBg
+    val fg = if (active) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = fg,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+            color = fg,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /** 分组内的开关行（标题+说明+右侧 Switch） */
 @Composable
 private fun SettingsSwitchRow(
@@ -1561,8 +1754,7 @@ private fun SettingsSwitchRow(
 
 /** 分组内的「标题 + 当前值」行（点击进入二级界面，如语言、保存路径） */
 @Composable
-private fun SettingsValueRow(title: String, value: String, onClick: () -> Unit) {
-    Row(
+private fun SettingsValueRow(title: String, value: String, onClick: () -> Unit) {    Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
@@ -1583,6 +1775,139 @@ private fun SettingsValueRow(title: String, value: String, onClick: () -> Unit) 
             )
         }
     }
+}
+
+/**
+ * 延时拍照设置弹窗（v0.6.47，用户需求 2026-11-27）。
+ * 首行开关「启用延时拍照」与输入框双向联动：关→0 秒，开→5 秒（若当前为 0），
+ * 手改输入框为 0 时开关自动关。输入框限三位纯数字，预设胶囊一键填值。
+ * 返回键=关弹窗（Dialog 自己处理），不会退出应用。
+ */
+@Composable
+private fun DelayShutterDialog(
+    current: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    // 弹窗内草稿：只有点「确定」才落库（点取消/返回=不生效）。
+    // 用 TextFieldValue 而不是 String：String 重载在首次聚焦时选区落在 TextRange.Zero，
+    // 光标会跑到数字前面（用户反馈 2026-11-27）；这里显式把光标放到内容末尾，
+    // 与「接着改已有秒数」的直觉一致。程序改值（开关/预设胶囊）同样把光标推到末尾。
+    var textTfv by remember(current) {
+        val init = if (current > 0) "$current" else "0"
+        mutableStateOf(
+            androidx.compose.ui.text.input.TextFieldValue(
+                init,
+                androidx.compose.ui.text.TextRange(init.length),
+            ),
+        )
+    }
+    val text = textTfv.text
+    fun setText(t: String) {
+        textTfv = androidx.compose.ui.text.input.TextFieldValue(
+            t,
+            androidx.compose.ui.text.TextRange(t.length),
+        )
+    }
+    val enabled = (text.toIntOrNull() ?: 0) > 0
+    val focus = remember { FocusRequester() }
+    // 自动激活输入法：弹窗展开后请求焦点（延一帧，等 Dialog 窗口挂上）
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(150)
+        runCatching { focus.requestFocus() }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(I18n.t("延时拍照")) },
+        text = {
+            Column {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        I18n.t("启用延时拍照"),
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = enabled,
+                        onCheckedChange = { on ->
+                            // 开：从 0 起步时给 5 秒默认值；关：清零
+                            setText(if (on) "5" else "0")
+                        },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = textTfv,
+                    onValueChange = { v ->
+                        // 只留数字、最多三位（正整数；空串允许，提交时按 0 处理）。
+                        // 过滤后文本可能变短，光标要夹回合法范围并保持在末尾附近
+                        val digits = v.text.filter { it.isDigit() }.take(3)
+                        textTfv = v.copy(
+                            text = digits,
+                            selection = androidx.compose.ui.text.TextRange(
+                                v.selection.end.coerceIn(0, digits.length),
+                            ),
+                        )
+                    },
+                    label = { Text(I18n.t("延时时间（秒）")) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focus),
+                )
+                Spacer(Modifier.height(12.dp))
+                // 预设：胶囊按钮自动均分一排（5/10/20/30 秒）
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(5, 10, 20, 30).forEach { preset ->
+                        val selected = text.toIntOrNull() == preset
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(17.dp))
+                                .background(
+                                    if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    },
+                                )
+                                .clickable { setText("$preset") },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                I18n.t("{n}秒").replace("{n}", "$preset"),
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onConfirm((text.toIntOrNull() ?: 0).coerceIn(0, 999))
+            }) { Text(I18n.t("确定")) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(I18n.t("取消")) }
+        },
+    )
 }
 
 /** 徽标随重力旋转的布局修饰符：0/180° 原地旋转（旋转后包围盒不变，不越界）；
@@ -1674,8 +1999,84 @@ private fun CollageMinimap(
     }
 }
 
-/** 3:4 预览区（与成片比例一致），水印浮层所见即所得；焦段/计时角标只转角度不挪位置 */
+/**
+ * 取景辅助层（v0.6.48，用户需求 2026-11-27）：构图线 + 水平仪，参照系统相机实现。
+ * - 构图线：九宫格（1/3、2/3 处两横两竖），与取景框对齐、不随重力旋转
+ * - 水平仪：过中心的横线随持机倾斜转动；接近水平（±1°）时缩短并变黄
+ * roll 用 provider 传入：读状态发生在**绘制阶段**，每 0.2° 的传感器更新只触发重绘，
+ * 不触发相机页重组（相机页重组代价大）。
+ */
 @Composable
+private fun ViewfinderGuides(
+    grid: Boolean,
+    level: Boolean,
+    rollDeg: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    if (!grid && !level) return
+    Canvas(modifier) {
+        if (grid) {
+            val lineColor = Color(0x59FFFFFF)
+            val stroke = 1.dp.toPx()
+            val tx = size.width / 3f
+            val ty = size.height / 3f
+            listOf(tx, tx * 2).forEach { x ->
+                drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), stroke)
+            }
+            listOf(ty, ty * 2).forEach { y ->
+                drawLine(lineColor, Offset(0f, y), Offset(size.width, y), stroke)
+            }
+        }
+        if (level) {
+            // v0.6.48 用户反馈 2026-11-27：原来按 180° 周期归一判水平，只有正立/倒置高亮，
+            // 横屏（±90）永远不激活。现在拆成两件事：
+            // 1) 线的**方向**跟真实地平线走（180° 周期归一：0 与 180 同一方向、±90 竖直），
+            //    横屏时地平线在屏幕上是竖的，线就该是竖的；
+            // 2) 线的**水平判定**按 90° 周期归一——0/90/180/270 四个姿态都算「正」，
+            //    这样横屏和倒置一样能激活高亮。
+            val raw = rollDeg()
+            val dir = ((raw + 90f) % 180f + 180f) % 180f - 90f
+            val dev = ((raw + 45f) % 90f + 90f) % 90f - 45f
+            val isLevel = kotlin.math.abs(dev) <= 1f
+            // 已水平就把线锁到最近的 90° 整数倍（去掉 ±1° 内的抖动，视觉上是「咔哒」对齐）
+            val angle = if (isLevel) (raw / 90f).roundToInt() * 90f else dir
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val half = (if (isLevel) 26.dp else 88.dp).toPx()
+            val color = if (isLevel) ChromeAmber else Color(0xCCFFFFFF)
+            // 先画一层深色底衬，保证在浅色画面上也看得见
+            rotate(angle, center) {
+                drawLine(
+                    Color(0x59000000),
+                    Offset(center.x - half, center.y),
+                    Offset(center.x + half, center.y),
+                    strokeWidth = 3.dp.toPx(),
+                )
+                drawLine(
+                    color,
+                    Offset(center.x - half, center.y),
+                    Offset(center.x + half, center.y),
+                    strokeWidth = 1.5.dp.toPx(),
+                )
+                // 两端小竖线：像水平仪的刻度端头
+                val tick = 4.dp.toPx()
+                listOf(-half, half).forEach { dx ->
+                    drawLine(
+                        color,
+                        Offset(center.x + dx, center.y - tick),
+                        Offset(center.x + dx, center.y + tick),
+                        strokeWidth = 1.5.dp.toPx(),
+                    )
+                }
+            }
+            // 水平时中心点实心圆点：一眼确认「已经正了」
+            if (isLevel) {
+                drawCircle(ChromeAmber, radius = 2.dp.toPx(), center = center)
+            }
+        }
+    }
+}
+
+/** 3:4 预览区（与成片比例一致），水印浮层所见即所得；焦段/计时角标只转角度不挪位置 */@Composable
 private fun PreviewArea(
     modifier: Modifier,
     previewView: PreviewView,
@@ -1687,6 +2088,12 @@ private fun PreviewArea(
     onOpenEditor: () -> Unit,
     collageColumns: Int = 1,
     collageTemplate: com.engcamera.data.CollageTemplate = com.engcamera.data.CollageTemplate.NONE,
+    // 延时拍照倒计时（v0.6.47）：>0 时在预览正中叠一个大号半透明数字
+    delayCountdown: Int = 0,
+    // 取景辅助（v0.6.48）：构图线 + 水平仪；roll 走 lambda 供绘制阶段读取
+    gridLines: Boolean = false,
+    levelGauge: Boolean = false,
+    levelRoll: () -> Float = { 0f },
 ) {
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     Box(
@@ -1714,6 +2121,14 @@ private fun PreviewArea(
             },
     ) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+        // 取景辅助：构图线 + 水平仪（v0.6.48，用户需求 2026-11-27）。画在预览之上、
+        // 水印之下：它们只辅助取景，绝不能盖住水印预览的可见性
+        ViewfinderGuides(
+            grid = gridLines,
+            level = levelGauge,
+            rollDeg = levelRoll,
+            modifier = Modifier.matchParentSize(),
+        )
         // 液态玻璃实时采样源：PreviewView 当前帧（TextureView 模式可 getBitmap）。
         // 上一次帧在下次采样时回收（本 lambda 串行调用，覆盖层拿到的位图只读不回收）
         val backdropProvider = remember(previewView) {
@@ -1935,7 +2350,46 @@ private fun PreviewArea(
                 Text("${ui.recordingSeconds}s", color = Color.White)
             }
         }
+        // 延时拍照倒计时（v0.6.47，用户需求 2026-11-27）：预览正中一个大号浅白半透明数字，
+        // 数字宽度约屏宽 1/3；每秒换数字时从完全透明渐显（不压暗画面，用户拍板）
+        if (delayCountdown > 0) {
+            DelayCountdownOverlay(delayCountdown)
+        }
         // 注：电子变焦徽标已并入右上角的合并胶囊（v0.6.21 左段），此处不再单独渲染
+    }
+}
+
+/** 倒计时数字：宽约屏宽 1/3（按位数反算字号），每秒从透明→浅白半透明并轻微缩入 */
+@Composable
+private fun DelayCountdownOverlay(count: Int) {
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val density = LocalDensity.current
+        val digits = count.toString().length
+        // 单字符 advance 约 0.6em：要让整串宽度≈1/3 屏宽，字号≈(W/3)/(0.6×位数)
+        val fontSize = with(density) {
+            (maxWidth / (3f * 0.6f * digits)).toSp()
+        }
+        val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
+        val scale = remember { androidx.compose.animation.core.Animatable(1.12f) }
+        LaunchedEffect(count) {
+            alpha.snapTo(0f)
+            scale.snapTo(1.12f)
+            launch { scale.animateTo(1f, tween(280)) }
+            alpha.animateTo(1f, tween(280))
+        }
+        Text(
+            text = "$count",
+            color = Color.White.copy(alpha = 0.55f),
+            fontSize = fontSize,
+            fontWeight = FontWeight.Light,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .graphicsLayer {
+                    this.alpha = alpha.value
+                    scaleX = scale.value
+                    scaleY = scale.value
+                },
+        )
     }
 }
 
@@ -2329,6 +2783,11 @@ private fun BottomBar(
     onConfirmCollage: () -> Unit = {},
     onEnterCollage: () -> Unit = {},
     onAddFromGallery: () -> Unit = {},
+    // 延时拍照（v0.6.47）：快门上的沙漏标记 + 需要延时的动作包装 + 读秒进度环
+    showDelayIcon: Boolean = false,
+    onDelayableShutter: (() -> Unit) -> Unit = { it() },
+    delayProgress: () -> Float = { 0f },
+    delayRunning: Boolean = false,
 ) {
     Column(
         Modifier
@@ -2788,6 +3247,10 @@ private fun BottomBar(
                 startRecordingWithPermission = startRecordingWithPermission,
                 onPickAnnotateImage = onPickAnnotateImage,
                 modifier = Modifier.align(Alignment.Center),
+                onDelayableShutter = onDelayableShutter,
+                showDelayIcon = showDelayIcon,
+                delayProgress = delayProgress,
+                delayRunning = delayRunning,
             )
 
             // 前后摄切换（右）：确认态=X 丢弃不保存；添加水印标注态=X 返回选图态；
@@ -2834,6 +3297,15 @@ private fun Shutter(
     modifier: Modifier = Modifier,
     // 添加水印空态点下载=发起选图（等于点 +，用户需求 2026-10-17）
     onPickAnnotateImage: () -> Unit = {},
+    // 延时拍照（v0.6.47）：拍照/开录/拼图连拍这三类「按快门后要等」的动作
+    // 走这个包装（内部决定立即执行还是先倒计时）；保存/停止录像不受延时影响
+    onDelayableShutter: (() -> Unit) -> Unit = { it() },
+    // 已设置延时：快门中心叠一个沙漏图标（用户需求 2026-11-27）
+    showDelayIcon: Boolean = false,
+    // 倒计时进度 0..1（读在绘制阶段：每帧只重绘进度环，不触发整页重组）
+    delayProgress: () -> Float = { 0f },
+    // 倒计时进行中（>0）：快门中间空隙显示进度环
+    delayRunning: Boolean = false,
 ) {
     val quickRecording = remember { mutableStateOf(false) }
     // 保存处理中：快门缩小表示"正在处理"，完成恢复（自定义目录保存有扫描等待，需要可见反馈）
@@ -2857,42 +3329,33 @@ private fun Shutter(
             ui.confirming -> vm.confirmSave()
             ui.annotating ->
                 if (ui.annotateQueue.isEmpty()) onPickAnnotateImage() else vm.confirmAnnotate()
-            ui.collageMode -> vm.takeCollagePhoto()
+            ui.collageMode -> onDelayableShutter { vm.takeCollagePhoto() }
             ui.videoMode ->
-                if (ui.recording) vm.stopRecording() else startRecordingWithPermission(false)
-            else -> if (!ui.recording) vm.takePhoto()
+                if (ui.recording) vm.stopRecording() else onDelayableShutter { startRecordingWithPermission(false) }
+            else -> if (!ui.recording) onDelayableShutter { vm.takePhoto() }
         }
     }
-    val isSaveMode = mode == 3
+    // 手势闭包里必须读**最新**的 onClick：倒计时中再按一次要能取消，
+    // 而 pointerInput 的 key 不含倒计时状态，闭包会停在按下时的旧值
+    val latestOnClick = rememberUpdatedState(onClick)
+    // 三种形态共用同一套「外圈描边 + 中间实心芯」结构（v0.6.47 修订，用户需求 2026-11-27）：
+    // 拍照/录像芯=实心圆，保存/标注芯=主色实心圆 + 白色下载图标，视觉重心统一。
+    // 外圈底色只有录像两态是淡红填充，其余透明
+    val ringTint = when (mode) {
+        1, 2 -> ChromeDanger
+        3 -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
     Box(
         modifier
             .size(78.dp)
             .scale(shutterScale)
-            // 外圈：拍照/录像待录=主题色或红；录像中=红；保存态无外圈（整圆填充）
             .clip(CircleShape)
-            .background(
-                when (mode) {
-                    1, 2 -> Color(0x33FF5252)
-                    3 -> MaterialTheme.colorScheme.primary
-                    else -> Color.Transparent
-                },
-            )
-            .then(
-                if (isSaveMode) {
-                    Modifier
-                } else {
-                    Modifier.border(
-                        width = 5.dp,
-                        // 快门随主题：日间深色圈/芯、夜间浅色（用户拍板 2026-10-12）
-                        color = if (mode == 1 || mode == 2) ChromeDanger
-                        else MaterialTheme.colorScheme.onSurface,
-                        shape = CircleShape,
-                    )
-                },
-            )
+            .background(if (mode == 1 || mode == 2) Color(0x33FF5252) else Color.Transparent)
+            .border(width = 5.dp, color = ringTint, shape = CircleShape)
             .pointerInput(ui.videoMode, ui.recording, ui.annotating, ui.confirming, ui.collageMode) {
                 detectTapGestures(
-                    onTap = { onClick() },
+                    onTap = { latestOnClick.value() },
                     onLongPress = {
                         // 拼图模式禁用长按快捷录像（用户需求 2026-11-09）
                         if (mode == 0) {
@@ -2911,6 +3374,30 @@ private fun Shutter(
             },
         contentAlignment = Alignment.Center,
     ) {
+        // 延时读秒进度环（v0.6.47 修订，用户需求 2026-11-27）：
+        // 画在「5dp 外圈描边内缘(半径 34dp)」到「58dp 实心芯(半径 29dp)」之间的空隙里，
+        // 描边 5.2dp 刚好铺满整条带、不留缝（多出的 0.1dp 被后画的实心芯盖住）。
+        // **倒计时：按下瞬间是满环，随秒数流逝走到空**；progress 的读取放在绘制
+        // lambda 里，每帧只失效这一层重绘，不触发整页重组。
+        if (delayRunning) {
+            // 录像两态：外圈是 FF5252 全红、外圈填充是淡红 0x33FF5252（≈F9D8DB），
+            // 进度环夹在两者之间用中间红 0xFC9597 做一点点区分（用户需求 2026-11-27）
+            val ringColor = if (mode == 1 || mode == 2) Color(0xFFFC9597)
+            else MaterialTheme.colorScheme.primary
+            Canvas(Modifier.matchParentSize()) {
+                val radius = 31.5.dp.toPx() // 空隙带中线
+                drawArc(
+                    color = ringColor,
+                    startAngle = -90f,
+                    // 从满到空：剩余比例
+                    sweepAngle = 360f * (1f - delayProgress().coerceIn(0f, 1f)),
+                    useCenter = false,
+                    topLeft = Offset(center.x - radius, center.y - radius),
+                    size = Size(radius * 2, radius * 2),
+                    style = Stroke(width = 5.2.dp.toPx()),
+                )
+            }
+        }
         // 中心芯：三种模式之间淡入淡出 + 缩放过渡（用户需求 2026-11-23「闪成对应样式」）
         // v0.6.46：**必须显式 contentAlignment = Center**——AnimatedContent 的
         // contentAlignment 默认是 TopStart，而上一版把 sizeTransform 置 null 后
@@ -2959,14 +3446,37 @@ private fun Shutter(
                         .clip(RoundedCornerShape(6.dp))
                         .background(ChromeDanger),
                 )
-                // 确认/添加水印：下载图标
-                else -> Icon(
-                    Icons.Default.Download,
-                    contentDescription = I18n.t("保存照片"),
-                    tint = Color.White,
-                    modifier = Modifier.size(34.dp),
-                )
+                // 确认/添加水印（v0.6.47 修订）：主色实心圆 + 白色下载图标，
+                // 与拍照/录像同构（外圈描边由父 Box 统一画）
+                else -> Box(
+                    Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = I18n.t("保存照片"),
+                        tint = Color.White,
+                        // 芯内图标略小，四周留白，与实心圆芯的视觉重量对齐
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
             }
+        }
+        // 已设置延时拍照：快门芯中心叠一个秒表（用户拍板 2026-11-27：用 AV 秒表）。
+        // 只在「会走倒计时」的两个形态（拍照 / 录像待录）显示，录像中与保存态不显示
+        if (showDelayIcon && (mode == 0 || mode == 1)) {
+            Icon(
+                Icons.Default.AvTimer,
+                contentDescription = I18n.t("已启用延时拍照"),
+                // 与快门芯反色：拍照芯=onSurface（日间深/夜间浅），图标取 surface；
+                // 录像待录芯=纯红，图标取白。括号不可省——否则 copy 只作用于 else 分支
+                tint = (if (mode == 0) MaterialTheme.colorScheme.surface else Color.White)
+                    .copy(alpha = 0.92f),
+                modifier = Modifier.size(26.dp),
+            )
         }
     }
 }

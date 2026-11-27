@@ -39,6 +39,10 @@ class WatermarkRepository(private val context: Context) {
     private val projectsKey = stringPreferencesKey("projects_v1")
     private val shutterSoundKey = booleanPreferencesKey("shutter_sound")
     private val volumeShutterKey = booleanPreferencesKey("volume_shutter")
+    private val delaySecondsKey = intPreferencesKey("delay_seconds")
+    // 取景器辅助（v0.6.48，用户需求 2026-11-27）：构图线 / 水平仪，默认关、带记忆
+    private val gridLinesKey = booleanPreferencesKey("grid_lines")
+    private val levelGaugeKey = booleanPreferencesKey("level_gauge")
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val templatesKey = stringPreferencesKey("templates_v1") // 用户导入的水印模板
     private val deletableMigratedKey = booleanPreferencesKey("deletable_migrated_v1")
@@ -112,6 +116,18 @@ class WatermarkRepository(private val context: Context) {
     /** 音量键拍照：主界面音量键视同快门（默认开） */
     private val _volumeShutter = MutableStateFlow(true)
     val volumeShutter: StateFlow<Boolean> = _volumeShutter.asStateFlow()
+
+    /** 延时拍照秒数（v0.6.47，用户需求 2026-11-27）：0=不延时，范围 0..999 */
+    private val _delaySeconds = MutableStateFlow(0)
+    val delaySeconds: StateFlow<Int> = _delaySeconds.asStateFlow()
+
+    /** 构图线（v0.6.48，用户需求 2026-11-27）：取景框九宫格辅助线，默认关、带记忆 */
+    private val _gridLines = MutableStateFlow(false)
+    val gridLines: StateFlow<Boolean> = _gridLines.asStateFlow()
+
+    /** 水平仪（v0.6.48，用户需求 2026-11-27）：取景框水平参考线，默认关、带记忆 */
+    private val _levelGauge = MutableStateFlow(false)
+    val levelGauge: StateFlow<Boolean> = _levelGauge.asStateFlow()
 
     /** 外观主题：跟随系统 / 日间 / 夜间（默认跟随系统） */
     private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
@@ -226,6 +242,9 @@ class WatermarkRepository(private val context: Context) {
             }
             _shutterSound.value = context.appDataStore.data.first()[shutterSoundKey] ?: false
             _volumeShutter.value = context.appDataStore.data.first()[volumeShutterKey] ?: true
+            _delaySeconds.value = (context.appDataStore.data.first()[delaySecondsKey] ?: 0).coerceIn(0, 999)
+            _gridLines.value = context.appDataStore.data.first()[gridLinesKey] ?: false
+            _levelGauge.value = context.appDataStore.data.first()[levelGaugeKey] ?: false
             _themeMode.value = context.appDataStore.data.first()[themeModeKey]
                 ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
                 ?: ThemeMode.SYSTEM
@@ -621,6 +640,31 @@ class WatermarkRepository(private val context: Context) {
         _volumeShutter.value = value
         scope.launch {
             context.appDataStore.edit { it[volumeShutterKey] = value }
+        }
+    }
+
+    /** 延时拍照秒数（0=不延时）：UI 侧已限制 0..999，这里再夹一次防脏数据 */
+    fun setDelaySeconds(value: Int) {
+        val v = value.coerceIn(0, 999)
+        _delaySeconds.value = v
+        scope.launch {
+            context.appDataStore.edit { it[delaySecondsKey] = v }
+        }
+    }
+
+    /** 构图线（取景框九宫格辅助线，默认关） */
+    fun setGridLines(value: Boolean) {
+        _gridLines.value = value
+        scope.launch {
+            context.appDataStore.edit { it[gridLinesKey] = value }
+        }
+    }
+
+    /** 水平仪（取景框水平参考线，默认关） */
+    fun setLevelGauge(value: Boolean) {
+        _levelGauge.value = value
+        scope.launch {
+            context.appDataStore.edit { it[levelGaugeKey] = value }
         }
     }
 

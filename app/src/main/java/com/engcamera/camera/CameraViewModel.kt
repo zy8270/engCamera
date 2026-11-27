@@ -187,6 +187,13 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     private val quantizedRoll = MutableStateFlow(0)
 
     /**
+     * 连续滚转角（v0.6.48，用户需求 2026-11-27）：水平仪用，与量化角同符号。
+     * 水平仪关闭时不挂传感器回调（见 setLevelGauge），这里保留最后值无妨。
+     */
+    private val _levelRoll = MutableStateFlow(0f)
+    val levelRoll: StateFlow<Float> = _levelRoll.asStateFlow()
+
+    /**
      * 实际生效的水印状态（预览与成片共用）：
      * 重力跟随开启时旋转角取量化重力角。锚点为重力参照系（「下方」=物理重力方向）：
      * 预览层负责转到屏幕系显示，成片显示系=重力系直接落位——九宫格选「下方」，
@@ -362,6 +369,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
         viewModelScope.launch {
             quantizedRoll.collect { deg -> _ui.update { it.copy(uiRotation = deg) } }
+        }
+        // 水平仪（v0.6.48，用户需求 2026-11-27）：只在开关打开时挂连续角回调，
+        // 关闭时摘掉——辅助线默认关，不该为它多算一路角度
+        val rawRollListener: (Float) -> Unit = { deg -> _levelRoll.value = deg }
+        viewModelScope.launch {
+            container.repository.levelGauge.collect { on ->
+                gravitySensor.onRawRoll = if (on) rawRollListener else null
+                if (!on) _levelRoll.value = 0f
+            }
         }
         // 拍照/录像后刷新缩略图
         viewModelScope.launch {
@@ -750,6 +766,21 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     val volumeShutter: StateFlow<Boolean> = container.repository.volumeShutter
 
     fun setVolumeShutter(value: Boolean) = container.repository.setVolumeShutter(value)
+
+    /** 延时拍照秒数（v0.6.47）：0=不延时；倒计时本身是纯 UI 计时，放在相机页 */
+    val delaySeconds: StateFlow<Int> = container.repository.delaySeconds
+
+    fun setDelaySeconds(value: Int) = container.repository.setDelaySeconds(value)
+
+    /** 构图线（v0.6.48，用户需求 2026-11-27）：取景框九宫格，默认关、带记忆 */
+    val gridLines: StateFlow<Boolean> = container.repository.gridLines
+
+    fun setGridLines(value: Boolean) = container.repository.setGridLines(value)
+
+    /** 水平仪（v0.6.48，用户需求 2026-11-27）：取景框水平参考线，默认关、带记忆 */
+    val levelGauge: StateFlow<Boolean> = container.repository.levelGauge
+
+    fun setLevelGauge(value: Boolean) = container.repository.setLevelGauge(value)
 
     /** 外观主题：跟随系统 / 日间 / 夜间 */
     val themeMode: StateFlow<ThemeMode> = container.repository.themeMode

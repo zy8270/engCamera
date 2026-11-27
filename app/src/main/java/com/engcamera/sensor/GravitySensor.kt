@@ -26,6 +26,13 @@ class GravitySensor(context: Context) {
     /** 量化滚转角：0 正立、-90 顺时针横屏、90 逆时针横屏、180 倒立 */
     var onQuantizedRoll: ((Int) -> Unit)? = null
 
+    /**
+     * 连续滚转角（v0.6.48，用户需求 2026-11-27）：水平仪用，与量化角同符号
+     * （0 正立、+90 逆时针横屏）。只在变化超过 DEAD_BAND 时回调，避免每帧刷 UI；
+     * 未挂回调时不做任何额外计算（水平仪默认关，不耗电）。
+     */
+    var onRawRoll: ((Float) -> Unit)? = null
+
     private var sx = 0f
     private var sy = 0f
     private var current = 0
@@ -36,6 +43,9 @@ class GravitySensor(context: Context) {
     // 方向切换需稳定保持：新方向持续 HOLD_MS 才生效，手抖（瞬时越过阈值）不触发
     private var candidate: Int? = null
     private var candidateSince = 0L
+
+    // 连续滚转角（水平仪）：上次回传值，只在超过死区时更新
+    private var lastRawRoll = 0f
 
     private val listener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
@@ -49,6 +59,14 @@ class GravitySensor(context: Context) {
             if (magnitude < MIN_MAGNITUDE) return // 平放等近零水平分量场景保持上次结果
 
             val angle = Math.toDegrees(atan2(sx.toDouble(), sy.toDouble())).toFloat()
+
+            // 水平仪：连续角（与量化角同符号），死区内不回调
+            onRawRoll?.let { cb ->
+                if (kotlin.math.abs(angle - lastRawRoll) >= RAW_DEAD_BAND) {
+                    lastRawRoll = angle
+                    cb(angle)
+                }
+            }
 
             // 就近量化到 90° 倍数（候选），需持续 HOLD_MS 才切换
             var next = (angle / 90f).roundToInt() * 90
@@ -92,6 +110,7 @@ class GravitySensor(context: Context) {
         sy = 0f
         current = 0
         candidate = null
+        lastRawRoll = 0f
         emitInitial = true
         val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
@@ -107,5 +126,7 @@ class GravitySensor(context: Context) {
         const val MIN_MAGNITUDE = 5.0
         /** 新方向需持续保持的时长，手抖不触发 */
         const val HOLD_MS = 500L
+        /** 水平仪回传死区（度）：小于该变化不回调，避免每帧刷 UI */
+        const val RAW_DEAD_BAND = 0.2f
     }
 }

@@ -16,7 +16,7 @@
 
 A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.46 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.48 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
