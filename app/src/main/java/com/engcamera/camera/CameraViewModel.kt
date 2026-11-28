@@ -90,6 +90,8 @@ data class CameraUiState(
     val annotateIndex: Int = 0,
     /** 正在烧录保存当前图片（防重复点击快门） */
     val annotateWorking: Boolean = false,
+    /** 视频合成进度 0f..1f（v0.6.49：视频转码慢，需要圆环进度；照片走原图即时保存不显示） */
+    val annotateProgress: Float = 0f,
     // ---------- 拍照后确认（v193，用户拍板 2026-10-16） ----------
     /** 确认预览态：照片拍完先进预览框（绿描边+标注工具），手动点保存才落盘 */
     val confirming: Boolean = false,
@@ -128,8 +130,15 @@ data class CameraUiState(
     /** 合成进度 0f..1f（进度弹窗的圆环与百分比） */
     val collageProgressFraction: Float = 0f,
 ) {
-    /** 添加水印模式的一个待处理图片 */
-    data class AnnotateItem(val uri: android.net.Uri, val aspect: Float)
+    /** 添加水印模式的一个待处理项（照片或视频） */
+    data class AnnotateItem(
+        val uri: android.net.Uri,
+        val aspect: Float,
+        /** 是否视频（v0.6.49）：视频走 VideoWatermarker 转码烧录，不支持标注 */
+        val isVideo: Boolean = false,
+        /** 视频时长（毫秒），照片为 0 */
+        val durationMs: Long = 0L,
+    )
 
     /** 文字标注元素 */
     data class TextItem(
@@ -838,12 +847,13 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
     }
 
-    /** 图片选择完成：读宽高比（含 EXIF 旋转换算）入队 */
+    /** 图片/视频选择完成：读宽高比（照片含 EXIF 旋转换算，视频含 rotation 元数据）入队 */
     fun onAnnotatePicked(uris: List<Uri>) {
         if (!_ui.value.annotating || uris.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             val items = uris.mapNotNull { u ->
-                annotateAspect(u)?.let { CameraUiState.AnnotateItem(u, it) }
+                val isVideo = isVideoUri(u)
+                if (isVideo) annotateVideoItem(u) else annotateAspect(u)?.let { CameraUiState.AnnotateItem(u, it) }
             }
             if (items.isEmpty()) {
                 _ui.update { it.copy(toast = I18n.t("图片读取失败")) }
@@ -853,18 +863,65 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         }
     }
 
-    /** 确认当前图片：烧录水印+标注保存到相册，多张时切下一张，全部完成后回到空选择状态。
-     *  v225：标注（笔画+文字）随保存烧录（层级与拍照确认一致：标注盖水印），提交即清 UI */
+    /** 选择项是否为视频（按 MIME 判，个别 provider 不给类型时退回扩展名） */
+    private fun isVideoUri(uri: Uri): Boolean {
+        val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()?.lowercase(Locale.US)
+            ?: ""
+        if (mime.startsWith("video/")) return true
+        if (mime.startsWith("image/")) return false
+        val name = runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull()?.lowercase(Locale.US) ?: ""
+        return VIDEO_EXTS.any { name.endsWith(it) }
+    }
+
+    /** 读取视频转正后的宽高比与时长 */
+    private fun annotateVideoItem(uri: Uri): CameraUiState.AnnotateItem? = runCatching {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            var w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: 0
+            var h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+            val rotation = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION,
+            )?.toIntOrNull() ?: 0
+            val durationMs = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_DURATION,
+            )?.toLongOrNull() ?: 0L
+            if (w <= 0 || h <= 0) return@runCatching null
+            if (rotation == 90 || rotation == 270) {
+                val t = w
+                w = h
+                h = t
+            }
+            CameraUiState.AnnotateItem(uri, w.toFloat() / h, isVideo = true, durationMs = durationMs)
+        } finally {
+            retriever.release()
+        }
+    }.getOrNull()
+
+    /** 确认当前项：烧录水印(+标注)保存到相册，多张时切下一张，全部完成后回到空选择状态。
+     *  v225：标注（笔画+文字）随保存烧录（层级与拍照确认一致：标注盖水印），提交即清 UI
+     *  v0.6.49：视频走离线转码（VideoWatermarker），保留源分辨率/帧率，标注层整段常驻 */
     fun confirmAnnotate() {
         val st = _ui.value
         if (!st.annotating || st.annotateWorking) return
         val item = st.annotateQueue.getOrNull(st.annotateIndex) ?: return
         val anns = st.annotations
         val texts = st.textItems
-        _ui.update { it.copy(annotateWorking = true, annotations = emptyList(), textItems = emptyList(), selectedTextId = null) }
-        viewModelScope.launch(Dispatchers.IO) {
+        _ui.update {
+            it.copy(
+                annotateWorking = true, annotateProgress = 0f,
+                annotations = emptyList(), textItems = emptyList(), selectedTextId = null,
+            )
+        }
+        annotateJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                burnAnnotateAndSave(item.uri, anns, texts)
+                if (item.isVideo) burnVideoAndSave(item.uri, anns, texts)
+                else burnAnnotateAndSave(item.uri, anns, texts)
                 val nextIdx = st.annotateIndex + 1
                 _ui.update { s ->
                     if (nextIdx >= s.annotateQueue.size) {
@@ -872,19 +929,110 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                             annotateQueue = emptyList(),
                             annotateIndex = 0,
                             annotateWorking = false,
-                            toast = I18n.t("已保存 {n} 张").replace("{n}", "$nextIdx"),
+                            annotateProgress = 0f,
+                            toast = I18n.t("已保存 {n} 项").replace("{n}", "$nextIdx"),
                         )
                     } else {
-                        s.copy(annotateIndex = nextIdx, annotateWorking = false)
+                        s.copy(annotateIndex = nextIdx, annotateWorking = false, annotateProgress = 0f)
                     }
                 }
                 _mediaVersion.value += 1
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // 用户点了取消：不报错、不留半成品（burnVideoAndSave 内部已清理）
+                _ui.update { it.copy(annotateWorking = false, annotateProgress = 0f, toast = I18n.t("已取消保存")) }
+                throw c
             } catch (t: Throwable) {
                 t.printStackTrace()
-                _ui.update { it.copy(annotateWorking = false, toast = I18n.t("保存失败：{msg}").replace("{msg}", t.message ?: I18n.t("未知错误"))) }
+                _ui.update {
+                    it.copy(
+                        annotateWorking = false,
+                        annotateProgress = 0f,
+                        toast = I18n.t("保存失败：{msg}").replace("{msg}", t.message ?: I18n.t("未知错误")),
+                    )
+                }
+            } finally {
+                annotateJob = null
             }
         }
     }
+
+    /** 取消正在进行的视频合成（v0.6.49）：Transformer 转码很慢，必须给用户退路 */
+    fun cancelAnnotate() {
+        annotateJob?.cancel()
+        annotateJob = null
+        _ui.update { it.copy(annotateWorking = false, annotateProgress = 0f) }
+    }
+
+    private var annotateJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * 给相册视频加水印（v0.6.49）：离线转码，分辨率/帧率/时长/音轨尽量原样保留，
+     * 只叠水印（+标注）层。标注先按视频显示尺寸烧成一张透明层，整段常驻。
+     * 合成失败降级为保存原片（不静默丢用户文件）。
+     */
+    private suspend fun burnVideoAndSave(
+        uri: Uri,
+        annotations: List<CameraUiState.PhotoAnnotation>,
+        textItems: List<CameraUiState.TextItem>,
+    ) = withContext(Dispatchers.IO) {
+        val effective = watermark.value
+        val dyn = dynamic.value
+        // 标注层：按视频显示尺寸画（与照片保存同一套归一化坐标与线宽比例）
+        val (vw, vh) = annotateQueueSize(uri) ?: error(I18n.t("无法读取视频尺寸"))
+        val layer = if (annotations.isEmpty() && textItems.isEmpty()) {
+            null
+        } else {
+            val bmp = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            // 复用照片的标注绘制（含文字模板），坐标×视频显示宽高
+            drawAnnotationsOn(canvas, vw.toFloat(), vh.toFloat(), annotations, textItems)
+            bmp
+        }
+        try {
+            val burned = VideoWatermarker.burnImported(
+                context = context,
+                input = uri,
+                state = effective,
+                dynamic = dyn,
+                annotationLayer = layer,
+                onProgress = { p -> _ui.update { it.copy(annotateProgress = p) } },
+            )
+            val ok = runCatching {
+                MediaSaver.saveVideoFile(
+                    context, burned,
+                    takenAtMs = System.currentTimeMillis(),
+                    treeUri = saveTreeUri(),
+                    projectName = currentProjectName(),
+                )
+            }.getOrNull()
+            if (ok == null) error(I18n.t("水印视频保存失败"))
+        } finally {
+            layer?.recycle()
+        }
+    }
+
+    /** 视频显示尺寸（已按 rotation 元数据交换宽高），失败返回 null */
+    private fun annotateQueueSize(uri: Uri): Pair<Int, Int>? = runCatching {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            var w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: 0
+            var h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+            val rotation = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION,
+            )?.toIntOrNull() ?: 0
+            if (rotation == 90 || rotation == 270) {
+                val t = w
+                w = h
+                h = t
+            }
+            if (w <= 0 || h <= 0) null else w to h
+        } finally {
+            retriever.release()
+        }
+    }.getOrNull()
 
     /** 读取图片转正后的宽高比（宽/高） */
     private fun annotateAspect(uri: Uri): Float? = runCatching {
@@ -1414,9 +1562,18 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
     ): Bitmap {
         if (annotations.isEmpty() && textItems.isEmpty()) return photo
         val out = photo.copy(Bitmap.Config.ARGB_8888, true)
-        val canvas = Canvas(out)
-        val w = out.width.toFloat()
-        val h = out.height.toFloat()
+        drawAnnotationsOn(Canvas(out), out.width.toFloat(), out.height.toFloat(), annotations, textItems)
+        return out
+    }
+
+    /** 把标注画到给定画布上（尺寸由调用方定）：照片保存与视频标注层共用同一套几何 */
+    private fun drawAnnotationsOn(
+        canvas: Canvas,
+        w: Float,
+        h: Float,
+        annotations: List<CameraUiState.PhotoAnnotation>,
+        textItems: List<CameraUiState.TextItem>,
+    ) {
         val strokeW = w * 0.008f
         val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             style = android.graphics.Paint.Style.STROKE
@@ -1479,7 +1636,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
                 markerColor = t.markerColor.toInt(),
             )
         }
-        return out
     }
 
     /**
@@ -2424,5 +2580,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app),
         const val BUBBLE_AUTO_HIDE_MS = 8_000L
         /** 录像屏保触发空闲时长（用户需求 2026-11-22：开始录像超 1 分钟没人操作） */
         const val SCREEN_SAVER_IDLE_MS = 60_000L
+        /** 视频扩展名（个别 provider 不给 MIME 时的兜底判定） */
+        val VIDEO_EXTS = listOf(".mp4", ".mov", ".m4v", ".3gp", ".mkv", ".webm", ".avi", ".ts")
     }
 }

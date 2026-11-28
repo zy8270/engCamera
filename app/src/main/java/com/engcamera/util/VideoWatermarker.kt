@@ -5,16 +5,21 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.VideoFrameProcessingException
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import com.engcamera.data.DynamicValues
 import com.engcamera.data.WatermarkState
 import com.engcamera.watermark.WatermarkRenderer
@@ -25,6 +30,10 @@ import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -165,6 +174,119 @@ object VideoWatermarker {
         }
     }
 
+    /**
+     * 导入视频（相册选中的成片）加水印：**保持源分辨率/帧率/时长**，只叠水印层。
+     *
+     * 与录像路径的差别（都是为了「不掉画质」）：
+     * - 码率对齐源片（[readBitrate]）——media3 默认按分辨率自选码率，可能低于源片；
+     * - 音轨直接拷贝（`setTransmuxAudio(true)`），不重编码；
+     * - 水印时间从 [startEpochMs]（合成时刻）起流动，与照片导入「盖当前时间」一致。
+     *
+     * 视频本身没有重力参照系，水印与照片导入同构：锚点按图片系直接落位、
+     * frameRotationDeg=0（media3 已把帧按 rotation 元数据转正后再交给效果层）。
+     * 标注层（箭头/矩形/画笔/文字）整段常驻，作为独立静态贴图叠在水印之下。
+     *
+     * @param annotationLayer 已按显示尺寸烧好的标注层（透明底），null=无标注
+     * @param onProgress 0f..1f 编码进度
+     */
+    suspend fun burnImported(
+        context: Context,
+        input: Uri,
+        state: WatermarkState,
+        dynamic: DynamicValues,
+        annotationLayer: Bitmap? = null,
+        startEpochMs: Long = System.currentTimeMillis(),
+        onProgress: (Float) -> Unit = {},
+    ): File {
+        val (width, height) = readDisplaySize(context, input)
+        val bitrate = readBitrate(context, input)
+        val output = File(
+            context.cacheDir,
+            "import_wm_${System.currentTimeMillis()}.mp4",
+        )
+        val newResult = runCatching {
+            val overlay = TimedWatermarkOverlay(
+                width, height, dynamic, startEpochMs,
+                stateAt = { state }, // 导入视频无重力时间线，水印状态全程恒定
+                rotAt = { state.rotationDeg },
+            )
+            val glEffects = buildList<androidx.media3.effect.GlEffect> {
+                // 液态玻璃：静态几何（整段不变），与录像路径同一套 GPU 折射
+                val geo = WatermarkRenderer.liquidGlassGeometry(
+                    state, width, height, dynamic, state.rotationDeg,
+                )
+                if (geo != null) add(GlassFrameEffect { geo })
+                add(OverlayEffect(listOf(overlay)))
+                // 标注层在水印之上（与照片保存的层级一致：标注盖水印）
+                if (annotationLayer != null && !annotationLayer.isRecycled) {
+                    add(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(annotationLayer))))
+                }
+            }
+            // 音轨直拷优先；部分源音轨格式不被 MP4 接受（如某些设备的 AMR/Opus），
+            // 直拷失败再退回重编码，不因为音轨拖累整个合成。
+            // 取消必须原样抛出：当作失败去重试会把已经取消的任务又跑一遍
+            try {
+                transform(
+                    context, input, output, glEffects,
+                    bitrate = bitrate,
+                    transmuxAudio = true,
+                    onProgress = onProgress,
+                )
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                Log.w("VideoWatermarker", "audio transmux failed, re-encoding audio", t)
+                output.delete()
+                transform(
+                    context, input, output, glEffects,
+                    bitrate = bitrate,
+                    transmuxAudio = false,
+                    onProgress = onProgress,
+                )
+            }
+        }
+        return newResult.getOrElse { t ->
+            // 取消不降级：用户主动中断，不该再跑一遍更慢的静态路径
+            if (t is kotlinx.coroutines.CancellationException) {
+                output.delete()
+                throw t
+            }
+            Log.w("VideoWatermarker", "import burn failed, falling back to static layer", t)
+            output.delete()
+            // 降级：整层静态帧（时间不流动），同样带上标注层
+            burnLegacyImported(context, input, state, dynamic, annotationLayer)
+        }
+    }
+
+    /** 导入视频的降级路径：一次性静态水印层（时间定格），失败抛异常 */
+    private suspend fun burnLegacyImported(
+        context: Context,
+        input: Uri,
+        state: WatermarkState,
+        dynamic: DynamicValues,
+        annotationLayer: Bitmap?,
+    ): File {
+        val (width, height) = readDisplaySize(context, input)
+        val frame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(frame)
+        WatermarkRenderer.drawOnCanvas(
+            canvas, width, height, state, dynamic, state.rotationDeg, 0,
+            gravityAnchor = true,
+        )
+        if (annotationLayer != null && !annotationLayer.isRecycled) {
+            canvas.drawBitmap(annotationLayer, 0f, 0f, null)
+        }
+        val output = File(context.cacheDir, "import_wmb_${System.currentTimeMillis()}.mp4")
+        val result = transform(
+            context, input, output,
+            listOf(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(frame)))),
+            bitrate = readBitrate(context, input),
+            transmuxAudio = true,
+        )
+        frame.recycle()
+        return result
+    }
+
     /** 旧静态帧路径（降级用）：整层一次性烧好，时间不流动，液态玻璃为无采样着色底 */
     private suspend fun burnLegacy(
         context: Context,
@@ -191,18 +313,46 @@ object VideoWatermarker {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(input.absolutePath)
-            var w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            var h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            if (rotation == 90 || rotation == 270) {
-                val t = w
-                w = h
-                h = t
-            }
-            if (w <= 0 || h <= 0) error("无法读取视频尺寸")
-            return w to h
+            return displaySizeOf(retriever)
         } finally {
             retriever.release()
+        }
+    }
+
+    /** 同上，来源为相册 Uri（导入视频路径） */
+    private fun readDisplaySize(context: Context, input: Uri): Pair<Int, Int> {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, input)
+            return displaySizeOf(retriever)
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun displaySizeOf(retriever: MediaMetadataRetriever): Pair<Int, Int> {
+        var w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+        var h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+        if (rotation == 90 || rotation == 270) {
+            val t = w
+            w = h
+            h = t
+        }
+        if (w <= 0 || h <= 0) error("无法读取视频尺寸")
+        return w to h
+    }
+
+    /** 源片码率（bit/s）：对齐源片编码，避免转码后画质肉眼可见下降；读不到返回 0（不干预） */
+    private fun readBitrate(context: Context, input: Uri): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, input)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
+        } catch (t: Throwable) {
+            0
+        } finally {
+            runCatching { retriever.release() }
         }
     }
 
@@ -211,14 +361,54 @@ object VideoWatermarker {
         input: File,
         output: File,
         glEffects: List<androidx.media3.effect.GlEffect>,
+    ): File = transform(context, MediaItem.fromUri(Uri.fromFile(input)), output, glEffects)
+
+    private suspend fun transform(
+        context: Context,
+        input: Uri,
+        output: File,
+        glEffects: List<androidx.media3.effect.GlEffect>,
+        bitrate: Int = 0,
+        transmuxAudio: Boolean = false,
+        onProgress: ((Float) -> Unit)? = null,
+    ): File = transform(
+        context, MediaItem.fromUri(input), output, glEffects, bitrate, transmuxAudio, onProgress,
+    )
+
+    /**
+     * 转码主链路。
+     * @param bitrate >0 时按此码率编码（对齐源片）；0=让 media3 按分辨率自选
+     * @param transmuxAudio true=音轨直接拷贝不重编码（导入视频保音质）
+     */
+    private suspend fun transform(
+        context: Context,
+        mediaItem: MediaItem,
+        output: File,
+        glEffects: List<androidx.media3.effect.GlEffect>,
+        bitrate: Int = 0,
+        transmuxAudio: Boolean = false,
+        onProgress: ((Float) -> Unit)? = null,
     ): File = withContext(Dispatchers.Main) {
-        suspendCancellableCoroutine { cont ->
-            val overlayEffects = Effects(emptyList(), glEffects)
-            val edited = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(input)))
-                .setEffects(overlayEffects)
-                .build()
-            val transformer = Transformer.Builder(context)
-                .addListener(object : Transformer.Listener {
+        // 进度轮询的作用域：独立 Job，finally 里统一取消——Transformer 只提供 pull 式
+        // getProgress 没有回调，若不显式停会一直轮询已释放的实例
+        val progressScope = kotlinx.coroutines.CoroutineScope(coroutineContext + Job())
+        try {
+            suspendCancellableCoroutine { cont ->
+                val overlayEffects = Effects(emptyList(), glEffects)
+                val edited = EditedMediaItem.Builder(mediaItem)
+                    .setEffects(overlayEffects)
+                    .build()
+                val builder = Transformer.Builder(context)
+                if (bitrate > 0) {
+                    builder.setEncoderFactory(
+                        DefaultEncoderFactory.Builder(context)
+                            .setRequestedVideoEncoderSettings(
+                                VideoEncoderSettings.Builder().setBitrate(bitrate).build(),
+                            )
+                            .build(),
+                    )
+                }
+                builder.addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         if (cont.isActive) cont.resume(output)
                     }
@@ -231,11 +421,38 @@ object VideoWatermarker {
                         if (cont.isActive) cont.resumeWithException(exportException)
                     }
                 })
-                .build()
-            transformer.start(edited, output.absolutePath)
-            cont.invokeOnCancellation {
-                runCatching { transformer.cancel() }
+                val transformer = builder.build()
+                // 只有需要拷贝音轨时才显式建 Composition（setTransmuxAudio 只在其 Builder 上）；
+                // 其余走 EditedMediaItem 便捷重载（默认音轨也重编码）
+                if (transmuxAudio) {
+                    val composition = Composition.Builder(
+                        EditedMediaItemSequence.Builder(listOf(edited)).build(),
+                    )
+                        .setTransmuxAudio(true)
+                        .build()
+                    transformer.start(composition, output.absolutePath)
+                } else {
+                    transformer.start(edited, output.absolutePath)
+                }
+                if (onProgress != null) {
+                    val holder = ProgressHolder()
+                    progressScope.launch {
+                        while (isActive) {
+                            if (transformer.getProgress(holder) ==
+                                Transformer.PROGRESS_STATE_AVAILABLE
+                            ) {
+                                onProgress(holder.progress / 100f)
+                            }
+                            delay(300)
+                        }
+                    }
+                }
+                cont.invokeOnCancellation {
+                    runCatching { transformer.cancel() }
+                }
             }
+        } finally {
+            progressScope.coroutineContext[Job]?.cancel()
         }
     }
 }

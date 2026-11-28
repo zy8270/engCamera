@@ -14,6 +14,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -274,7 +276,7 @@ fun CameraScreen(
         pendingQuickRecord = false
     }
 
-    // 添加水印模式的图片选择器（系统照片选择器，支持多选）
+    // 添加水印模式的选择器（系统照片选择器，支持多选；v0.6.49 起照片+视频都收）
     val annotatePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(30),
     ) { uris ->
@@ -717,7 +719,8 @@ fun CameraScreen(
                 val launchAnnotatePicker = {
                     annotatePicker.launch(
                         androidx.activity.result.PickVisualMediaRequest(
-                            ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            // v0.6.49：照片和视频都收（给已有成品加水印）
+                            ActivityResultContracts.PickVisualMedia.ImageAndVideo,
                         ),
                     )
                 }
@@ -938,6 +941,15 @@ fun CameraScreen(
                     progress = ui.collageProgress,
                     fraction = ui.collageProgressFraction,
                     onCancel = { vm.cancelCollageSave() },
+                )
+            }
+            // 视频加水印进度（v0.6.49）：转码比照片慢得多（4K 长视频可能数分钟），
+            // 给圆环进度 + 取消按钮，避免用户以为卡死。复用拼图的进度弹窗。
+            if (ui.annotateWorking && ui.annotateQueue.getOrNull(ui.annotateIndex)?.isVideo == true) {
+                CollageProgressDialog(
+                    progress = I18n.t("正在为视频合成水印…"),
+                    fraction = ui.annotateProgress,
+                    onCancel = { vm.cancelAnnotate() },
                 )
             }
             // 连拍预览覆盖层（打开期间相机已由 previewIdle 暂停）
@@ -2462,7 +2474,8 @@ private fun AnnotateArea(
         LaunchedEffect(item?.uri) {
             val bmp = item?.let { it2 ->
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    loadAnnotateBackdrop(context, it2.uri)
+                    if (it2.isVideo) loadVideoBackdrop(context, it2.uri)
+                    else loadAnnotateBackdrop(context, it2.uri)
                 }
             }
             val old = annotateBackdrop
@@ -2491,12 +2504,37 @@ private fun AnnotateArea(
         ) {
             val cur = item
             if (cur != null) {
-                coil.compose.AsyncImage(
-                    model = cur.uri,
-                    contentDescription = I18n.t("待加水印图片"),
-                    contentScale = ContentScale.FillBounds,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (cur.isVideo) {
+                    // 视频（v0.6.49）：取首帧作预览（MediaMetadataRetriever 抽帧，
+                    // 失败时退回 Coil 的 VideoFrameDecoder），右下角叠时长角标。
+                    // 外面套一层 Box：角标 align 要落在视频盒上，不能漏到外层画框
+                    Box(Modifier.fillMaxSize()) {
+                        VideoFramePreview(
+                            uri = cur.uri,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (cur.durationMs > 0) {
+                            val seconds = cur.durationMs / 1000
+                            Text(
+                                String.format(Locale.US, "%d:%02d", seconds / 60, seconds % 60),
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                                    .background(Color(0x99000000), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                } else {
+                    coil.compose.AsyncImage(
+                        model = cur.uri,
+                        contentDescription = I18n.t("待加水印图片"),
+                        contentScale = ContentScale.FillBounds,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 WatermarkOverlay(
                     state = watermark,
                     dynamic = dynamic,
@@ -2551,7 +2589,7 @@ private fun AnnotateArea(
                 }
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    I18n.t("点击选择要加水印的图片"),
+                    I18n.t("点击选择要加水印的图片或视频"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                 )
@@ -2565,7 +2603,7 @@ private fun AnnotateArea(
             val bgArgb = emptyBase.toArgb()
             val fgArgb = MaterialTheme.colorScheme.onSurface.toArgb()
             val subArgb = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
-            val hint = I18n.t("点击选择要加水印的图片")
+            val hint = I18n.t("点击选择要加水印的图片或视频")
             val emptyBackdrop = remember(
                 frameWpx, frameHpx, insetPx, bgArgb, fgArgb, subArgb, hint,
             ) {
@@ -2631,6 +2669,72 @@ private suspend fun loadAnnotateBackdrop(context: android.content.Context, uri: 
         val dr = coil.Coil.imageLoader(context).execute(req).drawable
         (dr as? android.graphics.drawable.BitmapDrawable)?.bitmap
     }.getOrNull()
+
+/** 视频的玻璃采样底（v0.6.49）：抽首帧后等比压到最长边 ≤720（与照片同口径） */
+private suspend fun loadVideoBackdrop(context: android.content.Context, uri: Uri): android.graphics.Bitmap? =
+    runCatching {
+        val retriever = android.media.MediaMetadataRetriever()
+        val frame = try {
+            retriever.setDataSource(context, uri)
+            retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+            retriever.release()
+        } ?: return@runCatching null
+        val longest = maxOf(frame.width, frame.height)
+        if (longest <= 720) return@runCatching frame
+        val scale = 720f / longest
+        val small = android.graphics.Bitmap.createScaledBitmap(
+            frame,
+            (frame.width * scale).toInt().coerceAtLeast(1),
+            (frame.height * scale).toInt().coerceAtLeast(1),
+            true,
+        )
+        if (small !== frame) frame.recycle()
+        small
+    }.getOrNull()
+
+/**
+ * 视频首帧预览（v0.6.49，添加水印模式选到视频时用）：
+ * Coil 的 VideoFrameDecoder 在多数设备能直接解首帧，失败时退回
+ * MediaMetadataRetriever 抽帧（部分机型 Coil 缺 decoder 时也能出图）。
+ */@Composable
+private fun VideoFramePreview(uri: Uri, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var fallback by remember(uri) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(uri) {
+        val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val r = android.media.MediaMetadataRetriever()
+                try {
+                    r.setDataSource(context, uri)
+                    r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } finally {
+                    r.release()
+                }
+            }.getOrNull()
+        }
+        val old = fallback
+        fallback = bmp
+        old?.recycle()
+    }
+    val bmp = fallback
+    if (bmp != null && !bmp.isRecycled) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = I18n.t("待加水印视频"),
+            contentScale = ContentScale.FillBounds,
+            modifier = modifier,
+        )
+    } else {
+        // 抽帧前的占位（不闪白：与框内格子底同色系）
+        coil.compose.AsyncImage(
+            model = uri,
+            contentDescription = I18n.t("待加水印视频"),
+            contentScale = ContentScale.FillBounds,
+            modifier = modifier,
+        )
+    }
+}
 
 /** 添加水印空态的玻璃采样底（v232）：复刻空态可见内容（主题底+圆圈+/提示文字）
  *  画进一张与浮层同尺寸的位图——液态玻璃盖在 +/文字上时有真实折射/色散。

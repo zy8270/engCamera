@@ -798,12 +798,13 @@ fun CollageBurstThumb(
  * 进度反馈 + 可取消。圆环进度 + 百分比 + 当前步骤文字 + 取消按钮。
  *
  * 不设 onDismissRequest 关闭途径：合成中误触外部不应该中断，只认取消按钮。
+ * onCancel 为 null 时不显示取消按钮（v0.6.49 视频加水印是"正在写入"语义，不可中断）。
  */
 @Composable
 fun CollageProgressDialog(
     progress: String?,
     fraction: Float,
-    onCancel: () -> Unit,
+    onCancel: (() -> Unit)?,
 ) {
     androidx.compose.ui.window.Dialog(
         onDismissRequest = { /* 合成中不允许点外部关闭，只认取消按钮 */ },
@@ -841,12 +842,14 @@ fun CollageProgressDialog(
                     textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(18.dp))
-                TextButton(onClick = onCancel) {
-                    // 取消是中断性操作，用危险红（用户需求 2026-11-10）
-                    Text(
-                        I18n.t("取消保存"),
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                if (onCancel != null) {
+                    TextButton(onClick = onCancel) {
+                        // 取消是中断性操作，用危险红（用户需求 2026-11-10）
+                        Text(
+                            I18n.t("取消保存"),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }

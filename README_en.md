@@ -14,9 +14,9 @@
   <a href="README.md">🇨🇳 中文说明</a>
 </p>
 
-A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
+A personal-use Android camera for engineering work: watermarks are previewed live before you shoot and **burned into** the final JPEG / MP4. It can also batch-watermark existing photos and videos from your gallery, multiple **project profiles** switch the whole watermark set in one tap, and bursts of shots can be **stitched into a single red-header record sheet**. No ads, no sign-in, no cloud sync.
 
-> Current version: v0.6.48 (revision history in [交付说明](交付说明.md), Chinese)
+> Current version: v0.6.49 (revision history in [交付说明](交付说明.md), Chinese)
 
 ## Screenshots
 
@@ -92,6 +92,7 @@ A personal-use Android camera for engineering work: watermarks are previewed liv
 ### Gallery & batch
 
 - **Watermark existing photos**: pencil icon to enter (start picking via the empty-state + button or the download key), system multi-picker (up to 30), then the same annotation suite as shot-confirm — arrow / rectangle / brush / text tools, six colors + free picking, undo per stroke, pinch to zoom; annotations burn on top of the watermark and photos save one by one with an x/y progress; long-press the watermark block to drag it, and the watermark stays locked to the photo's orientation
+- **Watermark existing videos** (v0.6.49): the same picker now accepts both photos and videos. Videos go through offline transcoding that keeps the **original resolution, frame rate and duration** — the bitrate is matched to the source and the audio track is copied as-is, so only the watermark (and annotation) layer is added. The preview shows the first frame plus duration, and compositing shows a progress ring you can cancel
 - **Gallery**: newest first, 4 columns by default (pinch 3–6), multi-select delete, tap opens the system viewer; auto-refresh on return
 
 ## Tech stack
